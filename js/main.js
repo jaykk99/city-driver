@@ -8,6 +8,9 @@ import { createControls } from './controls.js';
 import { createDragMode } from './drag.js';
 import { createAudio } from './audio.js';
 import { loadSave, saveSave, createGarage } from './garage.js';
+import { QualityManager, qualitySettings, QUALITY_LEVELS } from './quality.js';
+import { createSkyDome, applySkyPreset, PRESET_ORDER, SKY_PRESETS } from './sky.js';
+import { PuffPool, SkidMarks } from './particles.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, paintCar } = Cars;
 // added by the cars track; may not exist yet in this worktree — guard it
@@ -24,6 +27,10 @@ let state='boot';              // menu | freeroam | drag
 let paused=false, garageOpen=false, garageReturn='menu';
 let tele={speed:0,drifting:false,nitro:false,nitroFrac:1,steer:0};
 let mpTried=false;
+// --- AAA graphics state ---
+let postfx=null, qm=null, skyEnv=null, todIdx=0;
+let smoke=null, exhaust=null, skids=null, headlight=null, headlightTarget=null, headlightBase=0;
+let particleScale=1;
 
 // ---------------- reused per-frame objects (no allocs in loop) ----------------
 const camPos=new THREE.Vector3(), camGoal=new THREE.Vector3(), fwdV=new THREE.Vector3();
@@ -94,6 +101,7 @@ function refreshSceneKeep(){
   syncCarTransform(0);
 }
 
+const _hw=new THREE.Vector3();
 function syncCarTransform(dt){
   carGroup.position.set(physics.pos.x, 0, physics.pos.z);
   carGroup.rotation.y=physics.heading;
@@ -101,7 +109,55 @@ function syncCarTransform(dt){
   for(let i=0;i<allWheels.length;i++) allWheels[i].rotation.x+=spin;
   for(let i=0;i<frontWheels.length;i++) frontWheels[i].rotation.y=tele.steer*0.45;
   const braking=controls && controls.input.throttle<0;
-  for(let i=0;i<brakeMats.length;i++) brakeMats[i].emissiveIntensity=braking?2.4:0.7;
+  if(carGroup.userData.setBrake) carGroup.userData.setBrake(braking);
+  else for(let i=0;i<brakeMats.length;i++) brakeMats[i].emissiveIntensity=braking?4.5:1.8;
+  // headlight follows the car nose
+  if(headlight){
+    const h=physics.heading;
+    _hw.set(-Math.sin(h),0,-Math.cos(h));
+    headlight.position.set(physics.pos.x+_hw.x*1.8, 1.1, physics.pos.z+_hw.z*1.8);
+    headlightTarget.position.set(physics.pos.x+_hw.x*22, 0.4, physics.pos.z+_hw.z*22);
+  }
+}
+
+// rear-wheel world positions for smoke/skids/exhaust (reuses temps)
+const _rw=new THREE.Vector3();
+function rearWheelWorld(i, out){
+  const w=allWheels[i];
+  out.setFromMatrixPosition(w.matrixWorld);
+  return out;
+}
+let _emitAcc=0;
+function updateEffects(dt){
+  if(!smoke || state!=='freeroam' || paused || garageOpen) return;
+  carGroup.updateMatrixWorld();
+  const n=allWheels.length;
+  if(tele.drifting && particleScale>0.3){
+    for(let i=0;i<n;i++){
+      const w=allWheels[i];
+      if(w.position.z>0) continue;               // rear wheels only
+      rearWheelWorld(i,_rw);
+      if(Math.random()<0.85*particleScale)
+        smoke.emit(_rw.x+(Math.random()-0.5)*0.4, 0.35, _rw.z+(Math.random()-0.5)*0.4,
+          { vx:(Math.random()-0.5)*1.5, vy:1.0+Math.random(), vz:(Math.random()-0.5)*1.5, life:0.6+Math.random()*0.4, size:0.9, grow:2.6 });
+      if(Math.random()<0.6) skids.add(_rw.x, _rw.z, physics.heading);
+    }
+  }
+  // exhaust puffs under throttle
+  _emitAcc+=dt;
+  const thr=controls&&controls.input.throttle||0;
+  if(thr>0.4 && _emitAcc>0.09){
+    _emitAcc=0;
+    const h=physics.heading;
+    _hw.set(-Math.sin(h),0,-Math.cos(h));
+    const rx=Math.cos(h), rz=-Math.sin(h);   // right vector
+    for(const s of [-0.45,0.45]){
+      const px=physics.pos.x-_hw.x*2.2+rx*s;
+      const pz=physics.pos.z-_hw.z*2.2+rz*s;
+      exhaust.emit(px, 0.32, pz, { vx:-_hw.x*2, vy:0.8, vz:-_hw.z*2, life:0.5, size:0.55, grow:1.6 });
+    }
+  }
+  smoke.update(dt); exhaust.update(dt);
 }
 
 // ---------------- collision: circle (car) vs AABB (city colliders) ----------------
@@ -191,6 +247,7 @@ function showMenu(){
 
 function startFreeroam(){
   if(dragMode && dragMode.active) dragMode.exit();
+  if(headlight) headlight.intensity=headlightBase;
   $('drag-ui').classList.add('hidden');
   state='freeroam'; paused=false; garageOpen=false;
   hideOverlays();
@@ -205,6 +262,7 @@ function startFreeroam(){
 
 function startDrag(){
   state='drag'; paused=false; garageOpen=false;
+  if(headlight) headlight.intensity=0;
   hideOverlays();
   $('hud').classList.add('hidden');
   $('touch-controls').classList.remove('hidden');
@@ -260,33 +318,93 @@ async function connectMP(){
 }
 
 // ---------------- scene ----------------
-function initScene(){
+async function initScene(){
   renderer=new THREE.WebGLRenderer({antialias:false, powerPreference:'high-performance'});
   renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
+  // AAA: filmic tone mapping for that Unreal look
+  renderer.toneMapping=THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure=1.0;
   renderer.shadowMap.enabled=true;
   renderer.shadowMap.type=THREE.PCFShadowMap;
   $('game-container').appendChild(renderer.domElement);
 
   scene=new THREE.Scene();
-  scene.background=new THREE.Color(0x87b9e8);          // day sky
-  scene.fog=new THREE.Fog(0xa9cbe8, 70, 420);
+  // fog set by city.js; sky dome replaces flat background
+  camera=new THREE.PerspectiveCamera(62, window.innerWidth/window.innerHeight, 0.1, 3000);
 
-  camera=new THREE.PerspectiveCamera(62, window.innerWidth/window.innerHeight, 0.1, 900);
+  city=buildCity(scene);   // creates sun + hemi + fog + world
 
-  const hemi=new THREE.HemisphereLight(0xcfe8ff, 0x3d5a3d, 0.95);
-  scene.add(hemi);
-  const sun=new THREE.DirectionalLight(0xfff1d6, 1.7);
-  sun.position.set(80,120,40);
-  sun.castShadow=true;
-  sun.shadow.mapSize.set(1024,1024);
-  sun.shadow.camera.left=-90; sun.shadow.camera.right=90;
-  sun.shadow.camera.top=90; sun.shadow.camera.bottom=-90;
-  sun.shadow.camera.near=20; sun.shadow.camera.far=320;
-  scene.add(sun);
+  // image-based lighting: PMREM from a neutral room so paint/glass/chrome reflect
+  try{
+    const { RoomEnvironment } = await import('three/addons/environments/RoomEnvironment.js');
+    const pmrem=new THREE.PMREMGenerator(renderer);
+    scene.environment=pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    pmrem.dispose();
+  }catch(e){ console.warn('env map off', e); }
 
-  city=buildCity(scene);
+  // gradient sky dome + sun rig
+  const dome=createSkyDome();
+  scene.add(dome.mesh);
+  skyEnv={ uniforms:dome.uniforms, sun:city.sun, hemi:city.hemi, scene, renderer };
+  setTimeOfDay('day', true);
+
+  // post-processing: bloom + vignette (graceful fallback if addons fail)
+  try{
+    const mod=await import('./postfx.js');
+    postfx=mod.createPostFX(renderer, scene, camera);
+    postfx.setBloomStrength(SKY_PRESETS.day.bloom);
+  }catch(e){ console.warn('postfx off', e); postfx=null; }
+
+  // adaptive quality
+  qm=new QualityManager('auto');
+  qm.onChange(applyQuality);
+  applyQuality(qm.level, qualitySettings(qm.level));
+
+  // particles
+  smoke=new PuffPool(scene, 70, { color:0xd8d8d8, opacity:0.42 });
+  exhaust=new PuffPool(scene, 40, { color:0x777777, opacity:0.30, size:0.9 });
+  skids=new SkidMarks(scene, 500);
+
+  // player headlight (single shadowless spot, dusk/night only)
+  headlight=new THREE.SpotLight(0xcfe4ff, 0, 60, 0.5, 0.45, 1.2);
+  headlightTarget=new THREE.Object3D();
+  scene.add(headlightTarget);
+  headlight.target=headlightTarget;
+  scene.add(headlight);
 }
+
+function applyQuality(level, s){
+  const pr=Math.min(window.devicePixelRatio||1, s.pixelRatioCap);
+  renderer.setPixelRatio(pr);
+  if(postfx){ postfx.setPixelRatio(pr); postfx.setSize(window.innerWidth, window.innerHeight); postfx.setBloomEnabled(s.bloom); }
+  const wantShadows=s.shadows;
+  if(renderer.shadowMap.enabled!==wantShadows || (city&&city.sun.castShadow!==wantShadows)){
+    renderer.shadowMap.enabled=wantShadows;
+    if(city) city.sun.castShadow=wantShadows;
+    scene.traverse(o=>{ if(o.material) o.material.needsUpdate=true; });
+  }
+  if(city) city.sun.shadow.mapSize.set(s.shadowSize, s.shadowSize);
+  particleScale=s.particles;
+  if(skids) skids.setVisible(s.particles>0.3);
+}
+
+function setTimeOfDay(name, silent){
+  const order=PRESET_ORDER;
+  if(typeof name==='string') todIdx=order.indexOf(name);
+  if(todIdx<0) todIdx=0;
+  const key=order[todIdx];
+  const p=applySkyPreset(skyEnv, key);
+  const glowF = key==='day'?0 : key==='sunset'?0.45 : 1;
+  if(city) city.setGlow(glowF);
+  if(postfx) postfx.setBloomStrength(p.bloom);
+  headlightBase = key==='day' ? 0 : key==='sunset' ? 60 : 160;
+  if(headlight && state!=='drag') headlight.intensity=headlightBase;
+  const btn=$('tod-btn');
+  if(btn) btn.textContent = key==='day' ? '☀️' : key==='sunset' ? '🌇' : '🌙';
+  if(!silent) toast(p.label+' mode');
+}
+function cycleTimeOfDay(){ todIdx=(todIdx+1)%PRESET_ORDER.length; setTimeOfDay(); }
 
 // ---------------- main loop ----------------
 let last=performance.now();
@@ -304,6 +422,8 @@ function frame(now){
     syncCarTransform(dt);
     updateCamera(dt);
     updateHUD();
+    updateEffects(dt);
+    if(qm) qm.update(dt);
     const rpm=Math.min(1, Math.abs(tele.speed)/(carStats.topSpeed*1.15));
     audio.engine(rpm, Math.abs(controls.input.throttle||0));
     audio.skid(tele.drifting);
@@ -318,7 +438,9 @@ function frame(now){
   }else{
     audio.engine(0,0); audio.skid(false);
   }
-  renderer.render(scene, camera);
+  if(smoke && (state!=='freeroam'||paused||garageOpen)){ smoke.update(dt); exhaust.update(dt); }
+  if(postfx) postfx.render();
+  else renderer.render(scene, camera);
 }
 
 // ---------------- UI wiring ----------------
@@ -334,6 +456,14 @@ function wireUI(){
   $('menu-btn').onclick=openPause;
   $('garage-close').onclick=closeGarage;
   $('drag-exit').onclick=()=>{ if(dragMode.active) dragMode.exit(); startFreeroam(); };
+  // AAA: time-of-day + quality buttons
+  if($('tod-btn')) $('tod-btn').onclick=()=>{ audio.beep(600,0.05); cycleTimeOfDay(); };
+  if($('gfx-btn')) $('gfx-btn').onclick=()=>{
+    audio.beep(600,0.05);
+    const m=qm.cycleMode();
+    $('gfx-btn').textContent = m==='auto' ? '✨' : m==='high' ? '✨+' : '✨−';
+    toast('Graphics: '+m.toUpperCase()+' ('+QUALITY_LEVELS[qm.level]+')');
+  };
 
   // autoplay policy: unlock WebAudio on first gesture
   window.addEventListener('pointerdown', ()=>audio.unlock());
@@ -347,6 +477,7 @@ function wireUI(){
     camera.aspect=window.innerWidth/window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    if(postfx) postfx.setSize(window.innerWidth, window.innerHeight);
   });
   document.addEventListener('visibilitychange', ()=>{
     if(document.hidden && (state==='freeroam'||state==='drag') && !paused) openPause();
@@ -358,7 +489,7 @@ async function boot(){
   try{
     save=loadSave();
     audio=createAudio();
-    initScene();
+    await initScene();
     controls=createControls();
     rebuildCar();
     physics=new CarPhysics(carStats);

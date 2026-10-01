@@ -57,7 +57,7 @@ function roadTexture() {
   });
 }
 
-// building facade: windows, day look, a few lit
+// building facade: windows, day look — plus emissive variant (lit windows for night)
 function facadeTexture() {
   return makeCanvas(128, 256, (g, w, h) => {
     g.fillStyle = '#8d97a3'; g.fillRect(0, 0, w, h);
@@ -70,6 +70,24 @@ function facadeTexture() {
         g.fillRect(c * cw + 3, r * rh + 4, cw - 6, rh - 8);
         g.fillStyle = 'rgba(255,255,255,0.25)';
         g.fillRect(c * cw + 3, r * rh + 4, cw - 6, 3);
+      }
+    }
+  });
+}
+
+// emissive windows: mostly dark, scattered warm lit windows
+function facadeEmissiveTexture() {
+  return makeCanvas(128, 256, (g, w, h) => {
+    g.fillStyle = '#000000'; g.fillRect(0, 0, w, h);
+    const cols = 5, rows = 12;
+    const cw = w / cols, rh = h / rows;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const lit = ((r * 7 + c * 13) % 5) === 0; // ~1/5 lit at night
+        if (lit) {
+          g.fillStyle = (r + c) % 3 === 0 ? '#ffd9a0' : '#fff3d0';
+          g.fillRect(c * cw + 3, r * rh + 4, cw - 6, rh - 8);
+        }
       }
     }
   });
@@ -109,8 +127,7 @@ export function buildCity(scene) {
 
   const colliders = [];
 
-  // ---------- sky / fog ----------
-  scene.background = skyTexture();
+  // ---------- sky / fog (sky dome added by main.js; fog color follows presets) ----------
   scene.fog = new THREE.Fog(0xcfe0f2, 200, 750);
 
   // ---------- lights ----------
@@ -136,7 +153,7 @@ export function buildCity(scene) {
   groundGeo.rotateX(-Math.PI / 2);
   const ground = new THREE.Mesh(
     groundGeo,
-    new THREE.MeshLambertMaterial({ color: 0x5d8a4a })
+    new THREE.MeshStandardMaterial({ color: 0x5d8a4a, roughness: 0.95, metalness: 0.0, envMapIntensity: 0.25 })
   );
   ground.receiveShadow = true;
   scene.add(ground);
@@ -151,7 +168,7 @@ export function buildCity(scene) {
   rTex.repeat.set(1, roadLen / ROAD_W);
   const roadGeo = new THREE.PlaneGeometry(1, 1);
   roadGeo.rotateX(-Math.PI / 2);
-  const roadMat = new THREE.MeshLambertMaterial({ map: rTex });
+  const roadMat = new THREE.MeshStandardMaterial({ map: rTex, roughness: 0.9, metalness: 0.05, envMapIntensity: 0.35 });
   const roads = new THREE.InstancedMesh(roadGeo, roadMat, roadLines.length * 2);
   roads.receiveShadow = true;
   let ri = 0;
@@ -166,7 +183,7 @@ export function buildCity(scene) {
   const swGeo = new THREE.PlaneGeometry(1, 1);
   swGeo.rotateX(-Math.PI / 2);
   const sidewalks = new THREE.InstancedMesh(
-    swGeo, new THREE.MeshLambertMaterial({ color: 0x9a9da2 }), BLOCKS * BLOCKS
+    swGeo, new THREE.MeshStandardMaterial({ color: 0x9a9da2, roughness: 0.9, metalness: 0.05, envMapIntensity: 0.3 }), BLOCKS * BLOCKS
   );
   sidewalks.receiveShadow = true;
   let si = 0;
@@ -185,7 +202,7 @@ export function buildCity(scene) {
   const bGeo = new THREE.BoxGeometry(1, 1, 1);
   // translate so origin at base -> scale y = height, pos y = ground
   bGeo.translate(0, 0.5, 0);
-  const bMat = new THREE.MeshLambertMaterial({ map: bTex });
+  const bMat = new THREE.MeshStandardMaterial({ map: bTex, emissiveMap: facadeEmissiveTexture(), emissive: 0xffc873, emissiveIntensity: 0.0, roughness: 0.85, metalness: 0.1, envMapIntensity: 0.4 });
   const MAXB = 110;
   const buildings = new THREE.InstancedMesh(bGeo, bMat, MAXB);
   buildings.castShadow = true;
@@ -232,11 +249,11 @@ export function buildCity(scene) {
   // ---------- streetlights (instanced poles + heads) ----------
   const poleGeo = new THREE.CylinderGeometry(0.12, 0.16, 9, 6);
   poleGeo.translate(0, 4.5, 0);
-  const poleMat = new THREE.MeshLambertMaterial({ color: 0x3c4148 });
+  const poleMat = new THREE.MeshStandardMaterial({ color: 0x3c4148, roughness: 0.6, metalness: 0.6, envMapIntensity: 0.6 });
   const headGeo = new THREE.BoxGeometry(1.6, 0.25, 0.5);
   headGeo.translate(0.6, 9, 0);
-  const headMat = new THREE.MeshLambertMaterial({
-    color: 0xfff2c4, emissive: 0x554411,
+  const headMat = new THREE.MeshStandardMaterial({
+    color: 0xfff2c4, emissive: 0xffd77a, emissiveIntensity: 0.35, roughness: 0.4, metalness: 0.2,
   });
   const lightPos = [];
   for (const c of roadLines) {
@@ -277,10 +294,10 @@ export function buildCity(scene) {
   const coneGeo = new THREE.ConeGeometry(1.9, 4.6, 7);
   coneGeo.translate(0, 4.4, 0);
   const trunks = new THREE.InstancedMesh(
-    trunkGeo, new THREE.MeshLambertMaterial({ color: 0x6b4a2e }), treeSpots.length
+    trunkGeo, new THREE.MeshStandardMaterial({ color: 0x6b4a2e, roughness: 0.9, envMapIntensity: 0.2 }), treeSpots.length
   );
   const canopies = new THREE.InstancedMesh(
-    coneGeo, new THREE.MeshLambertMaterial({ color: 0x3e7a34 }), treeSpots.length
+    coneGeo, new THREE.MeshStandardMaterial({ color: 0x3e7a34, roughness: 0.85, envMapIntensity: 0.3 }), treeSpots.length
   );
   canopies.castShadow = true;
   treeSpots.forEach(([x, z, s], i) => {
@@ -290,6 +307,41 @@ export function buildCity(scene) {
   trunks.instanceMatrix.needsUpdate = true;
   canopies.instanceMatrix.needsUpdate = true;
   scene.add(trunks, canopies);
+
+  // ---------- streetlight glow points (one draw call, additive) ----------
+  const glowTex = makeCanvas(64, 64, (g, w, h) => {
+    const gr = g.createRadialGradient(32, 32, 2, 32, 32, 30);
+    gr.addColorStop(0, 'rgba(255,220,150,1)');
+    gr.addColorStop(0.4, 'rgba(255,200,120,0.45)');
+    gr.addColorStop(1, 'rgba(255,190,110,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, w, h);
+  });
+  const glowGeo = new THREE.BufferGeometry();
+  const glowPos = new Float32Array(lightPos.length * 3);
+  lightPos.forEach(([x, z], i) => { glowPos[i*3]=x; glowPos[i*3+1]=8.9; glowPos[i*3+2]=z; });
+  glowGeo.setAttribute('position', new THREE.BufferAttribute(glowPos, 3));
+  const glowMat = new THREE.PointsMaterial({
+    map: glowTex, size: 14, transparent: true, opacity: 0.0,
+    blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
+  });
+  const glowPoints = new THREE.Points(glowGeo, glowMat);
+  glowPoints.frustumCulled = false;
+  scene.add(glowPoints);
+
+  // ---------- distant skyline silhouette ----------
+  const skyGeo = new THREE.BoxGeometry(1, 1, 1);
+  skyGeo.translate(0, 0.5, 0);
+  const skyMat = new THREE.MeshBasicMaterial({ color: 0x2a3a55 });
+  const SKYLINE_N = 46;
+  const skyline = new THREE.InstancedMesh(skyGeo, skyMat, SKYLINE_N);
+  for (let i = 0; i < SKYLINE_N; i++) {
+    const a = (i / SKYLINE_N) * Math.PI * 2 + rand() * 0.1;
+    const r = 760 + rand() * 220;
+    const w = 40 + rand() * 60, h = 60 + rand() * 130, d = 40 + rand() * 60;
+    setInstance(skyline, i, Math.cos(a)*r, 0, Math.sin(a)*r, rand()*0.6, w, h, d);
+  }
+  skyline.instanceMatrix.needsUpdate = true;
+  scene.add(skyline);
 
   // ---------- drag strip (east edge) ----------
   const stripLen = STRIP_HALF * 2; // 450
@@ -305,7 +357,7 @@ export function buildCity(scene) {
   const stripGeo = new THREE.PlaneGeometry(1, 1);
   stripGeo.rotateX(-Math.PI / 2);
   const strip = new THREE.Mesh(
-    stripGeo, new THREE.MeshLambertMaterial({ map: sTex })
+    stripGeo, new THREE.MeshStandardMaterial({ map: sTex, roughness: 0.9, metalness: 0.05, envMapIntensity: 0.35 })
   );
   strip.scale.set(STRIP_W, 1, stripLen);
   strip.position.set(STRIP_X, 0.05, 0);
@@ -318,7 +370,7 @@ export function buildCity(scene) {
   linkTex.repeat.set(1, (STRIP_X - GRID_HALF) / ROAD_W + 2);
   const linkLen = STRIP_X - GRID_HALF + 20;
   const link = new THREE.Mesh(
-    stripGeo, new THREE.MeshLambertMaterial({ map: linkTex })
+    stripGeo, new THREE.MeshStandardMaterial({ map: linkTex, roughness: 0.9, metalness: 0.05, envMapIntensity: 0.35 })
   );
   link.scale.set(linkLen, 1, ROAD_W);
   link.rotation.y = Math.PI / 2;
@@ -329,7 +381,7 @@ export function buildCity(scene) {
   // start line: white box across both lanes at the south end
   const startLine = new THREE.Mesh(
     new THREE.PlaneGeometry(STRIP_W, 1.6).rotateX(-Math.PI / 2),
-    new THREE.MeshLambertMaterial({ color: 0xf2f4f6 })
+    new THREE.MeshStandardMaterial({ color: 0xf2f4f6, roughness: 0.7 })
   );
   startLine.position.set(STRIP_X, 0.07, STRIP_HALF - 8);
   scene.add(startLine);
@@ -337,7 +389,7 @@ export function buildCity(scene) {
   // barriers along both sides of the strip (instanced)
   const barGeo = new THREE.BoxGeometry(4, 1.1, 0.7);
   barGeo.translate(0, 0.55, 0);
-  const barMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+  const barMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6, metalness: 0.1, envMapIntensity: 0.4 });
   const barCount = Math.floor(stripLen / 9) * 2;
   const barriers = new THREE.InstancedMesh(barGeo, barMat, barCount);
   barriers.castShadow = true;
@@ -369,6 +421,15 @@ export function buildCity(scene) {
     length: stripLen, // 450
   };
 
+  // ---------- day/night glow: windows + streetlights ----------
+  // f: 0 = day, 1 = full night
+  function setGlow(f) {
+    bMat.emissiveIntensity = f * 1.4;
+    headMat.emissiveIntensity = 0.35 + f * 3.0;
+    glowMat.opacity = f * 0.85;
+    skyMat.color.setHex(f > 0.5 ? 0x0e1626 : 0x2a3a55);
+  }
+
   // ---------- per-frame update: shadow camera follows player ----------
   function update(dt, playerPos) {
     const sx = Math.round(playerPos.x / SNAP) * SNAP;
@@ -380,5 +441,5 @@ export function buildCity(scene) {
   // initialize shadow focus at spawn
   update(0, spawn);
 
-  return { colliders, spawn, dragStrip, update };
+  return { colliders, spawn, dragStrip, update, setGlow, sun, hemi };
 }
