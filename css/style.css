@@ -90,6 +90,19 @@ html,body{width:100%;height:100%;overflow:hidden;background:#0a0e1a;font-family:
 .spinner{width:52px;height:52px;border:5px solid #1a2340;border-top-color:#ff5e3a;border-radius:50%;animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 
+/* ---------- garage extras (UI track) ---------- */
+.stat-bars{display:flex;flex-direction:column;gap:3px;margin-top:8px}
+.stat-row{display:flex;align-items:center;gap:6px;font-size:10px;color:#8fa3c8}
+.stat-row span{width:26px;letter-spacing:1px}
+.stat-row .sbar{flex:1;height:6px;background:#243055;border-radius:3px;overflow:hidden}
+.stat-row .sbar i{display:block;height:100%;background:linear-gradient(90deg,#38bdf8,#818cf8);border-radius:3px}
+.upg-car-name{font-weight:800;font-size:14px;color:#ffd23f;margin-bottom:2px}
+.style-sec{margin-bottom:14px}
+.style-sec b{display:block;font-size:13px;color:#8fa3c8;margin-bottom:8px}
+.wheel-opt{display:flex;flex-direction:column;align-items:center;gap:2px;padding:10px 14px;border:2px solid #243055;border-radius:12px;background:#141c36;color:#fff;cursor:pointer;font-size:14px;font-weight:700}
+.wheel-opt.sel{border-color:#ff5e3a}
+.wheel-opt small{color:#8fa3c8;font-size:11px}
+
 @media (hover:hover) and (pointer:fine){
   /* desktop: shrink touch controls unless touch used */
   #touch-controls.desktop-hidden{display:none}
