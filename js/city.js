@@ -1,0 +1,383 @@
+// CITY DRIVER — world track builder (WORLD track).
+// Grid city + drag strip. Instanced everything, mobile-friendly.
+//
+// Export: buildCity(scene) -> { colliders, spawn, dragStrip, update }
+//
+// Conventions: +X east, +Z south. Car heading 0 = -Z (north), per js/physics.js.
+
+const SEED = 1337;
+
+// Layout constants
+const BLOCKS = 5;          // 5x5 blocks
+const BLOCK = 60;          // block size (m)
+const ROAD_W = 14;         // road width (m)
+const PITCH = BLOCK + ROAD_W; // 74m
+const GRID_HALF = (BLOCKS * PITCH + ROAD_W) / 2; // city extent +/-192
+
+// Drag strip
+const STRIP_X = 232;       // east of city edge (192 + 40)
+const STRIP_HALF = 225;    // strip z from -225..225 => 450m
+const STRIP_W = 9;         // 2 lanes
+
+// --- deterministic RNG (mulberry32) ---
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// --- canvas texture helpers ---
+function makeCanvas(w, h, draw) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
+
+// asphalt with center dashes + edge lines (runs along V)
+function roadTexture() {
+  return makeCanvas(128, 128, (g, w, h) => {
+    g.fillStyle = '#33363b'; g.fillRect(0, 0, w, h);
+    // noise speckle
+    g.fillStyle = '#3a3d42';
+    for (let i = 0; i < 160; i++) g.fillRect((i * 37) % w, (i * 53) % h, 2, 2);
+    // edge lines
+    g.fillStyle = '#cfd3d8';
+    g.fillRect(4, 0, 4, h); g.fillRect(w - 8, 0, 4, h);
+    // center dashed line
+    g.fillStyle = '#e8c33a';
+    for (let y = 0; y < h; y += 32) g.fillRect(w / 2 - 3, y, 6, 16);
+  });
+}
+
+// building facade: windows, day look, a few lit
+function facadeTexture() {
+  return makeCanvas(128, 256, (g, w, h) => {
+    g.fillStyle = '#8d97a3'; g.fillRect(0, 0, w, h);
+    const cols = 5, rows = 12;
+    const cw = w / cols, rh = h / rows;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const lit = ((r * 7 + c * 13) % 17) === 0;
+        g.fillStyle = lit ? '#ffe08a' : '#3b4656';
+        g.fillRect(c * cw + 3, r * rh + 4, cw - 6, rh - 8);
+        g.fillStyle = 'rgba(255,255,255,0.25)';
+        g.fillRect(c * cw + 3, r * rh + 4, cw - 6, 3);
+      }
+    }
+  });
+}
+
+// vertical sky gradient for scene.background
+function skyTexture() {
+  const t = makeCanvas(2, 256, (g, w, h) => {
+    const gr = g.createLinearGradient(0, 0, 0, h);
+    gr.addColorStop(0.0, '#2f6fd6');
+    gr.addColorStop(0.55, '#7fb2ee');
+    gr.addColorStop(0.8, '#cfe6f7');
+    gr.addColorStop(1.0, '#e8f2fa');
+    g.fillStyle = gr; g.fillRect(0, 0, w, h);
+  });
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+// place an instance: compose matrix without allocating (reuses temps)
+const _m = { p: null, q: null, s: null, m: null };
+function setInstance(mesh, i, x, y, z, rotY, sx, sy, sz) {
+  _m.p.set(x, y, z);
+  _m.q.setFromAxisAngle(_m.up, rotY);
+  _m.s.set(sx, sy, sz);
+  _m.m.compose(_m.p, _m.q, _m.s);
+  mesh.setMatrixAt(i, _m.m);
+}
+
+export function buildCity(scene) {
+  const rand = mulberry32(SEED);
+  _m.p = new THREE.Vector3();
+  _m.q = new THREE.Quaternion();
+  _m.s = new THREE.Vector3();
+  _m.m = new THREE.Matrix4();
+  _m.up = new THREE.Vector3(0, 1, 0);
+
+  const colliders = [];
+
+  // ---------- sky / fog ----------
+  scene.background = skyTexture();
+  scene.fog = new THREE.Fog(0xcfe0f2, 200, 750);
+
+  // ---------- lights ----------
+  const hemi = new THREE.HemisphereLight(0xbfd8ff, 0x6a7a5a, 0.9);
+  scene.add(hemi);
+  const sun = new THREE.DirectionalLight(0xfff4e0, 1.6);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(1024, 1024);
+  sun.shadow.camera.near = 10;
+  sun.shadow.camera.far = 400;
+  const SH = 110; // shadow ortho half-extent
+  sun.shadow.camera.left = -SH; sun.shadow.camera.right = SH;
+  sun.shadow.camera.top = SH; sun.shadow.camera.bottom = -SH;
+  sun.shadow.bias = -0.0008;
+  scene.add(sun);
+  scene.add(sun.target);
+  // fixed sun offset relative to shadow focus (no per-frame allocation)
+  const SUN_DX = 70, SUN_DY = 120, SUN_DZ = 45;
+  const SNAP = 16; // snap grid for shadow focus (kills shimmer)
+
+  // ---------- ground ----------
+  const groundGeo = new THREE.PlaneGeometry(1400, 1400);
+  groundGeo.rotateX(-Math.PI / 2);
+  const ground = new THREE.Mesh(
+    groundGeo,
+    new THREE.MeshLambertMaterial({ color: 0x5d8a4a })
+  );
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  // ---------- roads (instanced) ----------
+  // road centerlines: 6 per axis for 5x5 blocks
+  const roadLines = [];
+  for (let i = 0; i <= BLOCKS; i++) roadLines.push((i - BLOCKS / 2) * PITCH);
+  const roadLen = BLOCKS * PITCH + ROAD_W; // 384
+  const rTex = roadTexture();
+  rTex.wrapS = rTex.wrapT = THREE.RepeatWrapping;
+  rTex.repeat.set(1, roadLen / ROAD_W);
+  const roadGeo = new THREE.PlaneGeometry(1, 1);
+  roadGeo.rotateX(-Math.PI / 2);
+  const roadMat = new THREE.MeshLambertMaterial({ map: rTex });
+  const roads = new THREE.InstancedMesh(roadGeo, roadMat, roadLines.length * 2);
+  roads.receiveShadow = true;
+  let ri = 0;
+  for (const c of roadLines) {
+    setInstance(roads, ri++, c, 0.05, 0, 0, ROAD_W, 1, roadLen);          // along Z
+    setInstance(roads, ri++, 0, 0.05, c, Math.PI / 2, ROAD_W, 1, roadLen); // along X
+  }
+  roads.instanceMatrix.needsUpdate = true;
+  scene.add(roads);
+
+  // ---------- sidewalks (instanced, one per block) ----------
+  const swGeo = new THREE.PlaneGeometry(1, 1);
+  swGeo.rotateX(-Math.PI / 2);
+  const sidewalks = new THREE.InstancedMesh(
+    swGeo, new THREE.MeshLambertMaterial({ color: 0x9a9da2 }), BLOCKS * BLOCKS
+  );
+  sidewalks.receiveShadow = true;
+  let si = 0;
+  for (let bx = 0; bx < BLOCKS; bx++) {
+    for (let bz = 0; bz < BLOCKS; bz++) {
+      const cx = (bx - (BLOCKS - 1) / 2) * PITCH;
+      const cz = (bz - (BLOCKS - 1) / 2) * PITCH;
+      setInstance(sidewalks, si++, cx, 0.03, cz, 0, BLOCK, 1, BLOCK);
+    }
+  }
+  sidewalks.instanceMatrix.needsUpdate = true;
+  scene.add(sidewalks);
+
+  // ---------- buildings (instanced boxes) ----------
+  const bTex = facadeTexture();
+  const bGeo = new THREE.BoxGeometry(1, 1, 1);
+  // translate so origin at base -> scale y = height, pos y = ground
+  bGeo.translate(0, 0.5, 0);
+  const bMat = new THREE.MeshLambertMaterial({ map: bTex });
+  const MAXB = 110;
+  const buildings = new THREE.InstancedMesh(bGeo, bMat, MAXB);
+  buildings.castShadow = true;
+  buildings.receiveShadow = true;
+  const tint = new THREE.Color();
+  let bi = 0;
+  const inset = 4; // setback from block edge
+  for (let bx = 0; bx < BLOCKS; bx++) {
+    for (let bz = 0; bz < BLOCKS; bz++) {
+      const bcx = (bx - (BLOCKS - 1) / 2) * PITCH;
+      const bcz = (bz - (BLOCKS - 1) / 2) * PITCH;
+      const downtown = Math.abs(bx - 2) <= 1 && Math.abs(bz - 2) <= 1;
+      const n = rand() < 0.75 ? 4 : 9; // 2x2 or 3x3
+      const cols = Math.sqrt(n);
+      const cell = (BLOCK - inset * 2) / cols;
+      for (let k = 0; k < n && bi < MAXB; k++) {
+        if (rand() < 0.28) continue; // some lots stay empty (parks get trees)
+        const gx = k % cols, gz = Math.floor(k / cols);
+        const w = cell * (0.55 + rand() * 0.3);
+        const d = cell * (0.55 + rand() * 0.3);
+        const hMax = downtown ? 60 : 28;
+        const hMin = downtown ? 18 : 10;
+        const h = hMin + rand() * (hMax - hMin);
+        const px = bcx - (BLOCK - inset * 2) / 2 + cell * (gx + 0.5) + (rand() - 0.5) * 2;
+        const pz = bcz - (BLOCK - inset * 2) / 2 + cell * (gz + 0.5) + (rand() - 0.5) * 2;
+        setInstance(buildings, bi, px, 0.03, pz, 0, w, h, d);
+        // subtle tint variety
+        const v = 0.85 + rand() * 0.3;
+        tint.setRGB(v, v * (0.96 + rand() * 0.06), v * (0.94 + rand() * 0.08));
+        buildings.setColorAt(bi, tint);
+        colliders.push({
+          minX: px - w / 2, maxX: px + w / 2,
+          minZ: pz - d / 2, maxZ: pz + d / 2,
+        });
+        bi++;
+      }
+    }
+  }
+  buildings.count = bi;
+  buildings.instanceMatrix.needsUpdate = true;
+  if (buildings.instanceColor) buildings.instanceColor.needsUpdate = true;
+  scene.add(buildings);
+
+  // ---------- streetlights (instanced poles + heads) ----------
+  const poleGeo = new THREE.CylinderGeometry(0.12, 0.16, 9, 6);
+  poleGeo.translate(0, 4.5, 0);
+  const poleMat = new THREE.MeshLambertMaterial({ color: 0x3c4148 });
+  const headGeo = new THREE.BoxGeometry(1.6, 0.25, 0.5);
+  headGeo.translate(0.6, 9, 0);
+  const headMat = new THREE.MeshLambertMaterial({
+    color: 0xfff2c4, emissive: 0x554411,
+  });
+  const lightPos = [];
+  for (const c of roadLines) {
+    for (let d = -roadLen / 2 + 25; d < roadLen / 2 - 10; d += 46) {
+      const side = (Math.round(d / 46) % 2 === 0) ? 1 : -1;
+      lightPos.push([c + side * (ROAD_W / 2 + 1.5), d, 0]);       // along Z road
+      lightPos.push([d, c + side * (ROAD_W / 2 + 1.5), 1]);       // along X road
+    }
+  }
+  const poles = new THREE.InstancedMesh(poleGeo, poleMat, lightPos.length);
+  const heads = new THREE.InstancedMesh(headGeo, headMat, lightPos.length);
+  lightPos.forEach(([x, z, horiz], i) => {
+    setInstance(poles, i, x, 0, z, 0, 1, 1, 1);
+    setInstance(heads, i, x, 0, z, horiz ? Math.PI / 2 : 0, 1, 1, 1);
+  });
+  poles.instanceMatrix.needsUpdate = true;
+  heads.instanceMatrix.needsUpdate = true;
+  scene.add(poles, heads);
+
+  // ---------- trees (instanced trunks + canopies) ----------
+  const treeSpots = [];
+  for (let bx = 0; bx < BLOCKS; bx++) {
+    for (let bz = 0; bz < BLOCKS; bz++) {
+      const bcx = (bx - (BLOCKS - 1) / 2) * PITCH;
+      const bcz = (bz - (BLOCKS - 1) / 2) * PITCH;
+      const n = 2 + Math.floor(rand() * 3);
+      for (let k = 0; k < n; k++) {
+        treeSpots.push([
+          bcx + (rand() - 0.5) * (BLOCK - 8),
+          bcz + (rand() - 0.5) * (BLOCK - 8),
+          0.8 + rand() * 0.5,
+        ]);
+      }
+    }
+  }
+  const trunkGeo = new THREE.CylinderGeometry(0.18, 0.28, 2.6, 6);
+  trunkGeo.translate(0, 1.3, 0);
+  const coneGeo = new THREE.ConeGeometry(1.9, 4.6, 7);
+  coneGeo.translate(0, 4.4, 0);
+  const trunks = new THREE.InstancedMesh(
+    trunkGeo, new THREE.MeshLambertMaterial({ color: 0x6b4a2e }), treeSpots.length
+  );
+  const canopies = new THREE.InstancedMesh(
+    coneGeo, new THREE.MeshLambertMaterial({ color: 0x3e7a34 }), treeSpots.length
+  );
+  canopies.castShadow = true;
+  treeSpots.forEach(([x, z, s], i) => {
+    setInstance(trunks, i, x, 0.03, z, rand() * 6.28, s, s, s);
+    setInstance(canopies, i, x, 0.03, z, rand() * 6.28, s, s * (0.9 + rand() * 0.3), s);
+  });
+  trunks.instanceMatrix.needsUpdate = true;
+  canopies.instanceMatrix.needsUpdate = true;
+  scene.add(trunks, canopies);
+
+  // ---------- drag strip (east edge) ----------
+  const stripLen = STRIP_HALF * 2; // 450
+  const sTex = makeCanvas(128, 128, (g, w, h) => {
+    g.fillStyle = '#2e3136'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#cfd3d8';
+    g.fillRect(2, 0, 5, h); g.fillRect(w - 7, 0, 5, h); // edge lines
+    g.fillStyle = '#e8c33a';
+    for (let y = 0; y < h; y += 32) g.fillRect(w / 2 - 3, y, 6, 16); // center dashes
+  });
+  sTex.wrapS = sTex.wrapT = THREE.RepeatWrapping;
+  sTex.repeat.set(1, stripLen / 14);
+  const stripGeo = new THREE.PlaneGeometry(1, 1);
+  stripGeo.rotateX(-Math.PI / 2);
+  const strip = new THREE.Mesh(
+    stripGeo, new THREE.MeshLambertMaterial({ map: sTex })
+  );
+  strip.scale.set(STRIP_W, 1, stripLen);
+  strip.position.set(STRIP_X, 0.05, 0);
+  strip.receiveShadow = true;
+  scene.add(strip);
+
+  // access road connecting city grid to strip (so player can drive there)
+  const linkTex = roadTexture();
+  linkTex.wrapS = linkTex.wrapT = THREE.RepeatWrapping;
+  linkTex.repeat.set(1, (STRIP_X - GRID_HALF) / ROAD_W + 2);
+  const linkLen = STRIP_X - GRID_HALF + 20;
+  const link = new THREE.Mesh(
+    stripGeo, new THREE.MeshLambertMaterial({ map: linkTex })
+  );
+  link.scale.set(linkLen, 1, ROAD_W);
+  link.rotation.y = Math.PI / 2;
+  link.position.set((GRID_HALF + STRIP_X) / 2, 0.05, 0);
+  link.receiveShadow = true;
+  scene.add(link);
+
+  // start line: white box across both lanes at the south end
+  const startLine = new THREE.Mesh(
+    new THREE.PlaneGeometry(STRIP_W, 1.6).rotateX(-Math.PI / 2),
+    new THREE.MeshLambertMaterial({ color: 0xf2f4f6 })
+  );
+  startLine.position.set(STRIP_X, 0.07, STRIP_HALF - 8);
+  scene.add(startLine);
+
+  // barriers along both sides of the strip (instanced)
+  const barGeo = new THREE.BoxGeometry(4, 1.1, 0.7);
+  barGeo.translate(0, 0.55, 0);
+  const barMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+  const barCount = Math.floor(stripLen / 9) * 2;
+  const barriers = new THREE.InstancedMesh(barGeo, barMat, barCount);
+  barriers.castShadow = true;
+  const barTint = new THREE.Color();
+  let bai = 0;
+  for (let d = -STRIP_HALF + 4; d <= STRIP_HALF - 4 && bai < barCount; d += 9) {
+    for (const sx of [-1, 1]) {
+      setInstance(barriers, bai, STRIP_X + sx * (STRIP_W / 2 + 1.6), 0.05, d, 0, 1, 1, 1);
+      barTint.setHex((bai % 2 === 0) ? 0xe8641e : 0xf2f4f6); // orange / white
+      barriers.setColorAt(bai, barTint);
+      bai++;
+    }
+  }
+  barriers.count = bai;
+  barriers.instanceMatrix.needsUpdate = true;
+  if (barriers.instanceColor) barriers.instanceColor.needsUpdate = true;
+  scene.add(barriers);
+  // strip side barriers are visual only; add thin colliders? Keep visual-only
+  // per contract colliders are building AABBs — strip barriers left non-colliding
+  // for arcade forgiveness at 250+ km/h.
+
+  // ---------- spawn / drag strip contract ----------
+  const spawn = { x: roadLines[3], z: 120, heading: 0 }; // on a north-south road
+  const dragStrip = {
+    startX: STRIP_X,
+    startZ: STRIP_HALF - 8,
+    dirX: 0,
+    dirZ: -1, // unit vector along the strip (south -> north)
+    length: stripLen, // 450
+  };
+
+  // ---------- per-frame update: shadow camera follows player ----------
+  function update(dt, playerPos) {
+    const sx = Math.round(playerPos.x / SNAP) * SNAP;
+    const sz = Math.round(playerPos.z / SNAP) * SNAP;
+    sun.target.position.set(sx, 0, sz);
+    sun.position.set(sx + SUN_DX, SUN_DY, sz + SUN_DZ);
+    sun.target.updateMatrixWorld();
+  }
+  // initialize shadow focus at spawn
+  update(0, spawn);
+
+  return { colliders, spawn, dragStrip, update };
+}
