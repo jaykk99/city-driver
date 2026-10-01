@@ -68,12 +68,12 @@ function rebuildCar(){
   if(carGroup) scene.remove(carGroup);
   carGroup=buildCar(carDef);
   const p=save.paint[carDef.id];
-  if(typeof p==='number' && p!==carDef.color) paintCar(carGroup, p);
+  if(typeof p==='number' && p!==(carDef.colors&&carDef.colors[0])) paintCar(carGroup, p);
   if(setWheelStyle) setWheelStyle(carGroup, save.wheels[carDef.id]||0);
   scene.add(carGroup);
   carStats=effectiveStats(carDef, save.upgrades[carDef.id]||{});
   allWheels=(carGroup.userData.wheels||[]).slice();
-  frontWheels=allWheels.filter(w=>w.position.z>0);
+  frontWheels=allWheels.filter(w=>w.position.z<0);
   brakeMats=carGroup.userData.brakeMats||[];
   $('menu-car-name').textContent=carDef.name;
 }
@@ -135,7 +135,7 @@ function updateEffects(dt){
   if(tele.drifting && particleScale>0.3){
     for(let i=0;i<n;i++){
       const w=allWheels[i];
-      if(w.position.z>0) continue;               // rear wheels only
+      if(w.position.z<0) continue;               // rear wheels only
       rearWheelWorld(i,_rw);
       if(Math.random()<0.85*particleScale)
         smoke.emit(_rw.x+(Math.random()-0.5)*0.4, 0.35, _rw.z+(Math.random()-0.5)*0.4,
@@ -377,7 +377,7 @@ async function initScene(){
 function applyQuality(level, s){
   const pr=Math.min(window.devicePixelRatio||1, s.pixelRatioCap);
   renderer.setPixelRatio(pr);
-  if(postfx){ postfx.setPixelRatio(pr); postfx.setSize(window.innerWidth, window.innerHeight); postfx.setBloomEnabled(s.bloom); }
+  if(postfx){ postfx.setPixelRatio(Math.min(pr,1)); postfx.setSize(window.innerWidth, window.innerHeight); postfx.setBloomEnabled(s.bloom); }
   const wantShadows=s.shadows;
   if(renderer.shadowMap.enabled!==wantShadows || (city&&city.sun.castShadow!==wantShadows)){
     renderer.shadowMap.enabled=wantShadows;
