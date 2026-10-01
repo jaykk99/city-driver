@@ -1,5 +1,6 @@
 // Procedural low-poly cars. All geometry built in code — no external assets.
 // Each car: { name, desc, stats, build(): THREE.Group, wheels[] }
+import * as THREE from 'three';
 
 export const CAR_DEFS = [
   { id:'falcon',  name:'Falcon S',    desc:'Balanced sports coupe',   topSpeed:52, accel:14, handling:0.95, grip:1.0,  price:0,     color:0xd7263d, body:'sport'   },

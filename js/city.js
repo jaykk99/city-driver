@@ -1,5 +1,6 @@
 // CITY DRIVER — world track builder (WORLD track).
 // Grid city + drag strip. Instanced everything, mobile-friendly.
+import * as THREE from 'three';
 //
 // Export: buildCity(scene) -> { colliders, spawn, dragStrip, update }
 //
