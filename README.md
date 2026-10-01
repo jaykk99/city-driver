@@ -21,6 +21,13 @@ Open-world 3D driving game for mobile browsers. Built with Three.js — no app s
 npx serve .
 # → http://localhost:3000
 
+# after editing anything in js/, rebuild the self-contained bundle:
+npm install   # once (esbuild, dev only)
+npm run build # → js/bundle.js (three.js + game, zero CDN requests)
+```
+> `index.html` loads only `js/bundle.js` — the game makes **no CDN requests**,
+> so a slow/down CDN can never hang the loading screen.
+
 # multiplayer relay (optional)
 cd server && npm install && npm start
 # → set MP_SERVER_URL in js/config.js to the relay URL
@@ -35,7 +42,7 @@ Without the relay URL the game runs fully solo — multiplayer is purely additiv
 
 ## Tech
 
-Three.js 0.160 (CDN), vanilla JS modules, WebAudio procedural engine/skid sounds, InstancedMesh city (~12 draw calls), 30fps mobile target. No external 3D models or audio assets — everything is generated in code.
+Three.js 0.160 (bundled, no CDN), vanilla JS modules, WebAudio procedural engine/skid sounds, InstancedMesh city (~12 draw calls), 30fps mobile target. No external 3D models or audio assets — everything is generated in code.
 
 ## Phase 2 (planned)
 

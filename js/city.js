@@ -208,17 +208,21 @@ export function buildCity(scene) {
   buildings.castShadow = true;
   buildings.receiveShadow = true;
   const tint = new THREE.Color();
+  const roofSpots = []; // {x,h,w,d} for rooftop props
   let bi = 0;
   const inset = 4; // setback from block edge
+  const PARK_BX = 0, PARK_BZ = 0; // corner block becomes the parking lot
   for (let bx = 0; bx < BLOCKS; bx++) {
     for (let bz = 0; bz < BLOCKS; bz++) {
       const bcx = (bx - (BLOCKS - 1) / 2) * PITCH;
       const bcz = (bz - (BLOCKS - 1) / 2) * PITCH;
+      const isParkingLot = (bx === PARK_BX && bz === PARK_BZ);
       const downtown = Math.abs(bx - 2) <= 1 && Math.abs(bz - 2) <= 1;
       const n = rand() < 0.75 ? 4 : 9; // 2x2 or 3x3
       const cols = Math.sqrt(n);
       const cell = (BLOCK - inset * 2) / cols;
       for (let k = 0; k < n && bi < MAXB; k++) {
+        if (isParkingLot) continue; // this block is the parking lot
         if (rand() < 0.28) continue; // some lots stay empty (parks get trees)
         const gx = k % cols, gz = Math.floor(k / cols);
         const w = cell * (0.55 + rand() * 0.3);
@@ -229,10 +233,15 @@ export function buildCity(scene) {
         const px = bcx - (BLOCK - inset * 2) / 2 + cell * (gx + 0.5) + (rand() - 0.5) * 2;
         const pz = bcz - (BLOCK - inset * 2) / 2 + cell * (gz + 0.5) + (rand() - 0.5) * 2;
         setInstance(buildings, bi, px, 0.03, pz, 0, w, h, d);
-        // subtle tint variety
-        const v = 0.85 + rand() * 0.3;
-        tint.setRGB(v, v * (0.96 + rand() * 0.06), v * (0.94 + rand() * 0.08));
+        // facade variety: brightness + subtle warm/cool/beige shifts
+        const v = 0.82 + rand() * 0.32;
+        const pick = rand();
+        if (pick < 0.45) tint.setRGB(v, v * 0.97, v * 0.95);            // neutral grey
+        else if (pick < 0.65) tint.setRGB(v, v * 0.90, v * 0.82);        // warm beige
+        else if (pick < 0.82) tint.setRGB(v * 0.88, v * 0.95, v);        // cool blue-grey
+        else tint.setRGB(v, v * 0.82, v * 0.74);                          // brick-ish
         buildings.setColorAt(bi, tint);
+        roofSpots.push({ x: px, h, w, d, z: pz });
         colliders.push({
           minX: px - w / 2, maxX: px + w / 2,
           minZ: pz - d / 2, maxZ: pz + d / 2,
@@ -245,6 +254,101 @@ export function buildCity(scene) {
   buildings.instanceMatrix.needsUpdate = true;
   if (buildings.instanceColor) buildings.instanceColor.needsUpdate = true;
   scene.add(buildings);
+
+  // ---------- rooftop props (AC units, vents) ----------
+  {
+    const acGeo = new THREE.BoxGeometry(1.6, 1.1, 1.6);
+    acGeo.translate(0, 0.55, 0);
+    const acMat = new THREE.MeshStandardMaterial({ color: 0x8b9096, roughness: 0.7, metalness: 0.4, envMapIntensity: 0.4 });
+    const spots = [];
+    for (const r of roofSpots) {
+      const nAc = 1 + Math.floor(rand() * 2);
+      for (let k = 0; k < nAc; k++) {
+        spots.push([r.x + (rand() - 0.5) * r.w * 0.5, r.h + 0.03, r.z + (rand() - 0.5) * r.d * 0.5, 0.7 + rand() * 0.7]);
+      }
+    }
+    const acs = new THREE.InstancedMesh(acGeo, acMat, Math.max(1, spots.length));
+    spots.forEach(([x, y, z, s], i) => setInstance(acs, i, x, y, z, rand() * 3.14, s, 1, s));
+    acs.count = spots.length;
+    acs.instanceMatrix.needsUpdate = true;
+    scene.add(acs);
+  }
+
+  // ---------- parking lot (corner block): asphalt + marked bays + wheel stops ----------
+  {
+    const pcx = (PARK_BX - (BLOCKS - 1) / 2) * PITCH;
+    const pcz = (PARK_BZ - (BLOCKS - 1) / 2) * PITCH;
+    const slab = new THREE.Mesh(
+      new THREE.PlaneGeometry(BLOCK, BLOCK).rotateX(-Math.PI / 2),
+      new THREE.MeshStandardMaterial({ color: 0x33363b, roughness: 0.95, metalness: 0.02, envMapIntensity: 0.25 })
+    );
+    slab.position.set(pcx, 0.045, pcz);
+    slab.receiveShadow = true;
+    scene.add(slab);
+    // bays: two facing rows; dividers + stops instanced
+    const lineGeo = new THREE.BoxGeometry(0.14, 0.02, 5.6);
+    lineGeo.translate(0, 0.01, 0);
+    const lineMat = new THREE.MeshStandardMaterial({ color: 0xe8eaec, roughness: 0.7 });
+    const BAY_W = 3.0, ROWS = [-7.5, 7.5], BAYS = 12;
+    const x0 = pcx - (BAYS * BAY_W) / 2;
+    const nLines = ROWS.length * (BAYS + 1);
+    const lines = new THREE.InstancedMesh(lineGeo, lineMat, nLines);
+    const stopGeo = new THREE.BoxGeometry(1.8, 0.14, 0.16);
+    stopGeo.translate(0, 0.07, 0);
+    const stopMat = new THREE.MeshStandardMaterial({ color: 0x9a9da2, roughness: 0.9 });
+    const stops = new THREE.InstancedMesh(stopGeo, stopMat, ROWS.length * BAYS);
+    let li = 0, ti = 0;
+    for (const rz of ROWS) {
+      for (let b = 0; b <= BAYS; b++) {
+        setInstance(lines, li++, x0 + b * BAY_W, 0.055, pcz + rz, 0, 1, 1, 1);
+      }
+      for (let b = 0; b < BAYS; b++) {
+        setInstance(stops, ti++, x0 + b * BAY_W + BAY_W / 2, 0.055, pcz + rz + (rz < 0 ? 1.9 : -1.9), 0, 1, 1, 1);
+      }
+    }
+    lines.count = li; lines.instanceMatrix.needsUpdate = true;
+    stops.count = ti; stops.instanceMatrix.needsUpdate = true;
+    scene.add(lines, stops);
+    // lot label painted on asphalt
+    const label = new THREE.Mesh(
+      new THREE.PlaneGeometry(20, 5).rotateX(-Math.PI / 2),
+      new THREE.MeshStandardMaterial({ map: makeCanvas(256, 64, (g, w, h) => {
+        g.fillStyle = '#33363b'; g.fillRect(0, 0, w, h);
+        g.fillStyle = '#e8c33a'; g.font = 'bold 40px sans-serif';
+        g.textAlign = 'center'; g.textBaseline = 'middle';
+        g.fillText('PARKING', w / 2, h / 2);
+      }), roughness: 0.9, transparent: false })
+    );
+    label.position.set(pcx, 0.055, pcz);
+    scene.add(label);
+  }
+
+  // ---------- crosswalks at the 4 central intersections ----------
+  {
+    const stripeGeo = new THREE.BoxGeometry(0.7, 0.02, 3.2);
+    stripeGeo.translate(0, 0.01, 0);
+    const stripeMat = new THREE.MeshStandardMaterial({ color: 0xdfe2e6, roughness: 0.75 });
+    const spots = [];
+    for (const ix of [2, 3]) for (const iz of [2, 3]) {
+      const cx = roadLines[ix], cz = roadLines[iz];
+      const off = ROAD_W / 2 + 2.6;
+      for (const [x, z, rot] of [
+        [cx, cz - off, 0], [cx, cz + off, 0],
+        [cx - off, cz, 1], [cx + off, cz, 1],
+      ]) {
+        for (let sIdx = -2; sIdx <= 2; sIdx++) {
+          spots.push(rot === 0
+            ? [x + sIdx * 2.2, 0.06, z, 0]
+            : [x, 0.06, z + sIdx * 2.2, Math.PI / 2]);
+        }
+      }
+    }
+    const stripes = new THREE.InstancedMesh(stripeGeo, stripeMat, spots.length);
+    spots.forEach(([x, y, z, r], i) => setInstance(stripes, i, x, y, z, r, 1, 1, 1));
+    stripes.instanceMatrix.needsUpdate = true;
+    stripes.receiveShadow = true;
+    scene.add(stripes);
+  }
 
   // ---------- streetlights (instanced poles + heads) ----------
   const poleGeo = new THREE.CylinderGeometry(0.12, 0.16, 9, 6);
@@ -277,6 +381,7 @@ export function buildCity(scene) {
   const treeSpots = [];
   for (let bx = 0; bx < BLOCKS; bx++) {
     for (let bz = 0; bz < BLOCKS; bz++) {
+      if (bx === PARK_BX && bz === PARK_BZ) continue; // parking lot stays clear
       const bcx = (bx - (BLOCKS - 1) / 2) * PITCH;
       const bcz = (bz - (BLOCKS - 1) / 2) * PITCH;
       const n = 2 + Math.floor(rand() * 3);

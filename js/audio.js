@@ -4,7 +4,7 @@ export function createAudio(){
   let ctx=null, master=null;
   let engOsc=null, engOsc2=null, engFilter=null, engGain=null;
   let skidGain=null;
-  let started=false;
+  let started=false, gestured=false; // never create AudioContext before a user gesture (autoplay policy)
 
   function ensure(){
     if(ctx) return true;
@@ -42,6 +42,7 @@ export function createAudio(){
   return {
     // call on first user gesture (autoplay policy); safe to call repeatedly
     unlock(){
+      gestured=true;
       if(!ensure()) return;
       if(ctx.state==='suspended') ctx.resume();
       started=true;
@@ -63,6 +64,7 @@ export function createAudio(){
       skidGain.gain.setTargetAtTime(on?0.12:0, ctx.currentTime, on?0.05:0.12);
     },
     beep(freq=660, dur=0.08){
+      if(!gestured) return; // no context before first gesture
       if(!ensure()) return;
       if(ctx.state==='suspended') ctx.resume();
       const t=ctx.currentTime;

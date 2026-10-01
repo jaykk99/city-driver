@@ -6,12 +6,8 @@
 <meta name="theme-color" content="#0a0e1a">
 <title>CITY DRIVER — Open World 3D</title>
 <link rel="stylesheet" href="css/style.css">
-<script type="importmap">
-{ "imports": {
-  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
-} }
-</script>
+<!-- self-contained build: three.js + game code, zero CDN requests.
+     Rebuild with: npm run build (requires devDependency esbuild) -->
 </head>
 <body>
 <div id="game-container"></div>
@@ -102,7 +98,14 @@
 <div id="toast" class="hidden"></div>
 <div id="loading"><div class="spinner"></div><p>LOADING CITY…</p></div>
 
-<script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
-<script type="module" src="js/main.js"></script>
+<script>
+window.__bootTimer = setTimeout(function(){
+  var l = document.getElementById('loading');
+  if (l && !l.classList.contains('hidden')) {
+    l.innerHTML = 'FAILED TO START<br><small style="font-size:13px">game files did not load. Check your connection and reload.</small>';
+  }
+}, 25000);
+</script>
+<script src="js/bundle.js"></script>
 </body>
 </html>

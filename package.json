@@ -1,0 +1,25 @@
+{
+  "name": "game-city",
+  "version": "1.0.0",
+  "description": "Open-world 3D driving game for mobile browsers. Built with Three.js \u2014 no app store, just open the URL and drive.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "esbuild js/main.js --bundle --minify --format=iife --outfile=js/bundle.js",
+    "build:dev": "esbuild js/main.js --bundle --format=iife --outfile=js/bundle.js --sourcemap"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jaykk99/city-driver.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/jaykk99/city-driver/issues"
+  },
+  "homepage": "https://github.com/jaykk99/city-driver#readme",
+  "devDependencies": {
+    "esbuild": "^0.21.5"
+  }
+}
