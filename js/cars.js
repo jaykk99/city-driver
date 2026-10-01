@@ -133,7 +133,7 @@ export function effectiveStats(def, upgrades){
     accel:    def.accel    * (1 + 0.10*lv('engine') + 0.14*lv('turbo')),
     handling: def.handling * (1 + 0.05*lv('suspension')),
     grip:     def.grip     * (1 + 0.07*lv('tires')),
-    nitroPower: 1 + 0.25*lv('nitro'),
+    nitroPower: 1.35 + 0.15*lv('nitro'),
     nitroTime:  2.2 + 0.6*lv('nitro'),
   };
 }
