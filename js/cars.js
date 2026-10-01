@@ -27,15 +27,60 @@ function wedge(w,h,d,color){
   g.computeVertexNormals();
   const m = new THREE.Mesh(g, mat(color,0.3,0.65)); m.castShadow=true; return m;
 }
-function wheel(r,w){
+// ---- wheel styles: 0 classic silver, 1 stealth dark + lip, 2 sport orange 5-spoke ----
+const WHEEL_STYLES = [
+  { hub:0xc0c8d8, rough:0.30 },
+  { hub:0x23262e, rough:0.50 },
+  { hub:0xff6a00, rough:0.35 },
+];
+function buildHub(r, w, idx){
+  const st = WHEEL_STYLES[Math.max(0, Math.min(2, idx|0))];
+  const g = new THREE.Group();
+  if(idx===2){
+    const cG = new THREE.CylinderGeometry(r*0.20,r*0.20,w+0.04,10); cG.rotateZ(Math.PI/2);
+    g.add(new THREE.Mesh(cG, mat(st.hub,0.35,0.8)));
+    for(let i=0;i<5;i++){
+      const sp = new THREE.Mesh(new THREE.BoxGeometry(w+0.02, r*1.5, r*0.22), mat(st.hub,0.35,0.8));
+      sp.rotation.x = i * Math.PI*2/5;
+      g.add(sp);
+    }
+  } else {
+    const hr = idx===1 ? r*0.45 : r*0.55;
+    const hG = new THREE.CylinderGeometry(hr,hr,w+0.02, idx===1?10:8); hG.rotateZ(Math.PI/2);
+    g.add(new THREE.Mesh(hG, mat(st.hub, st.rough, 0.9)));
+    if(idx===1){
+      const lip = new THREE.TorusGeometry(r*0.62, r*0.08, 8, 20); lip.rotateY(Math.PI/2);
+      g.add(new THREE.Mesh(lip, mat(0x9aa2b5,0.3,0.9)));
+    }
+  }
+  return g;
+}
+function disposeHub(hub){
+  hub.traverse(o=>{ if(o.isMesh){ o.geometry.dispose(); o.material.dispose(); } });
+}
+function wheel(r,w,style=0){
   const g = new THREE.CylinderGeometry(r,r,w,14);
   g.rotateZ(Math.PI/2);
   const grp = new THREE.Group();
   const tire = new THREE.Mesh(g, mat(0x151515,0.9,0.1)); tire.castShadow=true;
-  const hubG = new THREE.CylinderGeometry(r*0.55,r*0.55,w+0.02,8); hubG.rotateZ(Math.PI/2);
-  const hub = new THREE.Mesh(hubG, mat(0xc0c8d8,0.3,0.9));
-  grp.add(tire,hub); grp.userData.spin=[tire,hub];
+  const hub = buildHub(r,w,style);
+  grp.add(tire,hub);
+  grp.userData.r=r; grp.userData.w=w; grp.userData.style=style;
+  grp.userData.tire=tire; grp.userData.hub=hub; grp.userData.spin=[tire,hub];
   return grp;
+}
+// paint-shop wheel swap: rebuilds hubs only, keeps tires
+export function setWheelStyle(group, idx){
+  idx = Math.max(0, Math.min(2, idx|0));
+  for(const w of (group.userData.wheels||[])){
+    if(w.userData.style===idx) continue;
+    const old = w.userData.hub;
+    w.remove(old); disposeHub(old);
+    const hub = buildHub(w.userData.r, w.userData.w, idx);
+    w.add(hub);
+    w.userData.hub = hub; w.userData.style = idx; w.userData.spin = [w.userData.tire, hub];
+  }
+  group.userData.wheelStyle = idx;
 }
 
 const BUILDERS = {
@@ -122,6 +167,19 @@ function addLights(g,frontZ){
   for(const x of [-0.6,0.6]){ const t=new THREE.Mesh(tg,tm); t.position.set(x,0.68,-(frontZ-0.25)); g.add(t); }
   // brake light refs for physics flash
   g.userData.brakeMats=[tm];
+  g.userData.setBrake = on => { for(const m of g.userData.brakeMats) m.emissiveIntensity = on ? 2.4 : 0.7; };
+}
+
+// cheap blob shadow so cars read well on mobile without shadow maps
+const SHADOW_DIMS = { sport:[2.0,4.4], super:[2.2,4.6], muscle:[2.05,4.8], truck:[2.1,5.2], suv:[2.1,4.6], track:[2.15,4.5] };
+function addBlobShadow(g, body){
+  const d = SHADOW_DIMS[body] || [2.0,4.4];
+  const m = new THREE.Mesh(
+    new THREE.PlaneGeometry(d[0], d[1]),
+    new THREE.MeshBasicMaterial({ color:0x000000, transparent:true, opacity:0.32, depthWrite:false })
+  );
+  m.rotation.x = -Math.PI/2; m.position.y = 0.02; m.renderOrder = 1;
+  g.add(m);
 }
 
 // Apply upgrade-affected stats; returns effective stats
@@ -142,6 +200,8 @@ export function buildCar(def){
   const g = BUILDERS[def.body](def);
   g.userData.defId = def.id;
   g.userData.bodyColor = def.color;
+  g.userData.wheelStyle = 0;
+  addBlobShadow(g, def.body);
   return g;
 }
 
