@@ -37,13 +37,15 @@ export class CarPhysics {
 
     // longitudinal accel
     const nitroMul = this.nitroActive ? s.nitroPower : 1;
+    const hb = !!input.handbrake;
     let a = 0;
-    if(input.throttle>0) a = input.throttle * s.accel * nitroMul * (1 - Math.max(0,fSpeed)/(s.topSpeed*nitroMul)*0.85);
+    const driveMul = hb ? 0.25 : 1; // handbrake cuts drive
+    if(input.throttle>0) a = input.throttle * s.accel * nitroMul * driveMul * (1 - Math.max(0,fSpeed)/(s.topSpeed*nitroMul)*0.72);
     else if(input.throttle<0){
       a = fSpeed > 1 ? input.throttle * s.accel*1.6 : input.throttle * s.accel*0.5; // brake vs reverse
     }
-    // drag + rolling resistance
-    a -= fSpeed * 0.028 + Math.sign(fSpeed)*0.6;
+    // drag + rolling resistance (extra scrub with handbrake)
+    a -= fSpeed * (0.028 + (hb?0.06:0)) + Math.sign(fSpeed)*0.6;
     fSpeed += a*dt;
     const maxF = s.topSpeed*nitroMul, maxR = -s.topSpeed*0.35;
     fSpeed = Math.max(maxR, Math.min(maxF, fSpeed));
@@ -60,11 +62,12 @@ export class CarPhysics {
     const nFSpeed = this.vel.x*nFwdX + this.vel.z*nFwdZ;
     let latX = this.vel.x - nFwdX*nFSpeed, latZ = this.vel.z - nFwdZ*nFSpeed;
     this.drifting = !!(input.handbrake && spdAbs>6);
-    const latGrip = this.drifting ? 0.92 : Math.min(0.995, 0.90 + s.grip*0.06);
+    // lateral retention per frame: normal grips hard, handbrake lets the tail hang out
+    const latGrip = this.drifting ? 0.983 : Math.min(0.995, 0.90 + s.grip*0.06);
     const decay = Math.pow(latGrip, dt*60);
     latX*=decay; latZ*=decay;
-    // blend forward speed toward computed fSpeed (keeps it arcade-tight)
-    const blendF = nFSpeed + (fSpeed - nFSpeed)*Math.min(1,dt*8);
+    // forward speed tracks the computed value tightly (blend~=1 at 60fps keeps it responsive)
+    const blendF = nFSpeed + (fSpeed - nFSpeed)*Math.min(1,dt*60);
     this.vel.x = nFwdX*blendF + latX;
     this.vel.z = nFwdZ*blendF + latZ;
 
