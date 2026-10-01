@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0a0e1a">
+<title>CITY DRIVER — Open World 3D</title>
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="game-container"></div>
+
+<!-- HUD -->
+<div id="hud" class="hidden">
+  <div id="speedo"><span id="speed-val">0</span><small>MPH</small></div>
+  <div id="cash-hud">$<span id="cash-val">0</span></div>
+  <div id="gear-hud">N</div>
+  <div id="nitro-bar"><div id="nitro-fill"></div></div>
+  <div id="menu-btn">☰</div>
+</div>
+
+<!-- Touch controls -->
+<div id="touch-controls" class="hidden">
+  <div id="steer-zone">
+    <button id="btn-left" class="tbtn steer">◀</button>
+    <button id="btn-right" class="tbtn steer">▶</button>
+  </div>
+  <div id="pedal-zone">
+    <button id="btn-nitro" class="tbtn small">N₂O</button>
+    <button id="btn-brake" class="tbtn pedal">▼</button>
+    <button id="btn-gas" class="tbtn pedal">▲</button>
+    <button id="btn-handbrake" class="tbtn small">HB</button>
+  </div>
+  <button id="btn-shift" class="tbtn hidden">SHIFT ▲</button>
+</div>
+
+<!-- Main menu -->
+<div id="main-menu" class="overlay">
+  <h1 class="title">CITY<span>DRIVER</span></h1>
+  <p class="subtitle">OPEN WORLD 3D</p>
+  <div id="mp-status" class="mp-status">● connecting…</div>
+  <div class="menu-buttons">
+    <button id="m-freeroam" class="mbtn primary">🚗 FREE ROAM</button>
+    <button id="m-drag" class="mbtn">🏁 DRAG RACE</button>
+    <button id="m-garage" class="mbtn">🔧 GARAGE</button>
+  </div>
+  <div class="menu-car-preview"><span id="menu-car-name">—</span></div>
+  <p class="hint">Desktop: WASD / arrows · Space = handbrake · Shift = nitro</p>
+</div>
+
+<!-- Pause / mode menu -->
+<div id="pause-menu" class="overlay hidden">
+  <h2>PAUSED</h2>
+  <div class="menu-buttons">
+    <button id="p-resume" class="mbtn primary">▶ RESUME</button>
+    <button id="p-drag" class="mbtn">🏁 DRAG RACE</button>
+    <button id="p-garage" class="mbtn">🔧 GARAGE</button>
+    <button id="p-freeroam" class="mbtn">🚗 FREE ROAM</button>
+    <button id="p-quit" class="mbtn">🏠 MAIN MENU</button>
+  </div>
+</div>
+
+<!-- Garage -->
+<div id="garage" class="overlay hidden">
+  <h2>🔧 GARAGE</h2>
+  <div class="garage-cash">$<span id="garage-cash">0</span></div>
+  <div class="garage-tabs">
+    <button class="gtab active" data-tab="cars">CARS</button>
+    <button class="gtab" data-tab="upgrades">UPGRADES</button>
+    <button class="gtab" data-tab="style">STYLE</button>
+  </div>
+  <div id="garage-cars" class="garage-panel"></div>
+  <div id="garage-upgrades" class="garage-panel hidden"></div>
+  <div id="garage-style" class="garage-panel hidden"></div>
+  <button id="garage-close" class="mbtn primary">DONE</button>
+</div>
+
+<!-- Drag race -->
+<div id="drag-ui" class="hidden">
+  <div id="tree">
+    <div class="bulb stage" id="bulb-s1"></div><div class="bulb stage" id="bulb-s2"></div>
+    <div class="bulb amber" id="bulb-a1"></div>
+    <div class="bulb amber" id="bulb-a2"></div>
+    <div class="bulb amber" id="bulb-a3"></div>
+    <div class="bulb green" id="bulb-g"></div>
+    <div class="bulb red" id="bulb-r"></div>
+  </div>
+  <div id="drag-msg">STAGE!</div>
+  <div id="rpm-wrap"><div id="rpm-bar"></div><div id="rpm-shiftzone"></div></div>
+  <div id="drag-result" class="hidden"></div>
+  <button id="drag-exit">✕</button>
+</div>
+
+<div id="toast" class="hidden"></div>
+<div id="loading"><div class="spinner"></div><p>LOADING CITY…</p></div>
+
+<script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
