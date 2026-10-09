@@ -2,19 +2,118 @@
 // Plain JS module. No external assets. Owns the christmas-tree sequence,
 // 5-gear manual shifting, AI opponent, finish/payout, and drag camera.
 
-const QUARTER_M = 402;                 // quarter mile in meters
-const GEAR_TOP_FRAC = [0.30, 0.47, 0.64, 0.81, 1.0]; // gearTop = frac * topSpeed
-const GEAR_MULT     = [1.90, 1.45, 1.15, 0.95, 0.80]; // per-gear accel multiplier
-const SHIFT_LO = 0.80, SHIFT_HI = 0.97;               // perfect-shift rpm window
-const LIMITER_T = 0.8;                 // seconds at redline before limiter cut
-const RACE_TIMEOUT = 45;               // seconds after green before auto-decide
-const MPH = 2.2;                       // m/s -> displayed MPH (matches physics.js)
+export const QUARTER_M = 402;                 // quarter mile in meters
+export const GEAR_TOP_FRAC = [0.30, 0.47, 0.64, 0.81, 1.0]; // gearTop = frac * topSpeed
+export const GEAR_MULT     = [1.90, 1.45, 1.15, 0.95, 0.80]; // per-gear accel multiplier
+export const SHIFT_LO = 0.80, SHIFT_HI = 0.97;               // perfect-shift rpm window
+export const LIMITER_T = 0.8;                 // seconds at redline before limiter cut
+export const RACE_TIMEOUT = 45;               // seconds after green before auto-decide
+export const MPH = 2.2;                       // m/s -> displayed MPH (matches physics.js)
 
 const AI_COLORS = [0xffd166, 0x06d6a0, 0x9b5de5, 0xf15bb5, 0x00bbf9, 0xfee440, 0xef476f];
 const $ = id => document.getElementById(id);
 
 function rand(a, b){ return a + Math.random() * (b - a); }
 function pick(arr){ return arr[(Math.random() * arr.length) | 0]; }
+
+// ---- pure, testable race math (no DOM, no audio) --------------------------
+
+// AI target ET from its stats, scaled by random driver skill 0.85–1.15
+export function aiTargetET(aiStats){
+  const base = 402 / (0.42 * aiStats.topSpeed + 0.35 * aiStats.accel);
+  return Math.min(17, Math.max(8.5, base)) * rand(0.85, 1.15);
+}
+
+export function _newPlayerSim(stats){
+  return {
+    dist: 0, speed: 0, lateral: 2,
+    gear: 0,            // index into GEAR_TOP_FRAC (gears 1..5)
+    rpm: 0.15,
+    limiterT: 0,
+    bogMul: 1,          // decays back to 1 after a bad shift
+    reacted: false, reaction: null,
+    et: null, trap: 0,
+    stats,
+  };
+}
+
+export function _playerAccel(sim, throttle, dt){
+  const top = sim.stats.topSpeed;
+  const gearTop = GEAR_TOP_FRAC[sim.gear] * top;
+  const grip = 1 - Math.min(1, sim.speed / (gearTop * 1.02));
+  let a = throttle * sim.stats.accel * GEAR_MULT[sim.gear] * Math.max(0, grip);
+  a *= sim.bogMul;
+  a -= sim.speed * 0.028 + Math.sign(sim.speed) * 0.6; // drag + rolling resistance
+  sim.speed = Math.max(0, sim.speed + a * dt);
+  sim.dist += sim.speed * dt;
+  sim.rpm = Math.min(1.06, sim.speed / gearTop);
+  sim.bogMul += (1 - sim.bogMul) * Math.min(1, dt * 2.5);
+}
+
+// rpm -> 'perfect' | 'early' | 'late'
+export function shiftOutcome(rpm){
+  if (rpm >= SHIFT_LO && rpm <= SHIFT_HI) return 'perfect';
+  return rpm < SHIFT_LO ? 'early' : 'late';
+}
+
+// Applies a gear shift to the sim. Returns the outcome, or null at top gear.
+export function applyShift(sim){
+  if (sim.gear >= 4) return null; // already top gear
+  const outcome = shiftOutcome(sim.rpm);
+  sim.gear++;
+  if (outcome === 'perfect'){
+    sim.speed *= 1.015;                       // perfect shift: small boost
+  } else {
+    sim.speed *= 0.93;                        // early/late: bog
+    sim.bogMul = 0.75;
+  }
+  sim.limiterT = 0;
+  return outcome;
+}
+
+export function _newAiSim(stats){
+  const et = aiTargetET(stats);
+  const k = 1.1; // accel curve rate
+  const denom = et - (1 - Math.exp(-k * et)) / k;
+  return {
+    dist: 0, speed: 0, lateral: -2,
+    et, k, top: 402 / denom,
+    reactDelay: rand(0.15, 0.5),
+    launched: false, launchT: 0,
+    finishET: null, trap: 0,
+    stats,
+  };
+}
+
+export function _aiUpdate(sim, greenT, dt){
+  if (!sim.launched) return;
+  const t = greenT - sim.launchT;
+  if (t < 0) return;
+  sim.speed = sim.top * (1 - Math.exp(-sim.k * t));
+  sim.dist += sim.speed * dt;
+}
+
+// Winner decision. falseStart always loses; otherwise first across the line
+// wins; on a double DNF the car further along the strip wins.
+export function decideWinner({ falseStart, pET, aET, pDist, aDist }){
+  if (falseStart) return false;
+  if (pET != null && aET != null) return pET <= aET;
+  if (pET != null) return true;
+  if (aET != null) return false;
+  return pDist >= aDist;
+}
+
+// Cash payout: win = 400 base + 150 per tenth of margin (min 400); lose = 100.
+export function payoutForRace(won, pET, aET){
+  if (!won) return 100;
+  const diff = Math.max(0, (aET == null ? pET : aET) - (pET == null ? aET : pET));
+  return Math.max(400, 400 + 150 * Math.round(diff * 10));
+}
+
+export function resultTitle(won, falseStart){
+  if (won) return '🏆 WIN!';
+  return falseStart ? '🚫 DISQUALIFIED' : '😞 LOSE';
+}
 
 export function createDragMode(deps){
   const ui = $('drag-ui'), msgEl = $('drag-msg'), resultEl = $('drag-result');
@@ -54,11 +153,7 @@ export function createDragMode(deps){
     return (p && p.stats) ? p.stats : deps.effectiveStats(p.def, p.upgrades);
   }
 
-  // AI target ET from its stats, scaled by random driver skill 0.85–1.15
-  function aiTargetET(aiStats){
-    const base = 402 / (0.42 * aiStats.topSpeed + 0.35 * aiStats.accel);
-    return Math.min(17, Math.max(8.5, base)) * rand(0.85, 1.15);
-  }
+  // AI target ET is pure and tested at module level (aiTargetET).
 
   function placeOnStrip(group, lateral){
     const st = deps.city.dragStrip;
@@ -85,70 +180,28 @@ export function createDragMode(deps){
   }
 
   // ---- player launch sim -------------------------------------------------
-  function newPlayerSim(stats){
-    return {
-      dist: 0, speed: 0, lateral: 2,
-      gear: 0,            // index into GEAR_TOP_FRAC (gears 1..5)
-      rpm: 0.15,
-      limiterT: 0,
-      bogMul: 1,          // decays back to 1 after a bad shift
-      reacted: false, reaction: null,
-      et: null, trap: 0,
-      stats,
-    };
-  }
-
-  function playerAccel(sim, throttle, dt){
-    const top = sim.stats.topSpeed;
-    const gearTop = GEAR_TOP_FRAC[sim.gear] * top;
-    const grip = 1 - Math.min(1, sim.speed / (gearTop * 1.02));
-    let a = throttle * sim.stats.accel * GEAR_MULT[sim.gear] * Math.max(0, grip);
-    a *= sim.bogMul;
-    a -= sim.speed * 0.028 + Math.sign(sim.speed) * 0.6; // drag + rolling resistance
-    sim.speed = Math.max(0, sim.speed + a * dt);
-    sim.dist += sim.speed * dt;
-    sim.rpm = Math.min(1.06, sim.speed / gearTop);
-    sim.bogMul += (1 - sim.bogMul) * Math.min(1, dt * 2.5);
-  }
+  // (pure sim steps live at module top level so they can be unit-tested;
+  // the closure versions below just add UI feedback around them)
+  function newPlayerSim(stats){ return _newPlayerSim(stats); }
+  function playerAccel(sim, throttle, dt){ _playerAccel(sim, throttle, dt); }
 
   function doShift(sim){
-    if (sim.gear >= 4) return; // already top gear
-    const rpm = sim.rpm;
-    sim.gear++;
-    if (rpm >= SHIFT_LO && rpm <= SHIFT_HI){
-      sim.speed *= 1.015;                       // perfect shift: small boost
+    const outcome = applyShift(sim);
+    if (!outcome) return; // already top gear
+    if (outcome === 'perfect'){
       setMsg('PERFECT SHIFT!', 1.0);
       beep(1200, 0.08);
     } else {
-      sim.speed *= 0.93;                        // early/late: bog
-      sim.bogMul = 0.75;
-      setMsg(rpm < SHIFT_LO ? 'TOO EARLY — BOGGED' : 'TOO LATE — BOGGED', 1.0);
+      setMsg(outcome === 'early' ? 'TOO EARLY — BOGGED' : 'TOO LATE — BOGGED', 1.0);
       beep(220, 0.15);
     }
-    sim.limiterT = 0;
   }
 
   // ---- AI sim (same shape, scripted shifts) -------------------------------
-  function newAiSim(stats){
-    const et = aiTargetET(stats);
-    const k = 1.1; // accel curve rate
-    const denom = et - (1 - Math.exp(-k * et)) / k;
-    return {
-      dist: 0, speed: 0, lateral: -2,
-      et, k, top: 402 / denom,
-      reactDelay: rand(0.15, 0.5),
-      launched: false, launchT: 0,
-      finishET: null, trap: 0,
-      stats,
-    };
-  }
+  function newAiSim(stats){ return _newAiSim(stats); }
 
   function aiUpdate(sim, dt){
-    if (!sim.launched) return;
-    const t = S.greenT - sim.launchT;
-    if (t < 0) return;
-    sim.speed = sim.top * (1 - Math.exp(-sim.k * t));
-    sim.dist += sim.speed * dt;
+    _aiUpdate(sim, S.greenT, dt);
   }
 
   // ---- race flow ----------------------------------------------------------
@@ -183,25 +236,14 @@ export function createDragMode(deps){
     S.phase = 'done'; S.finished = true;
     const p = S.player, a = S.ai;
     // who won: false start always loses; otherwise first across the line;
-    // on timeout with no finisher, whoever is further wins
-    let won;
-    if (note && note.indexOf('FALSE START') === 0) won = false;
-    else if (p.et != null && a.finishET != null) won = p.et <= a.finishET;
-    else if (p.et != null) won = true;
-    else if (a.finishET != null) won = false;
-    else won = p.dist >= a.dist;
+    // on timeout with no finisher, whoever is further wins (see decideWinner)
+    const falseStart = !!(note && note.indexOf('FALSE START') === 0);
+    const won = decideWinner({ falseStart, pET: p.et, aET: a.finishET, pDist: p.dist, aDist: a.dist });
     const pET = p.et, aET = a.finishET;
     const reaction = p.reaction != null ? p.reaction.toFixed(3) + 's' : '—';
     const trap = (p.trap * MPH).toFixed(1);
-    let cash, title;
-    if (won){
-      const diff = Math.max(0, (aET == null ? pET : aET) - (pET == null ? aET : pET));
-      cash = Math.max(400, 400 + 150 * Math.round(diff * 10)); // 400 + 150 per tenth
-      title = '🏆 WIN!';
-    } else {
-      cash = 100; // consolation
-      title = (note && note.indexOf('FALSE START') === 0) ? '🚫 DISQUALIFIED' : '😞 LOSE';
-    }
+    const cash = payoutForRace(won, pET, aET);
+    const title = resultTitle(won, falseStart);
     deps.addCash(cash);
     resultEl.innerHTML =
       '<h2>' + title + '</h2>' +

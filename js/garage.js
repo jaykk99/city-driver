@@ -25,16 +25,19 @@ const blankUpgrades = () => ({engine:0,turbo:0,tires:0,suspension:0,nitro:0});
 
 function defaultSave(){
   return {
-    cash:5000, currentCar:'falcon', owned:['falcon'],
-    upgrades:{ falcon:blankUpgrades() },
-    paint:{ falcon:0xd7263d },
-    wheels:{ falcon:0 },
+    cash:5000, currentCar:'sport', owned:['sport'],
+    upgrades:{ sport:blankUpgrades() },
+    paint:{ sport:0xd7263d },
+    wheels:{ sport:0 },
   };
 }
 
 function normalize(s){
   const out = Object.assign(defaultSave(), s||{});
-  if(!Array.isArray(out.owned) || !out.owned.length) out.owned=['falcon'];
+  const validIds = new Set(CAR_DEFS.map(d=>d.id));
+  if(!Array.isArray(out.owned) || !out.owned.length) out.owned=['sport'];
+  out.owned = out.owned.filter(id=>validIds.has(id)); // drop stale/unknown ids (e.g. legacy 'falcon')
+  if(!out.owned.length) out.owned=['sport'];
   if(!out.owned.includes(out.currentCar)) out.currentCar=out.owned[0];
   out.upgrades = Object.assign({}, out.upgrades);
   out.paint = Object.assign({}, out.paint);
