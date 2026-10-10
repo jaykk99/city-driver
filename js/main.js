@@ -304,12 +304,17 @@ function setMp(cls, txt){
 async function connectMP(){
   if(mp || mpTried) return;
   mpTried=true;
+  // Multiplayer is only attempted when a relay URL is configured.
+  // With MP_SERVER_URL == '' the menu's online indicator stays hidden —
+  // the game is fully solo and never advertises a dead feature.
   let mod=null, url='';
   try{ mod=await import('./multiplayer.js'); }
-  catch(e){ setMp('off','mp unavailable'); return; }
+  catch(e){ return; }
   try{ const cfg=await import('./config.js'); url=cfg.MP_SERVER_URL||''; }
   catch(e){ /* no config */ }
-  if(!url){ setMp('off','offline'); return; }
+  if(!url) return;
+  $('mp-status').classList.remove('hidden');
+  setMp('connecting','connecting…');
   try{
     mp=mod.createMultiplayer(buildCar, CAR_DEFS);
     mp.connect(scene);

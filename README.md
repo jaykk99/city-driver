@@ -2,7 +2,7 @@
 
 Open-world 3D driving game for mobile browsers. Built with Three.js — no app store, just open the URL and drive.
 
-**Play:** https://city-driver.vercel.app *(after Vercel import — see Deploy)*
+**Play:** https://jaykk99.github.io/city-driver/
 
 ## What's in the game
 
@@ -11,7 +11,7 @@ Open-world 3D driving game for mobile browsers. Built with Three.js — no app s
 - **Arcade physics** — acceleration, braking, speed-sensitive steering, handbrake drifts, nitro boost
 - **Garage** — upgrade engine, turbo, tires, suspension, nitro (5 levels each), paint shop (8 colors), 3 wheel styles. Upgrades change real stats. Progress saved in localStorage
 - **Drag racing** — quarter-mile strip, Christmas-tree lights, reaction-time launch, 5-gear shift-timing minigame, AI opponent, cash payouts
-- **Multiplayer** — see other players driving in the same city (Socket.io relay, optional)
+- **Multiplayer (not live yet)** — a Socket.io relay client is built in and will show other drivers in the same city, but no relay server is deployed yet, so the game runs fully solo. Deploy `server/` and set `MP_SERVER_URL` in `js/config.js` to turn it on
 - **Touch controls** — steer/gas/brake/nitro/handbrake buttons; keyboard on desktop (WASD, Space, Shift)
 
 ## Run locally
@@ -28,7 +28,11 @@ npm run build # → js/bundle.js (three.js + game, zero CDN requests)
 > `index.html` loads only `js/bundle.js` — the game makes **no CDN requests**,
 > so a slow/down CDN can never hang the loading screen.
 
-# multiplayer relay (optional)
+# multiplayer relay (optional — not deployed)
+
+> Status: the relay code in `server/` works locally, but no public relay is
+> deployed yet. Until one is, the game runs fully solo and the menu shows no
+> online indicator. Deploy steps below when ready.
 cd server && npm install && npm start
 # → set MP_SERVER_URL in js/config.js to the relay URL
 ```
