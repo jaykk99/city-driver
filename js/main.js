@@ -11,6 +11,7 @@ import { loadSave, saveSave, createGarage } from './garage.js';
 import { QualityManager, qualitySettings, QUALITY_LEVELS } from './quality.js';
 import { createSkyDome, applySkyPreset, PRESET_ORDER, SKY_PRESETS } from './sky.js';
 import { PuffPool, SkidMarks } from './particles.js';
+import { newStuntState, stuntUpdate } from './stunts.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, paintCar } = Cars;
 // added by the cars track; may not exist yet in this worktree — guard it
@@ -27,6 +28,8 @@ let state='boot';              // menu | freeroam | drag
 let paused=false, garageOpen=false, garageReturn='menu';
 let tele={speed:0,drifting:false,nitro:false,nitroFrac:1,steer:0};
 let mpTried=false;
+// --- stunt rewards (free-roam cash loop) ---
+let stunts=newStuntState();
 // --- AAA graphics state ---
 let postfx=null, qm=null, skyEnv=null, todIdx=0;
 let smoke=null, exhaust=null, skids=null, headlight=null, headlightTarget=null, headlightBase=0;
@@ -88,6 +91,7 @@ function snapCamera(){
 function placeAtSpawn(){
   const s=city.spawn;
   physics.pos.x=s.x; physics.pos.z=s.z; physics.heading=s.heading||0;
+  stunts=newStuntState();   // fresh stunt tracking per run
   snapCamera();
   syncCarTransform(0);
 }
@@ -257,7 +261,7 @@ function startFreeroam(){
   placeAtSpawn();
   syncCash();
   connectMP();
-  toast('Free roam — find the drag strip!');
+  toast('Free roam — drift to earn cash, find the drag strip!');
 }
 
 function startDrag(){
@@ -422,6 +426,9 @@ function frame(now){
 
   if(state==='freeroam' && !paused && !garageOpen){
     tele=physics.update(controls.input, dt, collide);
+    // stunt rewards: drifting pays cash, so free roam has its own economy
+    const award=stuntUpdate(stunts, tele.drifting, tele.speed, dt);
+    if(award>0){ addCash(award); toast('DRIFT +$'+award.toLocaleString()); }
     cityPos.x=physics.pos.x; cityPos.z=physics.pos.z;
     city.update(dt, cityPos);
     syncCarTransform(dt);
