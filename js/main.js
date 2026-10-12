@@ -25,6 +25,9 @@ import { createSkinEditor } from './skineditor.js';
 import { createInteriors, styleFor, STYLE_NAMES } from './interiors.js';
 import { createTutorial, TUTORIAL_REWARD } from './tutorial.js';
 import { createMultiplayer } from './multiplayer.js';
+import { createBlood } from './blood.js';
+import { createPeople } from './npcs.js';
+import { createTraffic } from './traffic.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin } = Cars;
 
@@ -42,6 +45,10 @@ let tele={speed:0,drifting:false,nitro:false,nitroFrac:1,steer:0};
 let interiors=null, inside=null, curColliders=null;
 let editor=null, editorOpen=false, editorReturn='menu', editorAngle=0.6;
 let tutorial=null, pickOpen=false;
+// --- world life: pedestrians, traffic, blood; player health ---
+let blood=null, people=null, traffic=null, trafficHits=null;
+let hp=100, dead=false, deadT=0, hurtFlash=0;
+const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true};
 // --- stunt rewards (free-roam cash loop) ---
 let stunts=newStuntState();
 // --- AAA graphics state ---
@@ -184,7 +191,18 @@ function updateEffects(dt){
 }
 
 // ---------------- collision: circle (car) vs AABB (city colliders) ----------------
-function collide(x, z){ return collideR(x, z, 1.15); }
+function collide(x, z){
+  const r=collideR(x, z, 1.15);
+  if(traffic && !inside){
+    const hit=traffic.collide(r, 1.15);
+    if(hit && physics){
+      const sp=Math.hypot(physics.vel.x, physics.vel.z);
+      physics.vel.x*=0.55; physics.vel.z*=0.55;
+      if(sp>8 && audio) audio.beep(90, 0.08);
+    }
+  }
+  return r;
+}
 function collideR(x, z, R){
   let cx=x, cz=z, hitX=false, hitZ=false;
   const cols=curColliders||city.colliders;
@@ -219,6 +237,7 @@ function collideR(x, z, R){
 function footCollide(x, z, r){
   const res=collideR(x, z, r);
   if(inside) return res;
+  if(traffic) traffic.collide(res, r);
   const h=physics.heading, fx=-Math.sin(h), fz=-Math.cos(h);
   for(const o of [-1.25, 0, 1.25]){
     const cx=physics.pos.x+fx*o, cz=physics.pos.z+fz*o, rr=1.0+r;
@@ -310,6 +329,7 @@ function updateFoot(dt){
   if(edge && !save.equipped && save.weapons.length){ cycleWeapon(save); syncPersonGear(); }
   const res=weapons.update(dt, weaponCtx, controls.input.fire, edge);
   if(res.fired){
+    if(people && !inside) people.scare(foot.pos.x, foot.pos.z, 45);
     kickRecoil(person); aimHold=0.9; ammoDirty++;
     $('weapon-ammo').textContent=String(save.ammo[save.equipped]|0);
   }
@@ -428,6 +448,40 @@ function closeStore(){
   storeOpen=false;
   storeUI.close();
   syncPersonGear(); syncCash();
+}
+
+// ---------------- health / wasted ----------------
+function syncHP(){
+  const f=$('hp-fill'); if(!f) return;
+  f.style.width=Math.max(0,hp)+'%';
+  f.style.background = hp>50 ? '#4ade80' : hp>25 ? '#fbbf24' : '#ef4444';
+}
+function hurtPlayer(dmg){
+  if(dead || state!=='freeroam') return;
+  hp-=onFoot ? dmg : dmg*0.5;           // the car soaks up half
+  hurtFlash=0.35;
+  syncHP();
+  if(audio) audio.beep(160, 0.05);
+  if(hp<=0) die();
+}
+function die(){
+  dead=true; deadT=0; hp=0; syncHP();
+  setAction(null,null,'');
+  $('wasted').classList.remove('hidden');
+  if(onFoot && person){ person.rotation.x=-Math.PI/2+0.05; person.position.y=0.12; }
+  if(blood){ const px=onFoot?foot.pos.x:physics.pos.x, pz=onFoot?foot.pos.z:physics.pos.z; blood.pool(px, pz, 2.6); }
+  if(typeof onPlayerDied==='function') onPlayerDied();
+}
+function respawn(){
+  dead=false; hp=100; syncHP();
+  $('wasted').classList.add('hidden');
+  if(person){ person.rotation.x=0; person.position.y=0; }
+  const fee=Math.min(500, Math.round(save.cash*0.05));
+  if(fee>0){ save.cash-=fee; saveSave(save); syncCash(); }
+  leaveFootMode();
+  if(typeof respawnPoint==='function'){ const sp=respawnPoint(); physics.pos.x=sp.x; physics.pos.z=sp.z; physics.heading=sp.heading; physics.vel.x=physics.vel.z=0; snapCamera(); syncCarTransform(0); }
+  else placeAtSpawn();
+  toast(fee>0 ? '🏥 Hospital bill: -$'+fee : '🏥 Back on your feet', 2200);
 }
 
 // ---------------- chase camera ----------------
@@ -791,7 +845,7 @@ function frame(now){
   if(dt>0.1) dt=0.1;                       // clamp
   frameN++;
 
-  const playing = state==='freeroam' && !paused && !garageOpen && !storeOpen && !editorOpen && !pickOpen;
+  const playing = state==='freeroam' && !paused && !garageOpen && !storeOpen && !editorOpen && !pickOpen && !dead;
   if(editorOpen){
     updateEditorCamera(dt);
   }else if(playing && onFoot){
@@ -831,6 +885,23 @@ function frame(now){
     if(dragMode.active) dragMode.update(dt);
   }else{
     audio.engine(0,0); audio.skid(false);
+  }
+  // world life: pedestrians, gunmen, traffic, blood
+  if(state==='freeroam' && !paused && !garageOpen && !editorOpen){
+    npcPlayer.x=onFoot?foot.pos.x:physics.pos.x; npcPlayer.z=onFoot?foot.pos.z:physics.pos.z;
+    npcPlayer.alive=!dead; npcPlayer.hidden=!!inside; npcPlayer.inCar=!onFoot;
+    if(!storeOpen && !pickOpen){
+      people.update(dt, npcPlayer);
+      traffic.update(dt, npcPlayer, onFoot?null:npcPlayer);
+      traffic.hitList();
+      if(!onFoot && !dead){
+        const n=people.carHits(physics.pos.x, physics.pos.z, physics.heading, tele.speed);
+        if(n){ audio.beep(70,0.12); physics.vel.x*=0.85; physics.vel.z*=0.85; }
+      }
+    }
+    blood.update(dt);
+    if(hurtFlash>0){ hurtFlash-=dt; $('hurt').style.opacity=String(Math.max(0,hurtFlash/0.35)*0.75); }
+    if(dead){ deadT+=dt; if(deadT>3.2) respawn(); }
   }
   // tutorial mission
   if(playing && tutorial && tutorial.active){
@@ -922,6 +993,18 @@ async function boot(){
       onTargetHit:()=>{ addCash(TARGET_PAY); toast('TARGET +$'+TARGET_PAY, 900); },
       onShot:shots=>{ if(mp) mp.sendShots(shots); } });
     interiors=createInteriors(scene);
+    blood=createBlood(scene);
+    people=createPeople({ scene, blood, audio, count:14,
+      collide:(x,z,r)=>collideR(x,z,r),
+      shoot:(a,b,c,d)=>weapons.remoteShot(a,b,c,d),
+      onPlayerHit:(d)=>hurtPlayer(d) });
+    traffic=createTraffic({ scene, lines:city.roadLines, buildCar, applyCarSkin, CAR_DEFS });
+    trafficHits=traffic.hitList();
+    weaponCtx.hitables=[people.hitList, trafficHits];
+    weaponCtx.onPersonHit=(ref, dmg, dx, dz)=>{
+      if(ref.kind==='ped' || ref.kind==='enemy') people.damage(ref, dmg, dx, dz);
+      else if(typeof onRemotePlayerHit==='function' && ref.kind==='player') onRemotePlayerHit(ref, dmg, dx, dz);
+    };
     tutorial=createTutorial(scene, city);
     storeUI=createStoreUI({ save, persist:()=>saveSave(save), toast:m=>toast(m,1600),
       beep:(f,d)=>audio.beep(f,d), onChange:()=>{ syncCash(); syncPersonGear(); } });
@@ -932,7 +1015,7 @@ async function boot(){
       buildings:()=>city.buildings, inside:()=>inside&&{id:inside.b.id, style:inside.room.style}, enter:b=>enterBuilding(b), exit:()=>exitBuilding(),
       getOut:()=>getOut(), tut:()=>tutorial&&{active:tutorial.active, step:tutorial.step}, finishTut:()=>finishTutorial(), pick:id=>pickCar(id),
       mp:()=>mp&&{status:mp.status,count:mp.count}, state:()=>({state,onFoot,editorOpen,pickOpen,cash:save.cash}),
-      shot:(a,b,c,d)=>weapons.remoteShot(a,b,c,d),
+      shot:(a,b,c,d)=>weapons.remoteShot(a,b,c,d), people:()=>people, traffic:()=>traffic, hp:()=>hp, hurt:d=>hurtPlayer(d),
       cam:()=>({c:camera.position.toArray().map(v=>+v.toFixed(2)), p:person.position.toArray().map(v=>+v.toFixed(2)), pv:person.visible, f:[foot.pos.x,foot.pos.z,foot.heading]}) };
     rebuildCar();
     physics=new CarPhysics(carStats);

@@ -38,9 +38,9 @@ export function createWeapons(scene){
 
   // launch a bullet from (x0,z0) along (dx,dz) that stops after `dist` m.
   // hitT: target it will knock down on arrival; wall: sparks on arrival.
-  function fire(x0, z0, dx, dz, dist, hitT, wall, onHit){
+  function fire(x0, z0, dx, dz, dist, hitT, wall, onHit, onArrive){
     const b = bullets[bi]; bi = (bi + 1) % bullets.length;
-    Object.assign(b, { live:true, x0, z0, dx, dz, dist:Math.max(0.5, dist), travel:0, hitT, wall, onHit });
+    Object.assign(b, { live:true, x0, z0, dx, dz, dist:Math.max(0.5, dist), travel:0, hitT, wall, onHit, onArrive:onArrive || null });
     b.slug.visible = true; b.trail.visible = true;
     b.slug.rotation.y = Math.atan2(dx, dz);
     place(b);
@@ -59,6 +59,7 @@ export function createWeapons(scene){
   }
   function impact(b){
     const ex = b.x0 + b.dx * b.dist, ez = b.z0 + b.dz * b.dist;
+    if(b.onArrive){ const f = b.onArrive; b.onArrive = null; f(); return; }
     if(b.hitT){
       if(hitTarget(b.hitT) && b.onHit) b.onHit(b.hitT);
       for(let k = 0; k < 5; k++) sparks.emit(ex, SHOT_Y, ez, { vx:(Math.random() - 0.5) * 4, vy:Math.random() * 3, vz:(Math.random() - 0.5) * 4, life:0.25, size:0.25, grow:0.1 });
@@ -123,6 +124,15 @@ export function createWeapons(scene){
       if(Math.abs(diff) < best){ best = Math.abs(diff); aimH = h; }
     }
 
+    if(ctx.hitables) for(const lst of ctx.hitables) for(const t of lst){
+      if(t.ref && t.ref.kind === 'ped') continue;          // only snap to hostiles / players
+      const dx = t.x - ctx.pos.x, dz = t.z - ctx.pos.z;
+      const d = Math.hypot(dx, dz);
+      if(d > w.range || d < 0.5) continue;
+      const h = Math.atan2(-dx, -dz);
+      const diff = Math.abs(Math.atan2(Math.sin(h - ctx.heading), Math.cos(h - ctx.heading)));
+      if(diff < best){ best = diff; aimH = h; }
+    }
     const fx = -Math.sin(ctx.heading), fz = -Math.cos(ctx.heading);
     const rx = Math.cos(ctx.heading), rz = -Math.sin(ctx.heading);
     const mx = ctx.pos.x + fx * 0.95 + rx * 0.3, mz = ctx.pos.z + fz * 0.95 + rz * 0.3;
@@ -143,8 +153,17 @@ export function createWeapons(scene){
         const d = rayCircle(mx, mz, dx, dz, t.x, t.z, t.r, tBest);
         if(d < tBest){ tBest = d; hitT = t; }
       }
-      if(hitT) hits++;
-      fire(mx, mz, dx, dz, tBest, hitT, tBest < w.range, ctx.onTargetHit);
+      // people, enemies, other players: { x, z, r, ref }
+      let hitP = null;
+      if(ctx.hitables) for(const lst of ctx.hitables) for(const t of lst){
+        const d = rayCircle(mx, mz, dx, dz, t.x, t.z, t.r, tBest);
+        if(d < tBest){ tBest = d; hitP = t.ref; hitT = null; }
+      }
+      if(hitT || hitP) hits++;
+      if(hitP){
+        const dmg = w.dmg || 20, ddx = dx, ddz = dz;
+        fire(mx, mz, dx, dz, tBest, null, false, null, () => ctx.onPersonHit && ctx.onPersonHit(hitP, dmg, ddx, ddz));
+      }else fire(mx, mz, dx, dz, tBest, hitT, tBest < w.range, ctx.onTargetHit);
       if(p < 3) shots.push([mx, mz, mx + dx * tBest, mz + dz * tBest]);
     }
     if(ctx.onShot) ctx.onShot(shots);

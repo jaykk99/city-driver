@@ -32,6 +32,25 @@ function buildGun(id){
     g.add(box(0.07, 0.11, 0.42, m, 0.05).translateZ(-0.12));
     g.add(box(0.05, 0.2, 0.06, m, -0.08).translateZ(-0.06));
     g.add(box(0.04, 0.04, 0.12, m, 0.07).translateZ(-0.38));
+  }else if(id === 'glock' || id === 'deagle'){
+    const big = id === 'deagle';
+    g.add(box(big ? 0.07 : 0.06, big ? 0.09 : 0.075, big ? 0.3 : 0.22, m, 0.05).translateZ(-0.08));
+    g.add(box(0.05, 0.13, 0.065, id === 'deagle' ? accent : m, -0.03));
+  }else if(id === 'sniper'){
+    g.add(box(0.06, 0.1, 0.95, m, 0.05).translateZ(-0.3));
+    g.add(box(0.045, 0.045, 0.32, m, 0.14).translateZ(-0.12));          // scope
+    g.add(box(0.06, 0.13, 0.3, accent, 0.0).translateZ(0.3));
+  }else if(id === 'minigun'){
+    for(let i = 0; i < 6; i++){
+      const a = i / 6 * Math.PI * 2;
+      g.add(box(0.03, 0.03, 0.8, m, 0.05 + Math.sin(a) * 0.06).translateX(Math.cos(a) * 0.06).translateZ(-0.35));
+    }
+    g.add(box(0.2, 0.2, 0.3, m, 0.05).translateZ(0.05));
+  }else if(id === 'ak'){
+    g.add(box(0.07, 0.11, 0.72, m, 0.05).translateZ(-0.22));
+    const mag = box(0.06, 0.2, 0.08, m, -0.1).translateZ(-0.18); mag.rotation.x = 0.35; g.add(mag);   // curved mag
+    g.add(box(0.06, 0.12, 0.28, accent, 0.02).translateZ(0.26));
+    g.add(box(0.07, 0.06, 0.24, accent, 0.0).translateZ(-0.38));
   }else{ // rifle
     g.add(box(0.07, 0.11, 0.7, m, 0.05).translateZ(-0.22));
     g.add(box(0.05, 0.18, 0.07, m, -0.07).translateZ(-0.12));
@@ -120,11 +139,21 @@ export function buildCharacter(outfit){
   root.add(head);
   const hair = new THREE.Mesh(new THREE.SphereGeometry(0.155, 14, 8, 0, Math.PI*2, 0, Math.PI/2.2), hairM);
   hair.position.y = 1.76; root.add(hair);
+  // long hair: falls down the back past the shoulders (hidden unless outfit.hairLong)
+  const longHair = new THREE.Group();
+  const lh = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.62, 0.1).translate(0, -0.31, 0), hairM);
+  lh.position.set(0, 1.84, 0.13); lh.rotation.x = 0.12; lh.castShadow = true;
+  const sideL = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.36, 0.14).translate(0, -0.18, 0), hairM);
+  sideL.position.set(-0.15, 1.82, 0.02);
+  const sideR = sideL.clone(); sideR.position.x = 0.15;
+  longHair.add(lh, sideL, sideR);
+  longHair.visible = false;
+  root.add(longHair);
 
   const hatSlot = new THREE.Group(); hatSlot.position.y = 1.8; root.add(hatSlot);
   const gunSlot = new THREE.Group(); gunSlot.position.y = -0.69; arms[1].add(gunSlot);  // right hand
 
-  root.userData = { legs, arms, shirt, skin, pants, hair:hairM, hatSlot, gunSlot, gunId:null, hatId:null, hatColor:null, recoil:0 };
+  root.userData = { legs, arms, shirt, skin, pants, hair:hairM, longHair, hatSlot, gunSlot, gunId:null, hatId:null, hatColor:null, recoil:0 };
   setOutfit(root, outfit);
   return root;
 }
@@ -143,6 +172,7 @@ export function setOutfit(root, outfit){
     u.hatId = outfit.hat; u.hatColor = hc;
   }
   u.hair.visible = outfit.hat !== 'helmet';
+  u.longHair.visible = !!outfit.hairLong && outfit.hat !== 'helmet';
 }
 
 export function setHeldWeapon(root, id){

@@ -4,14 +4,24 @@
 //   outfit:{shirt:hex, hat:id}  hats:[ids]
 
 export const WEAPONS = [
-  { id:'pistol',  name:'P9 Pistol',     price:1200, rate:0.28, auto:false, pellets:1, spread:0.012, range:90,
+  { id:'pistol',  name:'P9 Pistol',     price:1200, rate:0.28, auto:false, pellets:1, spread:0.012, range:90,  dmg:22,
     ammoBox:30, ammoPrice:60,  start:30, desc:'Reliable sidearm. Semi-auto.' },
-  { id:'shotgun', name:'Breacher 12',   price:3200, rate:0.85, auto:false, pellets:7, spread:0.09,  range:40,
+  { id:'glock',   name:'Glock 19',      price:1800, rate:0.16, auto:false, pellets:1, spread:0.014, range:85,  dmg:20,
+    ammoBox:34, ammoPrice:70,  start:34, desc:'Fast-firing 9mm. Tap tap tap.' },
+  { id:'deagle',  name:'Desert Eagle',  price:4200, rate:0.55, auto:false, pellets:1, spread:0.01,  range:110, dmg:55,
+    ammoBox:14, ammoPrice:110, start:14, desc:'Hand cannon. Huge damage.' },
+  { id:'shotgun', name:'Breacher 12',   price:3200, rate:0.85, auto:false, pellets:7, spread:0.09,  range:40,  dmg:14,
     ammoBox:16, ammoPrice:90,  start:16, desc:'Pump action. Brutal up close.' },
-  { id:'smg',     name:'Viper SMG',     price:4500, rate:0.085,auto:true,  pellets:1, spread:0.04,  range:70,
+  { id:'smg',     name:'Viper SMG',     price:4500, rate:0.085,auto:true,  pellets:1, spread:0.04,  range:70,  dmg:12,
     ammoBox:90, ammoPrice:150, start:90, desc:'Full auto. Sprays fast.' },
-  { id:'rifle',   name:'Ranger AR',     price:9000, rate:0.12, auto:true,  pellets:1, spread:0.008, range:140,
+  { id:'ak',      name:'AK-47',         price:7500, rate:0.11, auto:true,  pellets:1, spread:0.022, range:120, dmg:26,
+    ammoBox:60, ammoPrice:180, start:60, desc:'Hard-hitting full auto.' },
+  { id:'rifle',   name:'Ranger AR',     price:9000, rate:0.12, auto:true,  pellets:1, spread:0.008, range:140, dmg:24,
     ammoBox:60, ammoPrice:200, start:60, desc:'Long range, dead accurate.' },
+  { id:'sniper',  name:'Longshot .50',  price:15000,rate:1.3,  auto:false, pellets:1, spread:0.001, range:260, dmg:120,
+    ammoBox:10, ammoPrice:250, start:10, desc:'One shot, one drop. Huge range.' },
+  { id:'minigun', name:'Shredder Minigun', price:40000, rate:0.04, auto:true, pellets:1, spread:0.05, range:100, dmg:14,
+    ammoBox:400, ammoPrice:600, start:400, desc:'Melts everything. Eats ammo.' },
 ];
 
 import { HATS as HAT_IDS, HAT_NAMES, normalizeOutfit } from './skins.js';
