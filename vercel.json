@@ -1,1 +1,1 @@
-{"$schema":"https://openapi.vercel.sh/vercel.json","cleanUrls":true}
+{"$schema":"https://openapi.vercel.sh/vercel.json","cleanUrls":true,"framework":null,"installCommand":"echo prebuilt","buildCommand":"echo prebuilt bundle (js/bundle.js is committed)","outputDirectory":"."}
