@@ -25,6 +25,7 @@
   <canvas id="minimap" width="132" height="132"></canvas>
   <div id="weapon-hud" class="hidden"><b id="weapon-name">UNARMED</b><span id="weapon-ammo"></span></div>
   <div id="online-hud" class="dim">🌐 …</div>
+  <div id="mission-btn" title="Missions">📱</div>
   <div id="health-hud"><span>❤</span><div class="hp-bar"><div id="hp-fill"></div></div></div>
 </div>
 
@@ -35,6 +36,14 @@
 </div>
 <div id="killfeed"></div>
 <div id="tdm-win" class="hidden"></div>
+
+<!-- Mission HUD -->
+<div id="mission-hud" class="hidden">
+  <div class="obj-top"><b id="mh-title">MISSION</b><span id="mh-time"></span></div>
+  <div class="obj-main"><span id="mh-arrow">▲</span><span id="mh-obj">…</span></div>
+  <div id="mh-dist"></div>
+</div>
+<div id="boss-hud" class="hidden"><b>👑 EMERALD</b><div class="boss-bar"><div id="boss-fill"></div></div></div>
 
 <!-- Tutorial objective -->
 <div id="objective" class="hidden">
@@ -147,6 +156,25 @@
     <div id="se-body" class="se-body"></div>
     <button id="se-done" class="mbtn primary">DONE</button>
   </div>
+</div>
+
+<!-- Mission phone -->
+<div id="mission-board" class="overlay hidden">
+  <div class="mb-card">
+    <div id="mb-num" class="mb-num">MISSION 1 / 500</div>
+    <h2 id="mb-title">…</h2>
+    <p id="mb-desc"></p>
+    <div class="mb-reward">💰 <span id="mb-reward"></span></div>
+    <div class="mb-prog"><div id="mb-progress"></div></div>
+    <div id="mb-left" class="mb-left"></div>
+    <div class="mb-btns"><button id="mb-start" class="mbtn primary">▶ START</button><button id="mb-close" class="mbtn">CLOSE</button></div>
+  </div>
+</div>
+<div id="victory" class="overlay hidden">
+  <h1 class="title">EMERALD<span>DEFEATED</span></h1>
+  <p class="pick-sub">You beat the final boss and took everything she had.</p>
+  <div class="garage-cash" id="victory-cash">+$5,000,000</div>
+  <button id="victory-ok" class="mbtn primary">KEEP PLAYING</button>
 </div>
 
 <!-- Pick a car (tutorial reward) -->

@@ -237,3 +237,28 @@ body.compact #health-hud{top:auto;left:auto;right:14px;bottom:calc(150px + env(s
 #killfeed div{background:rgba(10,14,30,.8);padding:4px 10px;border-radius:8px;font-size:12px;font-weight:700}
 #tdm-win{position:fixed;top:34%;left:0;right:0;text-align:center;z-index:44;font-size:48px;font-weight:900;letter-spacing:3px;text-shadow:0 4px 0 #000,0 0 30px rgba(0,0,0,.8);pointer-events:none}
 body.compact #killfeed{top:calc(150px + env(safe-area-inset-top))}
+
+/* ---------- missions ---------- */
+#mission-btn{position:absolute;left:14px;top:calc(204px + env(safe-area-inset-top));font-size:20px;pointer-events:auto;cursor:pointer;background:rgba(20,28,55,.7);width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,210,63,.45)}
+#health-hud{top:calc(256px + env(safe-area-inset-top))}
+#mission-hud{position:fixed;top:calc(10px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:36;background:rgba(10,14,30,.88);border:2px solid #ffd23f;border-radius:16px;padding:8px 14px;min-width:260px;max-width:min(440px,70vw);pointer-events:none}
+#mission-hud .obj-top b{color:#ffd23f}
+#mh-time{font-weight:900;font-size:14px;color:#e2e8f0}
+#mh-time.low{color:#ef4444}
+#mh-arrow{display:inline-block;font-size:20px;color:#ffd23f}
+#mh-dist{font-size:12px;color:#8fa3c8;margin-top:2px;min-height:14px}
+#boss-hud{position:fixed;bottom:calc(110px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);z-index:34;text-align:center;pointer-events:none;width:min(420px,60vw)}
+#boss-hud b{color:#0fd47a;letter-spacing:3px;text-shadow:0 2px 6px #000}
+.boss-bar{height:12px;border-radius:7px;background:rgba(0,0,0,.6);border:1px solid #0f9d58;overflow:hidden;margin-top:4px}
+#boss-fill{height:100%;width:100%;background:linear-gradient(90deg,#0f9d58,#4ade80)}
+.mb-card{width:min(520px,94%);background:#0f1530;border:2px solid #ffd23f;border-radius:20px;padding:18px 20px;text-align:left}
+.mb-num{font-size:12px;letter-spacing:3px;color:#ffd23f;font-weight:900}
+.mb-card h2{margin:6px 0}
+.mb-card p{color:#cbd5e1;font-size:14px;line-height:1.4}
+.mb-reward{margin:10px 0;font-weight:900;color:#4ade80;font-size:18px}
+.mb-prog{height:8px;border-radius:5px;background:#243055;overflow:hidden}
+#mb-progress{height:100%;background:linear-gradient(90deg,#0f9d58,#4ade80)}
+.mb-left{font-size:12px;color:#8fa3c8;margin-top:6px}
+.mb-btns{display:flex;gap:10px;margin-top:14px}
+.mb-btns .mbtn{flex:1}
+body.compact #mission-btn{top:calc(204px + env(safe-area-inset-top))}

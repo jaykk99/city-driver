@@ -28,6 +28,7 @@ import { createMultiplayer } from './multiplayer.js';
 import { createBlood } from './blood.js';
 import { createPeople } from './npcs.js';
 import { createTraffic } from './traffic.js';
+import { createMissionRunner, generateMission, TOTAL_MISSIONS, EMERALD_FORTUNE } from './missions.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin } = Cars;
 
@@ -49,6 +50,7 @@ let tutorial=null, pickOpen=false;
 let blood=null, people=null, traffic=null, trafficHits=null;
 let hp=100, dead=false, deadT=0, hurtFlash=0;
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true};
+let missions=null, boardOpen=false;
 // --- stunt rewards (free-roam cash loop) ---
 let stunts=newStuntState();
 // --- AAA graphics state ---
@@ -533,6 +535,7 @@ function onRemotePlayerHit(ref, dmg, dx, dz){
   blood.hit(ref.x, 1.25, ref.z, dx, dz, 1);
 }
 function onPlayerDied(){
+  if(missions && missions.active) missionFailed('you got wasted');
   if(mode!=='tdm') return;
   tdm.deaths++;
   const a=tdm.lastAttacker;
@@ -553,6 +556,74 @@ function updateRemoteHits(){
     const ref={ kind:'player', id:r.id, name:r.name, team:r.team, x:r.x, z:r.z };
     remoteHits.push({ x:r.x, z:r.z, r:r.mode==='car'?1.5:0.5, ref });
   });
+}
+
+// ---------------- missions (500, Emerald is #500) ----------------
+function nextMissionN(){ return Math.min(TOTAL_MISSIONS, (save.missionsDone|0)+1); }
+function openBoard(){
+  if(mode==='tdm'){ toast('Missions are in Single Player / Online Free Roam'); return; }
+  boardOpen=true; setAction(null,null,'');
+  const done=save.missionsDone|0;
+  const active=missions.active;
+  const m=active ? missions.mission : generateMission(nextMissionN());
+  $('mb-num').textContent = done>=TOTAL_MISSIONS ? 'ALL 500 COMPLETE' : 'MISSION '+m.n+' / '+TOTAL_MISSIONS;
+  $('mb-title').textContent = m.type==='boss' ? '👑 FINAL BOSS: EMERALD' : m.title;
+  $('mb-desc').textContent = done>=TOTAL_MISSIONS ? 'You beat Emerald and took her millions. Replay any time — missions keep paying.' : m.desc;
+  $('mb-reward').textContent = '$'+m.reward.toLocaleString()+(m.timeLimit?' · ⏱ '+m.timeLimit+'s':'');
+  $('mb-progress').style.width=(done/TOTAL_MISSIONS*100).toFixed(1)+'%';
+  $('mb-left').textContent = done>=TOTAL_MISSIONS ? 'Emerald defeated 💀' : (TOTAL_MISSIONS-1-Math.min(done,TOTAL_MISSIONS-1))+' missions until Emerald';
+  $('mb-start').textContent = active ? '✖ ABANDON MISSION' : '▶ START';
+  $('mission-board').classList.remove('hidden');
+}
+function closeBoard(){ boardOpen=false; $('mission-board').classList.add('hidden'); }
+function startMission(){
+  if(missions.active){ missions.stop(); $('mission-hud').classList.add('hidden'); $('boss-hud').classList.add('hidden'); closeBoard(); toast('Mission abandoned'); return; }
+  if(tutorial && tutorial.active){ tutorial.stop(); $('objective').classList.add('hidden'); }
+  const n = (save.missionsDone|0)>=TOTAL_MISSIONS ? 1+Math.floor(Math.random()*(TOTAL_MISSIONS-1)) : nextMissionN();
+  const m=missions.start(n);
+  closeBoard();
+  $('mission-hud').classList.remove('hidden');
+  $('mh-title').textContent='#'+m.n+' '+(m.type==='boss'?'EMERALD':m.title.toUpperCase());
+  audio.beep(700,0.08);
+  toast('📱 '+m.title+' — '+m.desc, 3500);
+}
+function missionPassed(){
+  const m=missions.mission;
+  missions.stop();
+  $('mission-hud').classList.add('hidden'); $('boss-hud').classList.add('hidden');
+  if(m.n>(save.missionsDone|0)) save.missionsDone=m.n;
+  addCash(m.reward);
+  saveSave(save);
+  audio.beep(880,0.1); setTimeout(()=>audio.beep(1320,0.15),130);
+  if(m.type==='boss'){
+    $('victory').classList.remove('hidden');
+    $('victory-cash').textContent='+$'+EMERALD_FORTUNE.toLocaleString();
+  }else toast('✅ MISSION PASSED  +$'+m.reward.toLocaleString(), 3000);
+}
+function missionFailed(why){
+  missions.stop();
+  $('mission-hud').classList.add('hidden'); $('boss-hud').classList.add('hidden');
+  audio.beep(200,0.2);
+  toast('❌ MISSION FAILED — '+why+'. Try again from 📱', 3200);
+}
+function updateMissionHud(){
+  const px=onFoot?foot.pos.x:physics.pos.x, pz=onFoot?foot.pos.z:physics.pos.z, h=onFoot?foot.heading:physics.heading;
+  $('mh-obj').textContent=missions.objective();
+  const tl=missions.timeLeft;
+  $('mh-time').textContent = tl!=null ? '⏱ '+Math.ceil(tl)+'s' : '';
+  $('mh-time').classList.toggle('low', tl!=null && tl<10);
+  const tg=missions.target({x:px,z:pz});
+  const arrow=$('mh-arrow');
+  if(tg && !inside){
+    const a=Math.atan2(-(tg.x-px), -(tg.z-pz));
+    const rel=Math.atan2(Math.sin(a-h), Math.cos(a-h));
+    arrow.style.transform='rotate('+(-rel).toFixed(3)+'rad)';
+    arrow.classList.remove('hidden');
+    $('mh-dist').textContent=Math.round(Math.hypot(tg.x-px, tg.z-pz))+' m';
+  }else{ arrow.classList.add('hidden'); $('mh-dist').textContent=''; }
+  const b=missions.boss;
+  if(b && b.state!=='dead'){ $('boss-hud').classList.remove('hidden'); $('boss-fill').style.width=Math.max(0,b.hp/b.maxHp*100)+'%'; }
+  else $('boss-hud').classList.add('hidden');
 }
 
 // ---------------- health / wasted ----------------
@@ -651,6 +722,8 @@ function showMenu(){
   $('drag-ui').classList.add('hidden');
   if(tutorial && tutorial.active) tutorial.stop();
   $('objective').classList.add('hidden');
+  if(missions && missions.active){ missions.stop(); }
+  $('mission-hud').classList.add('hidden'); $('boss-hud').classList.add('hidden'); closeBoard();
   $('m-tutorial').classList.toggle('hidden', !!save.tutorialDone);
   if(mp && mode!=='online'){ mode='online'; mp.connect(undefined); }
   weaponCtx.save=save; $('tdm-hud').classList.add('hidden'); $('tdm-win').classList.add('hidden'); tdm.over=0;
@@ -959,7 +1032,7 @@ function frame(now){
   if(dt>0.1) dt=0.1;                       // clamp
   frameN++;
 
-  const playing = state==='freeroam' && !paused && !garageOpen && !storeOpen && !editorOpen && !pickOpen && !dead;
+  const playing = state==='freeroam' && !paused && !garageOpen && !storeOpen && !editorOpen && !pickOpen && !dead && !boardOpen;
   if(editorOpen){
     updateEditorCamera(dt);
   }else if(playing && onFoot){
@@ -1017,6 +1090,13 @@ function frame(now){
     if(hurtFlash>0){ hurtFlash-=dt; $('hurt').style.opacity=String(Math.max(0,hurtFlash/0.35)*0.75); }
     if(dead){ deadT+=dt; if(deadT>3.2) respawn(); }
   }
+  // missions
+  if(playing && missions && missions.active){
+    const r=missions.update(dt, { pos:onFoot?foot.pos:physics.pos, cam:camera.position });
+    if(r==='pass') missionPassed();
+    else if(r==='fail') missionFailed('out of time');
+    if(missions.active && frameN%3===0) updateMissionHud();
+  }
   // tutorial mission
   if(playing && tutorial && tutorial.active){
     const r=tutorial.update(dt, { pos:onFoot?foot.pos:physics.pos, drifting:!onFoot&&tele.drifting,
@@ -1066,6 +1146,10 @@ function wireUI(){
     $('objective').classList.add('hidden');
     toast('Tutorial skipped — replay it from the main menu for $100K', 2600);
   };
+  $('mission-btn').onclick=()=>{ audio.beep(650,0.05); openBoard(); };
+  $('mb-start').onclick=()=>startMission();
+  $('mb-close').onclick=()=>{ audio.beep(500,0.05); closeBoard(); };
+  $('victory-ok').onclick=()=>{ $('victory').classList.add('hidden'); };
   $('pick-list').addEventListener('click', e=>{ const b=e.target.closest('button[data-id]'); if(b) pickCar(b.dataset.id); });
   // AAA: time-of-day + quality buttons
   if($('tod-btn')) $('tod-btn').onclick=()=>{ audio.beep(600,0.05); cycleTimeOfDay(); };
@@ -1122,6 +1206,7 @@ async function boot(){
       onPlayerHit:(d)=>hurtPlayer(d) });
     traffic=createTraffic({ scene, lines:city.roadLines, buildCar, applyCarSkin, CAR_DEFS });
     trafficHits=traffic.hitList();
+    missions=createMissionRunner({ scene, people, toast, beep:(f,d)=>audio.beep(f,d) });
     weaponCtx.hitables=[people.hitList, trafficHits, remoteHits];
     weaponCtx.onPersonHit=(ref, dmg, dx, dz)=>{
       if(ref.kind==='ped' || ref.kind==='enemy') people.damage(ref, dmg, dx, dz);
@@ -1137,7 +1222,7 @@ async function boot(){
       buildings:()=>city.buildings, inside:()=>inside&&{id:inside.b.id, style:inside.room.style}, enter:b=>enterBuilding(b), exit:()=>exitBuilding(),
       getOut:()=>getOut(), tut:()=>tutorial&&{active:tutorial.active, step:tutorial.step}, finishTut:()=>finishTutorial(), pick:id=>pickCar(id),
       mp:()=>mp&&{status:mp.status,count:mp.count}, state:()=>({state,onFoot,editorOpen,pickOpen,cash:save.cash}),
-      shot:(a,b,c,d)=>weapons.remoteShot(a,b,c,d), people:()=>people, traffic:()=>traffic, hp:()=>hp, hurt:d=>hurtPlayer(d),
+      shot:(a,b,c,d)=>weapons.remoteShot(a,b,c,d), missions:()=>missions, setDone:n=>{save.missionsDone=n;}, people:()=>people, traffic:()=>traffic, hp:()=>hp, hurt:d=>hurtPlayer(d),
       cam:()=>({c:camera.position.toArray().map(v=>+v.toFixed(2)), p:person.position.toArray().map(v=>+v.toFixed(2)), pv:person.visible, f:[foot.pos.x,foot.pos.z,foot.heading]}) };
     rebuildCar();
     physics=new CarPhysics(carStats);
