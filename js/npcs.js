@@ -185,6 +185,15 @@ export function createPeople(deps){
         continue;
       }
       if(far){ placePed(p, player.x, player.z); continue; }
+      if(p.state === 'escape'){
+        p.flee -= dt;
+        const r = deps.collide(p.x + p.ex * RUN * dt, p.z + p.ez * RUN * dt, 0.4);
+        p.x = r.x; p.z = r.z; p.phase += RUN * dt * 2.1;
+        p.person.position.set(p.x, 0, p.z);
+        animateCharacter(p.person, p.phase, RUN, false, dt);
+        if(p.flee <= 0) snapToLoop(p);
+        continue;
+      }
       let speed = WALK;
       if(p.state === 'flee'){ p.flee -= dt; speed = RUN; if(p.flee <= 0) p.state = 'walk'; }
       p.p += p.dir * speed * dt;
@@ -220,12 +229,34 @@ export function createPeople(deps){
     return n;
   }
 
+  // a driver dragged out of a stolen car: runs away, then goes back to walking
+  function eject(x, z, awayX, awayZ){
+    let ped = null, far = -1;
+    for(const p of peds){ const d = Math.hypot(p.x - awayX, p.z - awayZ); if(p.state !== 'dead' && d > far){ far = d; ped = p; } }
+    if(!ped) return;
+    const dx = x - awayX, dz = z - awayZ, d = Math.hypot(dx, dz) || 1;
+    Object.assign(ped, { state:'escape', x, z, ex:dx / d, ez:dz / d, flee:3.5, hp:40 });
+    ped.person.rotation.set(0, Math.atan2(-dx, -dz), 0);
+    ped.person.position.set(x, 0, z);
+  }
+  function snapToLoop(p){
+    const i = Math.max(0, Math.min(BLOCKS - 1, Math.round(p.x / PITCH + (BLOCKS - 1) / 2)));
+    const j = Math.max(0, Math.min(BLOCKS - 1, Math.round(p.z / PITCH + (BLOCKS - 1) / 2)));
+    p.cx = (i - (BLOCKS - 1) / 2) * PITCH; p.cz = (j - (BLOCKS - 1) / 2) * PITCH;
+    const lx = Math.max(-HALF, Math.min(HALF, p.x - p.cx)), lz = Math.max(-HALF, Math.min(HALF, p.z - p.cz));
+    // perimeter coordinate of the closest edge
+    const dN = Math.abs(lz + HALF), dE = Math.abs(lx - HALF), dS = Math.abs(lz - HALF), dW = Math.abs(lx + HALF);
+    const m = Math.min(dN, dE, dS, dW);
+    p.p = m === dN ? lx + HALF : m === dE ? HALF * 2 + lz + HALF : m === dS ? HALF * 4 + (HALF - lx) : HALF * 6 + (HALF - lz);
+    p.state = 'flee'; p.flee = 4;
+  }
+
   function setCount(n){
     maxPeds = n;
     while(peds.length > n){ const p = peds.pop(); deps.scene.remove(p.person); }
   }
   function setVisible(v){ for(const p of peds) p.person.visible = v; for(const e of enemies) e.person.visible = v; }
 
-  return { update, damage, scare, spawnEnemy, clearEnemies, carHits, setCount, setVisible,
+  return { update, damage, scare, spawnEnemy, clearEnemies, carHits, setCount, setVisible, eject,
     get hitList(){ return hitList; }, get enemies(){ return enemies; }, get peds(){ return peds; } };
 }

@@ -133,6 +133,7 @@ export function createWeapons(scene){
       const diff = Math.abs(Math.atan2(Math.sin(h - ctx.heading), Math.cos(h - ctx.heading)));
       if(diff < best){ best = diff; aimH = h; }
     }
+    if(ctx.lock){ aimH = Math.atan2(-(ctx.lock.x - ctx.pos.x), -(ctx.lock.z - ctx.pos.z)); }
     const fx = -Math.sin(ctx.heading), fz = -Math.cos(ctx.heading);
     const rx = Math.cos(ctx.heading), rz = -Math.sin(ctx.heading);
     const mx = ctx.pos.x + fx * 0.95 + rx * 0.3, mz = ctx.pos.z + fz * 0.95 + rz * 0.3;

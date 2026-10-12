@@ -5,11 +5,12 @@
 // joystick deltas can be mapped from screen space back into game space.
 export function createControls(opts = {}){
   const isRotated = opts.isRotated || (() => false);
-  const input = { throttle:0, steer:0, handbrake:false, nitro:false, moveX:0, moveY:0, run:false, fire:false };
-  const held = { left:false, right:false, gas:false, brake:false, nitro:false, handbrake:false, fire:false, run:false };
+  const input = { throttle:0, steer:0, handbrake:false, nitro:false, moveX:0, moveY:0, run:false, fire:false, aim:false };
+  const held = { left:false, right:false, gas:false, brake:false, nitro:false, handbrake:false, fire:false, run:false, aim:false };
+  let aimToggle = false;             // touch AIM button toggles; keyboard/mouse is hold
   const joy = { x:0, y:0, id:null };
   let mode = 'drive';          // drive | drag | foot
-  let shiftQueued = false, actionQueued = false, cycleQueued = false, fireEdge = false;
+  let shiftQueued = false, actionQueued = false, cycleQueued = false, fireEdge = false, gearUpQ = false, gearDownQ = false;
   let attached = false;
   const unbind = [];
 
@@ -27,6 +28,7 @@ export function createControls(opts = {}){
     input.moveY = joy.id !== null ? joy.y : ky;
     input.run = held.run || held.nitro || (joy.id !== null && Math.hypot(joy.x, joy.y) > 0.92);
     input.fire = held.fire;
+    input.aim = held.aim || aimToggle || held.fire;
   }
 
   // virtual joystick (foot mode). Knob travel radius in px.
@@ -157,6 +159,9 @@ export function createControls(opts = {}){
     if(k === 'e' || k === 'E' || k === 'Enter'){ if(!e.repeat) actionQueued = true; return; }
     if(k === 'q' || k === 'Q'){ if(!e.repeat) cycleQueued = true; return; }
     if(k === 'Shift' || k === 'f' || k === 'F'){ held.nitro = true; sync(); }
+    if(k === 'r' || k === 'R'){ held.aim = true; sync(); }
+    if(k === 'g' || k === 'G'){ if(!e.repeat) gearUpQ = true; return; }
+    if(k === 'b' || k === 'B'){ if(!e.repeat) gearDownQ = true; return; }
   }
   function onKeyUp(e){
     const k = e.key;
@@ -164,7 +169,11 @@ export function createControls(opts = {}){
     if(mapped){ held[mapped] = false; sync(); return; }
     if(k === ' '){ held.handbrake = false; held.fire = false; sync(); return; }
     if(k === 'Shift' || k === 'f' || k === 'F'){ held.nitro = false; sync(); }
+    if(k === 'r' || k === 'R'){ held.aim = false; sync(); }
   }
+  // right mouse button = aim (desktop)
+  function onMouseDown(e){ if(e.button === 2){ held.aim = true; sync(); } }
+  function onMouseUp(e){ if(e.button === 2){ held.aim = false; sync(); } }
 
   function setMode(m){
     mode = (m === 'drag' || m === 'foot') ? m : 'drive';
@@ -175,6 +184,7 @@ export function createControls(opts = {}){
     show('joystick', mode === 'foot');
     show('foot-zone', mode === 'foot');
     for(const k in held) held[k] = false;
+    aimToggle = false; { const b = $('btn-aim'); if(b) b.classList.remove('on'); }
     joy.id = null; joy.x = 0; joy.y = 0;
     const knob = $('joy-knob'); if(knob) knob.style.transform = 'translate(0px, 0px)';
     for(const b of document.querySelectorAll('#touch-controls .pressed')) b.classList.remove('pressed');
@@ -196,6 +206,12 @@ export function createControls(opts = {}){
     bindJoystick($('joystick'), $('joy-knob'));
     bindTap($('btn-action'), () => { actionQueued = true; });
     bindTap($('btn-weapon'), () => { cycleQueued = true; });
+    bindTap($('btn-aim'), () => { aimToggle = !aimToggle; const b = $('btn-aim'); if(b) b.classList.toggle('on', aimToggle); sync(); });
+    bindTap($('btn-gear-up'), () => { gearUpQ = true; });
+    bindTap($('btn-gear-down'), () => { gearDownQ = true; });
+    window.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mouseup', onMouseUp);
+    unbind.push(() => { window.removeEventListener('mousedown', onMouseDown); window.removeEventListener('mouseup', onMouseUp); });
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
     unbind.push(() => {
@@ -228,8 +244,10 @@ export function createControls(opts = {}){
     case 'action': v = actionQueued; actionQueued = false; return v;
     case 'cycle':  v = cycleQueued;  cycleQueued = false;  return v;
     case 'fire':   v = fireEdge;     fireEdge = false;     return v;
+    case 'gup':    v = gearUpQ;      gearUpQ = false;      return v;
+    case 'gdown':  v = gearDownQ;    gearDownQ = false;    return v;
   } };
 
   return { input, consumeShift, consumeAction:take('action'), consumeCycle:take('cycle'),
-    consumeFireEdge:take('fire'), setMode, attach, detach, get mode(){ return mode; } };
+    consumeFireEdge:take('fire'), consumeGearUp:take('gup'), consumeGearDown:take('gdown'), setMode, attach, detach, get mode(){ return mode; } };
 }

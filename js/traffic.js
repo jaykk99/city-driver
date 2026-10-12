@@ -99,14 +99,33 @@ export function createTraffic(deps){
   let maxCars = 12;
   const idxOf = v => { let b = 0, bd = Infinity; for(let i = 0; i < N; i++){ const d = Math.abs(L[i] - v); if(d < bd){ bd = d; b = i; } } return b; };
 
+  // a driver you can see through the glass (and shoot)
+  const skinTones = [0xf5d0b5, 0xe8b48f, 0xc68a62, 0xa86b45, 0x7a4a2c];
+  function addDriver(group){
+    const P = group.userData.profile;
+    const d = new THREE.Group();
+    const shirt = new THREE.MeshStandardMaterial({ color:Math.random() * 0xffffff | 0, roughness:0.8 });
+    const skin = new THREE.MeshStandardMaterial({ color:skinTones[(Math.random() * skinTones.length) | 0], roughness:0.7 });
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.5, 0.28), shirt); torso.position.y = 0.25;
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), skin); head.position.y = 0.62;
+    d.add(torso, head);
+    const gl = P ? P.glass : [[0.5, 0.8]];
+    const seatY = Math.min(...gl.map(p => p[1])) - 0.15;
+    const seatX = gl.reduce((a, p) => a + p[0], 0) / gl.length;
+    d.position.set(-0.38, seatY, -seatX + 0.25);
+    group.add(d);
+    group.userData.driver = d;
+    group.userData.driverHead = head;
+  }
   function makeCar(){
-    const pool = deps.CAR_DEFS;
+    const pool = deps.CAR_DEFS.filter(d => d.id !== 'hyper' || Math.random() < 0.3);
     const def = pool[(Math.random() * pool.length) | 0];
     const group = deps.buildCar(def);
     const col = def.colors[(Math.random() * def.colors.length) | 0];
     deps.applyCarSkin(group, col, null);
+    addDriver(group);
     deps.scene.add(group);
-    return { group, def, axis:'z', li:0, dir:1, s:0, speed:0, cruise:0, x:0, z:0, h:0, honk:0, wait:0 };
+    return { group, def, color:col, axis:'z', li:0, dir:1, s:0, speed:0, cruise:0, x:0, z:0, h:0, honk:0, wait:0, driverHp:30, panic:0, empty:false };
   }
   function place(c, px, pz, near){
     // random road point 70..170m from the player (not right on top of them)
@@ -123,6 +142,9 @@ export function createTraffic(deps){
     c.x = p.x; c.z = p.z; c.h = p.h;
     c.cruise = 9 + Math.random() * 5;
     c.speed = c.cruise * 0.6;
+    c.driverHp = 30; c.panic = 0; c.empty = false;
+    const d = c.group.userData.driver; if(d){ d.visible = true; d.rotation.set(0, 0, 0); }
+    const hd = c.group.userData.driverHead; if(hd) hd.material.color.setHex(skinTones[(Math.random() * skinTones.length) | 0]);
     c.group.position.set(c.x, 0, c.z); c.group.rotation.y = c.h;
   }
 
@@ -156,7 +178,10 @@ export function createTraffic(deps){
     while(cars.length < maxCars){ const c = makeCar(); place(c, player.x, player.z, cars.length < 4); cars.push(c); }
     for(const c of cars){
       if(Math.hypot(c.x - player.x, c.z - player.z) > 230){ place(c, player.x, player.z, false); continue; }
-      let want = c.cruise;
+      if(c.empty && c.respawnT !== undefined){ c.respawnT -= dt; if(c.respawnT <= 0){ delete c.respawnT; place(c, player.x, player.z, false); continue; } }
+      if(c.empty){ c.speed = Math.max(0, c.speed - 6 * dt); c.s += c.dir * c.speed * dt; const p0 = laneXZ(c.axis, L[c.li], c.dir, c.s); c.x += (p0.x - c.x) * Math.min(1, dt * 6); c.z += (p0.z - c.z) * Math.min(1, dt * 6); c.group.position.set(c.x, 0, c.z); continue; }
+      if(c.panic > 0) c.panic -= dt;
+      let want = c.panic > 0 ? c.cruise * 1.8 : c.cruise;
       const k = nextCross(c);
       if(k >= 0){
         const cross = L[k];
@@ -225,11 +250,40 @@ export function createTraffic(deps){
     }
     return blockers;
   }
+  // a bullet hit a car: maybe the driver. returns 'killed' | 'hit' | null and the driver's world position
+  function hitCar(car, dmg, dx, dz){
+    if(car.empty) return null;
+    car.panic = 6;
+    car.driverHp -= dmg;
+    const d = car.group.userData.driver;
+    const wp = new THREE.Vector3(); if(d) d.getWorldPosition(wp);
+    if(car.driverHp <= 0){
+      car.empty = true; car.respawnT = 40;
+      if(d){ d.rotation.z = 0.9; d.rotation.x = 0.3; }
+      if(car.group.userData.driverHead) car.group.userData.driverHead.material.color.setHex(0x7a0000);
+      return { kind:'killed', x:wp.x, y:wp.y + 0.6, z:wp.z };
+    }
+    return { kind:'hit', x:wp.x, y:wp.y + 0.6, z:wp.z };
+  }
+  // nearest car you could steal from where you're standing
+  function nearestCar(x, z, maxD){
+    let best = null, bd = maxD;
+    for(const c of cars){ const d = Math.hypot(c.x - x, c.z - z); if(d < bd){ bd = d; best = c; } }
+    return best;
+  }
+  // take a car out of traffic (you stole it). The driver (if alive) is returned so it can be thrown out.
+  function remove(c){
+    const i = cars.indexOf(c); if(i < 0) return null;
+    cars.splice(i, 1);
+    deps.scene.remove(c.group);
+    return { alive:!c.empty, x:c.x, z:c.z, h:c.h, def:c.def, color:c.color };
+  }
+
   function setCount(n){
     maxCars = n;
     while(cars.length > n){ const c = cars.pop(); deps.scene.remove(c.group); }
   }
   function setVisible(v){ for(const c of cars) c.group.visible = v; }
 
-  return { update, collide, hitList, setCount, setVisible, stateAt, get cars(){ return cars; } };
+  return { update, collide, hitList, setCount, setVisible, stateAt, hitCar, nearestCar, remove, get cars(){ return cars; } };
 }

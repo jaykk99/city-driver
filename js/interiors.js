@@ -100,12 +100,64 @@ export function createInteriors(scene){
     return room;
   }
 
+  // ---------- loot: cash stacks (and the odd safe) hidden around the room ----------
+  const cashMat = new THREE.MeshStandardMaterial({ color:0x3f8f3a, roughness:0.6, emissive:0x1f5a1a, emissiveIntensity:0.6 });
+  const bandMat = new THREE.MeshStandardMaterial({ color:0xf2e7c4, roughness:0.6 });
+  const safeMat = new THREE.MeshStandardMaterial({ color:0x4b5563, metalness:0.7, roughness:0.35 });
+  const glowMat = new THREE.MeshBasicMaterial({ color:0x4ade80, transparent:true, opacity:0.5, depthWrite:false, side:THREE.DoubleSide, blending:THREE.AdditiveBlending });
+  const loot = [];
+  function clearLoot(){ for(const l of loot) scene.remove(l.mesh); loot.length = 0; }
+  function spawnLoot(room, items){
+    clearLoot();
+    for(const it of items){
+      const g = new THREE.Group();
+      if(it.kind === 'safe'){
+        g.add(new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.8, 0.65).translate(0, 0.4, 0), safeMat));
+        const dial = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.04, 14).rotateX(Math.PI / 2), new THREE.MeshStandardMaterial({ color:0xd4d4d8, metalness:1, roughness:0.2 }));
+        dial.position.set(0, 0.45, 0.34); g.add(dial);
+      }else{
+        for(let k = 0; k < 3; k++){
+          const st = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.09, 0.17), cashMat);
+          st.position.set((k - 1) * 0.12, 0.05 + (k % 2) * 0.09, (k % 2) * 0.05); st.rotation.y = k * 0.3; g.add(st);
+          const band = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.095, 0.175), bandMat); band.position.copy(st.position); band.rotation.y = st.rotation.y; g.add(band);
+        }
+      }
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.62, 24).rotateX(-Math.PI / 2), glowMat); ring.position.y = 0.04; g.add(ring);
+      g.position.set(it.x, 0.02, it.z);
+      scene.add(g);
+      loot.push({ mesh:g, x:it.x, z:it.z, amount:it.amount, kind:it.kind, got:false });
+    }
+  }
+  // pick random free floor spots in a room
+  function lootSpots(room, count){
+    const out = [], bd = room.bounds;
+    for(let tries = 0; tries < 200 && out.length < count; tries++){
+      const x = bd.minX + 1.2 + Math.random() * (bd.maxX - bd.minX - 2.4), z = bd.minZ + 1.2 + Math.random() * (bd.maxZ - bd.minZ - 2.4);
+      if(Math.hypot(x - room.spawn.x, z - room.spawn.z) < 2.5) continue;
+      let ok = true;
+      for(const c of room.colliders){ if(x > c.minX - 0.7 && x < c.maxX + 0.7 && z > c.minZ - 0.7 && z < c.maxZ + 0.7){ ok = false; break; } }
+      for(const o of out) if(Math.hypot(o.x - x, o.z - z) < 2) ok = false;
+      if(ok) out.push({ x, z });
+    }
+    return out;
+  }
+
   let t = 0;
   function update(dt, room){
     t += dt;
     if(room){ room.padMat.opacity = 0.5 + Math.sin(t * 4) * 0.25; room.pad.rotation.y += dt; }
+    glowMat.opacity = 0.35 + Math.sin(t * 5) * 0.2;
+    for(const l of loot) if(!l.got && l.kind !== 'safe') l.mesh.rotation.y += dt * 1.2;
   }
-  return { get:build, update };
+  // returns the loot item picked up at (x,z), or null
+  function grab(x, z){
+    for(const l of loot){
+      if(l.got) continue;
+      if(Math.hypot(l.x - x, l.z - z) < (l.kind === 'safe' ? 1.4 : 1.0)){ l.got = true; scene.remove(l.mesh); return l; }
+    }
+    return null;
+  }
+  return { get:build, update, spawnLoot, clearLoot, lootSpots, grab };
 }
 
 // ---------- furniture per style ----------

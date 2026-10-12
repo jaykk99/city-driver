@@ -51,6 +51,9 @@ let blood=null, people=null, traffic=null, trafficHits=null;
 let hp=100, dead=false, deadT=0, hurtFlash=0;
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true};
 let missions=null, boardOpen=false;
+let stolenCar=null, lockTarget=null;
+const lootedAt=new Map();     // building id -> time it was emptied (loot comes back after 8 min)
+const _proj=new THREE.Vector3();
 // --- stunt rewards (free-roam cash loop) ---
 let stunts=newStuntState();
 // --- AAA graphics state ---
@@ -96,13 +99,14 @@ function addCash(n){
 
 // ---------------- car lifecycle ----------------
 function rebuildCar(){
-  carDef=CAR_DEFS.find(d=>d.id===save.currentCar)||CAR_DEFS[0];
+  carDef = stolenCar ? stolenCar.def : (CAR_DEFS.find(d=>d.id===save.currentCar)||CAR_DEFS[0]);
   if(carGroup) scene.remove(carGroup);
   carGroup=buildCar(carDef);
-  applyCarSkin(carGroup, save.paint[carDef.id], carSkinFor(save, carDef.id));
+  if(stolenCar) applyCarSkin(carGroup, stolenCar.color, null);
+  else applyCarSkin(carGroup, save.paint[carDef.id], carSkinFor(save, carDef.id));
   scene.add(carGroup);
   lookCache=null;
-  carStats=effectiveStats(carDef, save.upgrades[carDef.id]||{});
+  carStats=effectiveStats(carDef, stolenCar ? {} : (save.upgrades[carDef.id]||{}));
   allWheels=(carGroup.userData.wheels||[]).slice();
   frontWheels=allWheels.filter(w=>w.position.z<0);
   brakeMats=carGroup.userData.brakeMats||[];
@@ -318,6 +322,41 @@ function updateFootCamera(dt){
     camera.fov=lastFov; camera.updateProjectionMatrix();
   }
 }
+// AIM: lock onto the best target in front of you (gunmen, players, drivers, people)
+function updateAim(dt){
+  const ch=$('crosshair');
+  const aiming=controls.input.aim && !!gear().equipped && !dead;
+  if(!aiming){ lockTarget=null; weaponCtx.lock=null; ch.classList.add('hidden'); return; }
+  const w=weaponDef(gear().equipped), range=w?w.range:60;
+  let best=null, bs=Infinity;
+  const consider=(t, bonus)=>{
+    const dx=t.x-foot.pos.x, dz=t.z-foot.pos.z, d=Math.hypot(dx,dz);
+    if(d>range || d<0.8) return;
+    const a=Math.atan2(-dx,-dz), diff=Math.abs(Math.atan2(Math.sin(a-foot.heading), Math.cos(a-foot.heading)));
+    if(diff>0.75) return;
+    const score=diff*2+d/80-bonus;
+    if(score<bs){ bs=score; best=t; }
+  };
+  for(const t of people.hitList) consider(t, t.ref.kind==='enemy'?0.6:0);
+  for(const t of remoteHits) consider(t, 0.5);
+  if(!inside) for(const t of trafficHits){ if(!t.ref.car.empty) consider(t, -0.1); }
+  lockTarget=best;
+  ch.classList.remove('hidden');
+  if(best){
+    const a=Math.atan2(-(best.x-foot.pos.x), -(best.z-foot.pos.z));
+    foot.heading+=Math.atan2(Math.sin(a-foot.heading), Math.cos(a-foot.heading))*Math.min(1, dt*12);
+    weaponCtx.lock={x:best.x, z:best.z};
+    _proj.set(best.x, 1.3, best.z).project(camera);
+    ch.style.left=((_proj.x+1)/2*100).toFixed(2)+'%';
+    ch.style.top=((1-_proj.y)/2*100).toFixed(2)+'%';
+    ch.classList.add('lock');
+  }else{
+    weaponCtx.lock=null;
+    ch.style.left='50%'; ch.style.top='45%';
+    ch.classList.remove('lock');
+  }
+  aimHold=Math.max(aimHold, 0.25);
+}
 function updateFoot(dt){
   foot.update(controls.input, dt, footCollide);
   person.position.x=foot.pos.x; person.position.z=foot.pos.z;
@@ -328,6 +367,7 @@ function updateFoot(dt){
     if(gear().weapons.length) toast(id ? weaponDef(id).name : 'Holstered', 1200);
     else toast('No guns yet — visit LOCK & LOAD', 1600);
   }
+  updateAim(dt);
   weaponCtx.pos.x=foot.pos.x; weaponCtx.pos.z=foot.pos.z; weaponCtx.heading=foot.heading;
   const edge=controls.consumeFireEdge();
   if(edge && !gear().equipped && gear().weapons.length){ cycleWeapon(gear()); syncPersonGear(); }
@@ -377,6 +417,21 @@ function snapFootCamera(){
   }
   camera.position.copy(camPos);
 }
+function stealCar(tc){
+  const info=traffic.remove(tc);
+  if(!info) return;
+  if(info.alive){ people.eject(info.x-Math.cos(info.h)*1.8, info.z+Math.sin(info.h)*1.8, foot.pos.x, foot.pos.z); people.scare(info.x, info.z, 25); }
+  stolenCar={ def:info.def, color:info.color };
+  rebuildCar();
+  physics.reset(carStats);
+  physics.pos.x=info.x; physics.pos.z=info.z; physics.heading=info.h;
+  syncCarTransform(0);
+  lookCache=null;
+  getIn();
+  snapCamera();
+  audio.beep(300,0.08);
+  toast('🚗 Stolen: '+info.def.name+(info.alive?' — the driver ran off':''), 2400);
+}
 function enterBuilding(b){
   const room=interiors.get(styleFor(b.id));
   // where to come back out: at the door if you used it, else where you stood
@@ -389,6 +444,14 @@ function enterBuilding(b){
     nx=dx/d; nz=dz/d; bx=qx+nx*1.4; bz=qz+nz*1.4;
   }
   inside={ b, room, back:{ x:bx, z:bz, heading:Math.atan2(-nx, -nz) } };
+  // cash hidden around the room (unless you already cleaned this building out recently)
+  const last=lootedAt.get(b.id);
+  if(last===undefined || performance.now()-last > 8*60*1000){
+    const n=1+Math.floor(Math.random()*3), spots=interiors.lootSpots(room, n+1);
+    const items=spots.slice(0,n).map(p=>({ x:p.x, z:p.z, kind:'cash', amount:50+Math.floor(Math.random()*450) }));
+    if(Math.random()<0.12 && spots[n]) items.push({ x:spots[n].x, z:spots[n].z, kind:'safe', amount:2000+Math.floor(Math.random()*3000) });
+    interiors.spawnLoot(room, items);
+  }else interiors.clearLoot();
   curColliders=room.colliders;
   weaponCtx.colliders=room.colliders; weaponCtx.targets=[];
   foot.reset(room.spawn.x, room.spawn.z, room.spawn.heading);
@@ -401,6 +464,8 @@ function enterBuilding(b){
 function exitBuilding(){
   if(!inside) return;
   const bk=inside.back;
+  if(inside) lootedAt.set(inside.b.id, performance.now());
+  interiors.clearLoot();
   inside=null; curColliders=null;
   weaponCtx.colliders=city.colliders; weaponCtx.targets=shops.targets;
   const r=footCollide(bk.x, bk.z, 0.45);
@@ -413,6 +478,8 @@ function exitBuilding(){
 function updateAction(){
   if(onFoot){
     if(inside){
+      const got=interiors.grab(foot.pos.x, foot.pos.z);
+      if(got){ addCash(got.amount); audio.beep(1300,0.06); toast((got.kind==='safe'?'🔓 Cracked a safe! +$':'💵 Found cash +$')+got.amount.toLocaleString(), 1800); }
       const d=dist2D(foot.pos.x, foot.pos.z, inside.room.exit.x, inside.room.exit.z);
       if(d<0.8){ exitBuilding(); return; }      // step on the pad
       if(d<2.4) return setAction('exit', null, '🚪 EXIT BUILDING');
@@ -425,6 +492,8 @@ function updateAction(){
     }
     if(best) return setAction('shop', best, (best.type==='garage'?'🔧 ':best.type==='guns'?'🔫 ':'👕 ')+'ENTER '+best.name);
     if(dist2D(foot.pos.x, foot.pos.z, physics.pos.x, physics.pos.z)<4.2) return setAction('in', null, '🚗 GET IN');
+    const tc=traffic && traffic.nearestCar(foot.pos.x, foot.pos.z, 3.6);
+    if(tc) return setAction('steal', tc, '🚗 STEAL CAR');
     const b=nearBuilding(foot.pos.x, foot.pos.z);
     if(b) return setAction('enter', b, '🏢 ENTER BUILDING');
     return setAction(null, null, '');
@@ -436,6 +505,7 @@ function doAction(){
   if(actionKind==='out') getOut();
   else if(actionKind==='in') getIn();
   else if(actionKind==='enter' && actionTarget) enterBuilding(actionTarget);
+  else if(actionKind==='steal' && actionTarget) stealCar(actionTarget);
   else if(actionKind==='exit') exitBuilding();
   else if(actionKind==='shop' && actionTarget){
     if(actionTarget.type==='garage') openGarage('play');
@@ -799,6 +869,7 @@ function openEditor(ret, tab){
   $('touch-controls').classList.add('hidden');
   setAction(null,null,'');
   editorPersonWasVisible=person.visible;
+  if(stolenCar){ stolenCar=null; refreshSceneKeep(); }
   editor.open(tab||'car');
 }
 function editorTab(tab){
@@ -887,6 +958,7 @@ function openCarPick(){
   $('car-pick').classList.remove('hidden');
 }
 function pickCar(id){
+  stolenCar=null;
   const def=CAR_DEFS.find(d=>d.id===id); if(!def) return;
   if(!save.owned.includes(id)) save.owned.push(id);
   if(!save.upgrades[id]) save.upgrades[id]={engine:0,turbo:0,tires:0,suspension:0,nitro:0};
@@ -1210,6 +1282,10 @@ async function boot(){
     weaponCtx.hitables=[people.hitList, trafficHits, remoteHits];
     weaponCtx.onPersonHit=(ref, dmg, dx, dz)=>{
       if(ref.kind==='ped' || ref.kind==='enemy') people.damage(ref, dmg, dx, dz);
+      else if(ref.kind==='car'){
+        const r=traffic.hitCar(ref.car, dmg, dx, dz);
+        if(r){ blood.hit(r.x, r.y, r.z, dx, dz, r.kind==='killed'?1.6:0.7); if(r.kind==='killed'){ blood.pool(r.x+dx, r.z+dz, 1.4); people.scare(r.x, r.z, 30); } }
+      }
       else if(typeof onRemotePlayerHit==='function' && ref.kind==='player') onRemotePlayerHit(ref, dmg, dx, dz);
     };
     tutorial=createTutorial(scene, city);
@@ -1222,7 +1298,7 @@ async function boot(){
       buildings:()=>city.buildings, inside:()=>inside&&{id:inside.b.id, style:inside.room.style}, enter:b=>enterBuilding(b), exit:()=>exitBuilding(),
       getOut:()=>getOut(), tut:()=>tutorial&&{active:tutorial.active, step:tutorial.step}, finishTut:()=>finishTutorial(), pick:id=>pickCar(id),
       mp:()=>mp&&{status:mp.status,count:mp.count}, state:()=>({state,onFoot,editorOpen,pickOpen,cash:save.cash}),
-      shot:(a,b,c,d)=>weapons.remoteShot(a,b,c,d), missions:()=>missions, setDone:n=>{save.missionsDone=n;}, people:()=>people, traffic:()=>traffic, hp:()=>hp, hurt:d=>hurtPlayer(d),
+      steal:()=>{ const c=traffic.cars[0]; foot.reset(c.x+2,c.z,0); stealCar(c); return carDef.name; }, physics:()=>physics, missions:()=>missions, setDone:n=>{save.missionsDone=n;}, people:()=>people, traffic:()=>traffic, hp:()=>hp, hurt:d=>hurtPlayer(d),
       cam:()=>({c:camera.position.toArray().map(v=>+v.toFixed(2)), p:person.position.toArray().map(v=>+v.toFixed(2)), pv:person.visible, f:[foot.pos.x,foot.pos.z,foot.heading]}) };
     rebuildCar();
     physics=new CarPhysics(carStats);
@@ -1230,7 +1306,7 @@ async function boot(){
     garage=createGarage({
       save,
       getDef:id=>CAR_DEFS.find(d=>d.id===id),
-      onSelectCar:()=>refreshSceneKeep(),
+      onSelectCar:()=>{ stolenCar=null; refreshSceneKeep(); },
       onPaint:()=>refreshSceneKeep(),
       onWheels:()=>refreshSceneKeep(),
       refreshScene:()=>refreshSceneKeep(),
