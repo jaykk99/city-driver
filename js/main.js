@@ -12,6 +12,14 @@ import { QualityManager, qualitySettings, QUALITY_LEVELS } from './quality.js';
 import { createSkyDome, applySkyPreset, PRESET_ORDER, SKY_PRESETS } from './sky.js';
 import { PuffPool, SkidMarks } from './particles.js';
 import { newStuntState, stuntUpdate } from './stunts.js';
+import { initOrientation } from './orientation.js';
+import { ensureArsenal, cycleWeapon, weaponDef, TARGET_PAY } from './shop.js';
+import { FootPhysics, dist2D, exitSpot } from './onfoot.js';
+import { buildCharacter, setOutfit, setHeldWeapon, animateCharacter, kickRecoil } from './character.js';
+import { buildStores, STORE_LOTS } from './stores.js';
+import { createWeapons } from './weapons.js';
+import { createStoreUI } from './storeui.js';
+import { createMinimap } from './minimap.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, paintCar } = Cars;
 // added by the cars track; may not exist yet in this worktree — guard it
@@ -34,6 +42,11 @@ let stunts=newStuntState();
 let postfx=null, qm=null, skyEnv=null, todIdx=0;
 let smoke=null, exhaust=null, skids=null, headlight=null, headlightTarget=null, headlightBase=0;
 let particleScale=1;
+// --- on foot / stores / guns ---
+let orient=null, onFoot=false, foot=null, person=null, weapons=null, shops=null, storeUI=null, minimap=null;
+let storeOpen=false, aimHold=0, ammoDirty=0, actionKind=null, actionTarget=null, actionText='';
+const weaponCtx={ save:null, pos:{x:0,z:0}, heading:0, colliders:null, targets:null, audio:null, toast:null, onTargetHit:null };
+const parkedCar={x:0,z:0};
 
 // ---------------- reused per-frame objects (no allocs in loop) ----------------
 const camPos=new THREE.Vector3(), camGoal=new THREE.Vector3(), fwdV=new THREE.Vector3();
@@ -165,8 +178,8 @@ function updateEffects(dt){
 }
 
 // ---------------- collision: circle (car) vs AABB (city colliders) ----------------
-function collide(x, z, px, pz){
-  const R=1.15;
+function collide(x, z){ return collideR(x, z, 1.15); }
+function collideR(x, z, R){
   let cx=x, cz=z, hitX=false, hitZ=false;
   const cols=city.colliders;
   for(let i=0;i<cols.length;i++){
@@ -194,6 +207,147 @@ function collide(x, z, px, pz){
   }
   collideRes.x=cx; collideRes.z=cz; collideRes.hitX=hitX; collideRes.hitZ=hitZ;
   return collideRes;
+}
+
+// on-foot collision: buildings + the parked car (two circles along its length)
+function footCollide(x, z, r){
+  const res=collideR(x, z, r);
+  const h=physics.heading, fx=-Math.sin(h), fz=-Math.cos(h);
+  for(const o of [-1.25, 0, 1.25]){
+    const cx=physics.pos.x+fx*o, cz=physics.pos.z+fz*o, rr=1.0+r;
+    const dx=res.x-cx, dz=res.z-cz, d=Math.hypot(dx,dz);
+    if(d<rr && d>1e-6){ res.x=cx+dx/d*rr; res.z=cz+dz/d*rr; }
+  }
+  return res;
+}
+
+// ---------------- on foot ----------------
+function syncPersonGear(){
+  if(!person) return;
+  setOutfit(person, save.outfit);
+  setHeldWeapon(person, save.equipped);
+  const w=save.equipped && weaponDef(save.equipped);
+  $('weapon-name').textContent = w ? w.name.toUpperCase() : 'UNARMED';
+  const a=$('weapon-ammo');
+  a.textContent = w ? String(save.ammo[w.id]|0) : (save.weapons.length ? 'tap 🔫 to draw' : 'guns at LOCK & LOAD');
+  a.classList.toggle('tip', !w);
+}
+function updateModeHUD(){
+  for(const id of ['speedo','gear-hud','nitro-bar']) $(id).classList.toggle('hidden', onFoot);
+  $('weapon-hud').classList.toggle('hidden', !onFoot);
+}
+function getOut(){
+  if(Math.abs(tele.speed)>4){ toast('Slow down to get out'); return; }
+  const sp=exitSpot(physics.pos.x, physics.pos.z, physics.heading);
+  const r=footCollide(sp.x, sp.z, 0.45);
+  foot.reset(r.x, r.z, physics.heading);
+  physics.vel.x=0; physics.vel.z=0; physics.speed=0;
+  tele.speed=0; tele.drifting=false; tele.nitro=false; tele.steer=0;
+  stunts=newStuntState();
+  onFoot=true;
+  person.visible=true;
+  person.position.set(foot.pos.x, 0, foot.pos.z);
+  syncPersonGear();
+  controls.setMode('foot');
+  updateModeHUD();
+  audio.engine(0,0); audio.skid(false); audio.beep(420,0.06);
+}
+function getIn(){
+  if(!onFoot) return;
+  onFoot=false;
+  person.visible=false;
+  aimHold=0;
+  if(controls) controls.setMode('drive');
+  updateModeHUD();
+  stunts=newStuntState();
+  if(audio) audio.beep(520,0.06);
+  if(ammoDirty){ saveSave(save); ammoDirty=0; }
+}
+function updateFootCamera(dt){
+  const h=foot.heading, px=foot.pos.x, pz=foot.pos.z;
+  fwdV.set(-Math.sin(h),0,-Math.cos(h));
+  const aiming=aimHold>0;
+  const dist=aiming?3.6:4.6, height=aiming?2.2:2.6;
+  const rx=Math.cos(h), rz=-Math.sin(h), side=aiming?0.7:0.35;   // over-the-shoulder
+  camGoal.set(px-fwdV.x*dist+rx*side, height, pz-fwdV.z*dist+rz*side);
+  const k=1-Math.exp(-dt*7);
+  camPos.x+=(camGoal.x-camPos.x)*k;
+  camPos.y+=(camGoal.y-camPos.y)*k;
+  camPos.z+=(camGoal.z-camPos.z)*k;
+  camera.position.copy(camPos);
+  camera.lookAt(px+fwdV.x*5+rx*side, 1.45, pz+fwdV.z*5+rz*side);
+  if(Math.abs(60-lastFov)>0.25){
+    lastFov+=(60-lastFov)*Math.min(1,dt*4);
+    camera.fov=lastFov; camera.updateProjectionMatrix();
+  }
+}
+function updateFoot(dt){
+  foot.update(controls.input, dt, footCollide);
+  person.position.x=foot.pos.x; person.position.z=foot.pos.z;
+  person.rotation.y=foot.heading;
+  if(controls.consumeCycle()){
+    const id=cycleWeapon(save);
+    saveSave(save); syncPersonGear();
+    if(save.weapons.length) toast(id ? weaponDef(id).name : 'Holstered', 1200);
+    else toast('No guns yet — visit LOCK & LOAD', 1600);
+  }
+  weaponCtx.pos.x=foot.pos.x; weaponCtx.pos.z=foot.pos.z; weaponCtx.heading=foot.heading;
+  const edge=controls.consumeFireEdge();
+  if(edge && !save.equipped && save.weapons.length){ cycleWeapon(save); syncPersonGear(); }
+  const res=weapons.update(dt, weaponCtx, controls.input.fire, edge);
+  if(res.fired){
+    kickRecoil(person); aimHold=0.9; ammoDirty++;
+    $('weapon-ammo').textContent=String(save.ammo[save.equipped]|0);
+  }
+  if(controls.input.fire && save.equipped) aimHold=Math.max(aimHold,0.3);
+  aimHold=Math.max(0, aimHold-dt);
+  animateCharacter(person, foot.phase, foot.speed, aimHold>0 && !!save.equipped, dt);
+  updateFootCamera(dt);
+  if(ammoDirty && frameN%120===0){ saveSave(save); ammoDirty=0; }
+}
+
+// ---------------- context action button (get in/out, shop) ----------------
+function setAction(kind, target, text){
+  actionKind=kind; actionTarget=target;
+  if(text!==actionText){
+    actionText=text;
+    const b=$('btn-action');
+    b.textContent=text||'';
+    b.classList.toggle('hidden', !text);
+  }
+}
+function updateAction(){
+  if(onFoot){
+    let best=null, bd=2.4;
+    for(const s of shops.stores){
+      const d=dist2D(foot.pos.x, foot.pos.z, s.door.x, s.door.z);
+      if(d<bd){ bd=d; best=s; }
+    }
+    if(best) return setAction('shop', best, (best.type==='garage'?'🔧 ':best.type==='guns'?'🔫 ':'👕 ')+'ENTER '+best.name);
+    if(dist2D(foot.pos.x, foot.pos.z, physics.pos.x, physics.pos.z)<4.2) return setAction('in', null, '🚗 GET IN');
+    return setAction(null, null, '');
+  }
+  if(Math.abs(tele.speed)<4) return setAction('out', null, '🚪 GET OUT');
+  setAction(null, null, '');
+}
+function doAction(){
+  if(actionKind==='out') getOut();
+  else if(actionKind==='in') getIn();
+  else if(actionKind==='shop' && actionTarget){
+    if(actionTarget.type==='garage') openGarage('play');
+    else openStore(actionTarget);
+  }
+}
+function openStore(store){
+  storeOpen=true;
+  setAction(null,null,'');
+  audio.beep(700,0.06);
+  storeUI.open(store);
+}
+function closeStore(){
+  storeOpen=false;
+  storeUI.close();
+  syncPersonGear(); syncCash();
 }
 
 // ---------------- chase camera ----------------
@@ -236,10 +390,16 @@ function updateHUD(){
 
 // ---------------- state transitions ----------------
 function hideOverlays(){ for(const o of ['main-menu','pause-menu','garage']) $(o).classList.add('hidden'); }
+function leaveFootMode(){
+  if(storeOpen) closeStore();
+  if(onFoot) getIn();
+  setAction(null,null,'');
+}
 
 function showMenu(){
   state='menu'; paused=false; garageOpen=false;
   if(dragMode && dragMode.active) dragMode.exit();
+  leaveFootMode();
   if(controls){ controls.setMode('drive'); controls.detach(); }
   hideOverlays();
   $('main-menu').classList.remove('hidden');
@@ -251,6 +411,7 @@ function showMenu(){
 
 function startFreeroam(){
   if(dragMode && dragMode.active) dragMode.exit();
+  leaveFootMode();
   if(headlight) headlight.intensity=headlightBase;
   $('drag-ui').classList.add('hidden');
   state='freeroam'; paused=false; garageOpen=false;
@@ -265,6 +426,7 @@ function startFreeroam(){
 }
 
 function startDrag(){
+  leaveFootMode();
   state='drag'; paused=false; garageOpen=false;
   if(headlight) headlight.intensity=0;
   hideOverlays();
@@ -277,7 +439,9 @@ function startDrag(){
 
 function openPause(){
   if(state!=='freeroam' && state!=='drag') return;
+  if(garageOpen || storeOpen) return;
   paused=true;
+  setAction(null,null,'');
   hideOverlays();
   $('pause-menu').classList.remove('hidden');
 }
@@ -293,6 +457,7 @@ function closeGarage(){
   garageOpen=false;
   hideOverlays();
   $('hud').classList.toggle('hidden', state!=='freeroam');
+  if(person) syncPersonGear();
   if(garageReturn==='menu') showMenu();
   else if(garageReturn==='pause'){ paused=true; $('pause-menu').classList.remove('hidden'); }
   else paused=false;
@@ -330,7 +495,7 @@ async function connectMP(){
 async function initScene(){
   renderer=new THREE.WebGLRenderer({antialias:false, powerPreference:'high-performance'});
   renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setSize(orient.view.w, orient.view.h);
   // AAA: filmic tone mapping for that Unreal look
   renderer.toneMapping=THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure=1.0;
@@ -340,9 +505,10 @@ async function initScene(){
 
   scene=new THREE.Scene();
   // fog set by city.js; sky dome replaces flat background
-  camera=new THREE.PerspectiveCamera(62, window.innerWidth/window.innerHeight, 0.1, 3000);
+  camera=new THREE.PerspectiveCamera(62, orient.view.w/orient.view.h, 0.1, 3000);
 
-  city=buildCity(scene);   // creates sun + hemi + fog + world
+  city=buildCity(scene, STORE_LOTS);   // creates sun + hemi + fog + world (store lots kept clear)
+  shops=buildStores(scene, city);       // gun store + range, clothing, auto shop
 
   // image-based lighting: PMREM from a neutral room so paint/glass/chrome reflect
   try{
@@ -386,7 +552,7 @@ async function initScene(){
 function applyQuality(level, s){
   const pr=Math.min(window.devicePixelRatio||1, s.pixelRatioCap);
   renderer.setPixelRatio(pr);
-  if(postfx){ postfx.setPixelRatio(Math.min(pr,1)); postfx.setSize(window.innerWidth, window.innerHeight); postfx.setBloomEnabled(s.bloom); }
+  if(postfx){ postfx.setPixelRatio(Math.min(pr,1)); postfx.setSize(orient.view.w, orient.view.h); postfx.setBloomEnabled(s.bloom); }
   const wantShadows=s.shadows;
   if(renderer.shadowMap.enabled!==wantShadows || (city&&city.sun.castShadow!==wantShadows)){
     renderer.shadowMap.enabled=wantShadows;
@@ -424,7 +590,18 @@ function frame(now){
   if(dt>0.1) dt=0.1;                       // clamp
   frameN++;
 
-  if(state==='freeroam' && !paused && !garageOpen){
+  if(state==='freeroam' && !paused && !garageOpen && !storeOpen && onFoot){
+    updateFoot(dt);
+    city.update(dt, foot.pos);
+    shops.update(dt);
+    smoke.update(dt); exhaust.update(dt);
+    if(qm) qm.update(dt);
+    audio.engine(0,0); audio.skid(false);
+    parkedCar.x=physics.pos.x; parkedCar.z=physics.pos.z;
+    minimap.draw(foot.pos.x, foot.pos.z, foot.heading, parkedCar);
+    updateAction();
+    if(controls.consumeAction()) doAction();
+  }else if(state==='freeroam' && !paused && !garageOpen && !storeOpen){
     tele=physics.update(controls.input, dt, collide);
     // stunt rewards: drifting pays cash, so free roam has its own economy
     const award=stuntUpdate(stunts, tele.drifting, tele.speed, dt);
@@ -435,6 +612,11 @@ function frame(now){
     updateCamera(dt);
     updateHUD();
     updateEffects(dt);
+    shops.update(dt);
+    weapons.update(dt, weaponCtx, false, false);   // let tracers fade
+    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null);
+    updateAction();
+    if(controls.consumeAction()) doAction();
     if(qm) qm.update(dt);
     const rpm=Math.min(1, Math.abs(tele.speed)/(carStats.topSpeed*1.15));
     audio.engine(rpm, Math.abs(controls.input.throttle||0));
@@ -450,17 +632,18 @@ function frame(now){
   }else{
     audio.engine(0,0); audio.skid(false);
   }
-  if(smoke && (state!=='freeroam'||paused||garageOpen)){ smoke.update(dt); exhaust.update(dt); }
+  if(smoke && (state!=='freeroam'||paused||garageOpen||storeOpen)){ smoke.update(dt); exhaust.update(dt); }
   if(postfx) postfx.render();
   else renderer.render(scene, camera);
 }
 
 // ---------------- UI wiring ----------------
 function wireUI(){
-  $('m-freeroam').onclick=()=>{ audio.unlock(); audio.beep(600,0.06); startFreeroam(); };
-  $('m-drag').onclick=()=>{ audio.unlock(); audio.beep(600,0.06); startDrag(); };
+  $('m-freeroam').onclick=()=>{ audio.unlock(); orient.goLandscape(); audio.beep(600,0.06); startFreeroam(); };
+  $('m-drag').onclick=()=>{ audio.unlock(); orient.goLandscape(); audio.beep(600,0.06); startDrag(); };
+  $('store-close').onclick=()=>{ audio.beep(500,0.05); closeStore(); };
   $('m-garage').onclick=()=>{ audio.unlock(); openGarage('menu'); };
-  $('p-resume').onclick=()=>{ audio.beep(600,0.05); closePause(); };
+  $('p-resume').onclick=()=>{ audio.beep(600,0.05); orient.goLandscape(); closePause(); };
   $('p-freeroam').onclick=()=>{ audio.beep(600,0.05); startFreeroam(); };
   $('p-drag').onclick=()=>{ audio.beep(600,0.05); startDrag(); };
   $('p-garage').onclick=()=>openGarage('pause');
@@ -485,24 +668,41 @@ function wireUI(){
   document.addEventListener('contextmenu', e=>e.preventDefault());
   document.addEventListener('gesturestart', e=>e.preventDefault());
 
-  window.addEventListener('resize', ()=>{
-    camera.aspect=window.innerWidth/window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    if(postfx) postfx.setSize(window.innerWidth, window.innerHeight);
-  });
+  // resizing / rotation is handled by onViewResize (orientation.js callback)
   document.addEventListener('visibilitychange', ()=>{
     if(document.hidden && (state==='freeroam'||state==='drag') && !paused) openPause();
   });
 }
 
+function onViewResize(w, h){
+  if(!renderer) return;
+  camera.aspect=w/h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+  if(postfx) postfx.setSize(w, h);
+}
+
 // ---------------- boot ----------------
 async function boot(){
   try{
-    save=loadSave();
+    save=ensureArsenal(loadSave());
     audio=createAudio();
+    orient=initOrientation(onViewResize);
     await initScene();
-    controls=createControls();
+    controls=createControls({ isRotated:()=>orient.rotated });
+    foot=new FootPhysics();
+    person=buildCharacter(save.outfit);
+    person.visible=false;
+    scene.add(person);
+    weapons=createWeapons(scene);
+    Object.assign(weaponCtx, { save, colliders:city.colliders, targets:shops.targets, audio, toast,
+      onTargetHit:()=>{ addCash(TARGET_PAY); toast('TARGET +$'+TARGET_PAY, 900); } });
+    storeUI=createStoreUI({ save, persist:()=>saveSave(save), toast:m=>toast(m,1600),
+      beep:(f,d)=>audio.beep(f,d), onChange:()=>{ syncCash(); syncPersonGear(); } });
+    minimap=createMinimap($('minimap'), shops.stores);
+    syncPersonGear(); updateModeHUD();
+    // test hook: ?debug exposes a teleport for automated smoke tests
+    if(/[?&]debug\b/.test(location.search)) window.__cd={ tp:(x,z,h)=>{ if(onFoot){ foot.reset(x,z,h||0); } else { physics.pos.x=x; physics.pos.z=z; physics.heading=h||0; } }, save:()=>save, stores:()=>shops.stores };
     rebuildCar();
     physics=new CarPhysics(carStats);
     placeAtSpawn();

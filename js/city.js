@@ -117,7 +117,15 @@ function setInstance(mesh, i, x, y, z, rotY, sx, sy, sz) {
   mesh.setMatrixAt(i, _m.m);
 }
 
-export function buildCity(scene) {
+// a building/tree footprint that touches a reserved lot (stores) is not placed
+function hitsReserved(reserved, minX, maxX, minZ, maxZ) {
+  for (const r of reserved) {
+    if (maxX > r.minX && minX < r.maxX && maxZ > r.minZ && minZ < r.maxZ) return true;
+  }
+  return false;
+}
+
+export function buildCity(scene, reserved = []) {
   const rand = mulberry32(SEED);
   _m.p = new THREE.Vector3();
   _m.q = new THREE.Quaternion();
@@ -232,10 +240,13 @@ export function buildCity(scene) {
         const h = hMin + rand() * (hMax - hMin);
         const px = bcx - (BLOCK - inset * 2) / 2 + cell * (gx + 0.5) + (rand() - 0.5) * 2;
         const pz = bcz - (BLOCK - inset * 2) / 2 + cell * (gz + 0.5) + (rand() - 0.5) * 2;
-        setInstance(buildings, bi, px, 0.03, pz, 0, w, h, d);
         // facade variety: brightness + subtle warm/cool/beige shifts
         const v = 0.82 + rand() * 0.32;
         const pick = rand();
+        // stores keep their lots clear (rand() calls above still run so the
+        // rest of the city layout is unchanged)
+        if (hitsReserved(reserved, px - w / 2, px + w / 2, pz - d / 2, pz + d / 2)) continue;
+        setInstance(buildings, bi, px, 0.03, pz, 0, w, h, d);
         if (pick < 0.45) tint.setRGB(v, v * 0.97, v * 0.95);            // neutral grey
         else if (pick < 0.65) tint.setRGB(v, v * 0.90, v * 0.82);        // warm beige
         else if (pick < 0.82) tint.setRGB(v * 0.88, v * 0.95, v);        // cool blue-grey
@@ -405,6 +416,10 @@ export function buildCity(scene) {
     coneGeo, new THREE.MeshStandardMaterial({ color: 0x3e7a34, roughness: 0.85, envMapIntensity: 0.3 }), treeSpots.length
   );
   canopies.castShadow = true;
+  for (let i = treeSpots.length - 1; i >= 0; i--) {
+    const [x, z] = treeSpots[i];
+    if (hitsReserved(reserved, x - 2, x + 2, z - 2, z + 2)) treeSpots.splice(i, 1);
+  }
   treeSpots.forEach(([x, z, s], i) => {
     setInstance(trunks, i, x, 0.03, z, rand() * 6.28, s, s, s);
     setInstance(canopies, i, x, 0.03, z, rand() * 6.28, s, s * (0.9 + rand() * 0.3), s);

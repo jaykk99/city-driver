@@ -10,6 +10,7 @@
      Rebuild with: npm run build (requires devDependency esbuild) -->
 </head>
 <body>
+<div id="app">
 <div id="game-container"></div>
 
 <!-- HUD -->
@@ -21,7 +22,10 @@
   <div id="menu-btn">☰</div>
   <div id="tod-btn" title="Time of day">☀️</div>
   <div id="gfx-btn" title="Graphics quality">✨</div>
+  <canvas id="minimap" width="132" height="132"></canvas>
+  <div id="weapon-hud" class="hidden"><b id="weapon-name">UNARMED</b><span id="weapon-ammo"></span></div>
 </div>
+<button id="btn-action" class="hidden">🚪 GET OUT</button>
 
 <!-- Touch controls -->
 <div id="touch-controls" class="hidden">
@@ -36,6 +40,12 @@
     <button id="btn-handbrake" class="tbtn small">HB</button>
   </div>
   <button id="btn-shift" class="tbtn hidden">SHIFT ▲</button>
+  <div id="joystick" style="display:none"><div id="joy-knob"></div></div>
+  <div id="foot-zone" style="display:none">
+    <button id="btn-weapon" class="tbtn small">🔫</button>
+    <button id="btn-run" class="tbtn small">RUN</button>
+    <button id="btn-fire" class="tbtn pedal fire">FIRE</button>
+  </div>
 </div>
 
 <!-- Main menu -->
@@ -50,7 +60,7 @@
     <button id="m-garage" class="mbtn">🔧 GARAGE</button>
   </div>
   <div class="menu-car-preview"><span id="menu-car-name">—</span></div>
-  <p class="hint">Desktop: WASD / arrows · Space = handbrake · Shift = nitro</p>
+  <p class="hint">Desktop: WASD / arrows · Space = handbrake / fire · Shift = nitro / run · E = get in/out, shop · Q = switch gun</p>
 </div>
 
 <!-- Pause / mode menu -->
@@ -96,8 +106,17 @@
   <button id="drag-exit">✕</button>
 </div>
 
+<!-- Store (gun store / clothing) -->
+<div id="store" class="overlay hidden">
+  <h2 id="store-title">STORE</h2>
+  <div class="garage-cash">$<span id="store-cash">0</span></div>
+  <div id="store-list" class="garage-panel"></div>
+  <button id="store-close" class="mbtn primary">LEAVE STORE</button>
+</div>
+
 <div id="toast" class="hidden"></div>
 <div id="loading"><div class="spinner"></div><p>LOADING CITY…</p></div>
+</div><!-- /#app -->
 
 <script>
 window.__bootTimer = setTimeout(function(){

@@ -12,7 +12,12 @@ Open-world 3D driving game for mobile browsers. Built with Three.js — no app s
 - **Garage** — upgrade engine, turbo, tires, suspension, nitro (5 levels each), paint shop (8 colors), 3 wheel styles. Upgrades change real stats. Progress saved in localStorage
 - **Drag racing** — quarter-mile strip, Christmas-tree lights, reaction-time launch, 5-gear shift-timing minigame, AI opponent, cash payouts
 - **Multiplayer (not live yet)** — a Socket.io relay client is built in and will show other drivers in the same city, but no relay server is deployed yet, so the game runs fully solo. Deploy `server/` and set `MP_SERVER_URL` in `js/config.js` to turn it on
-- **Touch controls** — steer/gas/brake/nitro/handbrake buttons; keyboard on desktop (WASD, Space, Shift)
+- **On foot** — tap GET OUT to leave your car and walk the city (joystick + run), GET IN to drive again
+- **Stores** — LOCK & LOAD gun store (4 guns + ammo), THREADZ clothing (shirts, hats), AUTO SHOP (opens the garage). Walk into the glowing ring at the door
+- **Shooting range** — behind the gun store; knock down targets for cash
+- **Minimap** — north-up radar with store markers and your parked car
+- **Landscape on phones** — goes fullscreen + locks landscape where the browser allows (Android); otherwise the game rotates itself so it always plays sideways
+- **Touch controls** — steer/gas/brake/nitro/handbrake in the car; joystick/fire/run/weapon on foot. Desktop: WASD, Space (handbrake/fire), Shift (nitro/run), E (get in/out, shop), Q (switch gun)
 
 ## Run locally
 
@@ -48,6 +53,6 @@ Without the relay URL the game runs fully solo — multiplayer is purely additiv
 
 Three.js 0.160 (bundled, no CDN), vanilla JS modules, WebAudio procedural engine/skid sounds, InstancedMesh city (~12 draw calls), 30fps mobile target. No external 3D models or audio assets — everything is generated in code.
 
-## Phase 2 (planned)
+## Next up (ideas)
 
-On-foot mode, GTA-style: walk around the city, enter/exit cars, guns. Not built yet.
+Pedestrians and traffic, stealing other cars, wanted level / police.

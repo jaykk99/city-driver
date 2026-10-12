@@ -1,11 +1,15 @@
 // Touch + keyboard input for CITY DRIVER. Single shared `input` object —
 // the game loop reads it every frame; no per-frame allocations here.
 
-export function createControls(){
-  const input = { throttle:0, steer:0, handbrake:false, nitro:false };
-  const held = { left:false, right:false, gas:false, brake:false, nitro:false, handbrake:false };
-  let mode = 'drive';
-  let shiftQueued = false;
+// opts.isRotated(): true when the page is CSS-rotated into landscape, so
+// joystick deltas can be mapped from screen space back into game space.
+export function createControls(opts = {}){
+  const isRotated = opts.isRotated || (() => false);
+  const input = { throttle:0, steer:0, handbrake:false, nitro:false, moveX:0, moveY:0, run:false, fire:false };
+  const held = { left:false, right:false, gas:false, brake:false, nitro:false, handbrake:false, fire:false, run:false };
+  const joy = { x:0, y:0, id:null };
+  let mode = 'drive';          // drive | drag | foot
+  let shiftQueued = false, actionQueued = false, cycleQueued = false, fireEdge = false;
   let attached = false;
   const unbind = [];
 
@@ -16,6 +20,71 @@ export function createControls(){
     input.throttle = held.gas ? 1 : (held.brake ? -1 : 0);
     input.nitro = held.nitro;
     input.handbrake = held.handbrake;
+    // on foot: joystick wins, keyboard fills in
+    const kx = (held.right ? 1 : 0) - (held.left ? 1 : 0);
+    const ky = (held.gas ? 1 : 0) - (held.brake ? 1 : 0);
+    input.moveX = joy.id !== null ? joy.x : kx;
+    input.moveY = joy.id !== null ? joy.y : ky;
+    input.run = held.run || held.nitro || (joy.id !== null && Math.hypot(joy.x, joy.y) > 0.92);
+    input.fire = held.fire;
+  }
+
+  // virtual joystick (foot mode). Knob travel radius in px.
+  function bindJoystick(base, knob){
+    if(!base) return;
+    const RAD = 44;
+    const move = e => {
+      if(e.pointerId !== joy.id) return;
+      const r = base.getBoundingClientRect();
+      let sx = e.clientX - (r.left + r.width / 2), sy = e.clientY - (r.top + r.height / 2);
+      // screen -> game space when the whole page is rotated 90deg clockwise
+      let dx = sx, dy = sy;
+      if(isRotated()){ dx = sy; dy = -sx; }
+      const len = Math.hypot(dx, dy), cl = Math.min(len, RAD);
+      if(len > 0){ dx = dx / len * cl; dy = dy / len * cl; }
+      knob.style.transform = `translate(${dx}px, ${dy}px)`;
+      const dead = 0.12;
+      let nx = dx / RAD, ny = -dy / RAD;
+      if(Math.hypot(nx, ny) < dead){ nx = 0; ny = 0; }
+      joy.x = nx; joy.y = ny; sync();
+    };
+    const down = e => {
+      e.preventDefault();
+      if(joy.id !== null) return;
+      joy.id = e.pointerId;
+      try{ base.setPointerCapture(e.pointerId); }catch(_){}
+      move(e);
+    };
+    const up = e => {
+      if(e.pointerId !== joy.id) return;
+      joy.id = null; joy.x = 0; joy.y = 0;
+      knob.style.transform = 'translate(0px, 0px)';
+      sync();
+    };
+    base.addEventListener('pointerdown', down);
+    base.addEventListener('pointermove', move);
+    base.addEventListener('pointerup', up);
+    base.addEventListener('pointercancel', up);
+    unbind.push(() => {
+      base.removeEventListener('pointerdown', down);
+      base.removeEventListener('pointermove', move);
+      base.removeEventListener('pointerup', up);
+      base.removeEventListener('pointercancel', up);
+    });
+  }
+
+  function bindTap(el, fn){
+    if(!el) return;
+    const on = e => { e.preventDefault(); e.stopPropagation(); fn(); el.classList.add('pressed'); };
+    const off = () => el.classList.remove('pressed');
+    el.addEventListener('pointerdown', on);
+    el.addEventListener('pointerup', off);
+    el.addEventListener('pointerleave', off);
+    unbind.push(() => {
+      el.removeEventListener('pointerdown', on);
+      el.removeEventListener('pointerup', off);
+      el.removeEventListener('pointerleave', off);
+    });
   }
 
   // press-and-hold binding; multi-touch safe via press counter
@@ -25,6 +94,7 @@ export function createControls(){
     const on = e => {
       e.preventDefault();
       presses++;
+      if(key === 'fire' && !held.fire) fireEdge = true;
       held[key] = true; sync();
       el.classList.add('pressed');
     };
@@ -80,26 +150,35 @@ export function createControls(){
       e.preventDefault();
       if(e.repeat) return;
       if(mode === 'drag') shiftQueued = true;   // edge-triggered via consumeShift()
+      else if(mode === 'foot'){ if(!held.fire) fireEdge = true; held.fire = true; sync(); }
       else { held.handbrake = true; sync(); }
       return;
     }
+    if(k === 'e' || k === 'E' || k === 'Enter'){ if(!e.repeat) actionQueued = true; return; }
+    if(k === 'q' || k === 'Q'){ if(!e.repeat) cycleQueued = true; return; }
     if(k === 'Shift' || k === 'f' || k === 'F'){ held.nitro = true; sync(); }
   }
   function onKeyUp(e){
     const k = e.key;
     const mapped = KEYMAP[k];
     if(mapped){ held[mapped] = false; sync(); return; }
-    if(k === ' '){ held.handbrake = false; sync(); return; }
+    if(k === ' '){ held.handbrake = false; held.fire = false; sync(); return; }
     if(k === 'Shift' || k === 'f' || k === 'F'){ held.nitro = false; sync(); }
   }
 
   function setMode(m){
-    mode = (m === 'drag') ? 'drag' : 'drive';
-    const steerZone = $('steer-zone');
-    const shiftBtn = $('btn-shift');
-    if(steerZone) steerZone.style.display = mode === 'drag' ? 'none' : '';
-    if(shiftBtn) shiftBtn.style.display = mode === 'drag' ? '' : 'none';
-    if(mode !== 'drag'){ held.left = held.right = false; sync(); }
+    mode = (m === 'drag' || m === 'foot') ? m : 'drive';
+    const show = (id, on) => { const el = $(id); if(el) el.style.display = on ? '' : 'none'; };
+    show('steer-zone', mode === 'drive');
+    show('pedal-zone', mode !== 'foot');
+    show('btn-shift', mode === 'drag');
+    show('joystick', mode === 'foot');
+    show('foot-zone', mode === 'foot');
+    for(const k in held) held[k] = false;
+    joy.id = null; joy.x = 0; joy.y = 0;
+    const knob = $('joy-knob'); if(knob) knob.style.transform = 'translate(0px, 0px)';
+    for(const b of document.querySelectorAll('#touch-controls .pressed')) b.classList.remove('pressed');
+    sync();
   }
 
   function attach(){
@@ -112,6 +191,11 @@ export function createControls(){
     bindHold($('btn-nitro'), 'nitro');
     bindHold($('btn-handbrake'), 'handbrake');
     bindShiftButton($('btn-shift'));
+    bindHold($('btn-fire'), 'fire');
+    bindHold($('btn-run'), 'run');
+    bindJoystick($('joystick'), $('joy-knob'));
+    bindTap($('btn-action'), () => { actionQueued = true; });
+    bindTap($('btn-weapon'), () => { cycleQueued = true; });
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
     unbind.push(() => {
@@ -128,7 +212,8 @@ export function createControls(){
     for(const fn of unbind) fn();
     unbind.length = 0;
     for(const k in held) held[k] = false;
-    shiftQueued = false;
+    shiftQueued = actionQueued = cycleQueued = fireEdge = false;
+    joy.id = null; joy.x = joy.y = 0;
     sync();
     attached = false;
   }
@@ -139,5 +224,12 @@ export function createControls(){
     return q;
   }
 
-  return { input, consumeShift, setMode, attach, detach };
+  const take = name => () => { let v; switch(name){
+    case 'action': v = actionQueued; actionQueued = false; return v;
+    case 'cycle':  v = cycleQueued;  cycleQueued = false;  return v;
+    case 'fire':   v = fireEdge;     fireEdge = false;     return v;
+  } };
+
+  return { input, consumeShift, consumeAction:take('action'), consumeCycle:take('cycle'),
+    consumeFireEdge:take('fire'), setMode, attach, detach, get mode(){ return mode; } };
 }

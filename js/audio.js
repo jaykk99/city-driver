@@ -3,7 +3,7 @@
 export function createAudio(){
   let ctx=null, master=null;
   let engOsc=null, engOsc2=null, engFilter=null, engGain=null;
-  let skidGain=null;
+  let skidGain=null, noiseBuf=null;
   let started=false, gestured=false; // never create AudioContext before a user gesture (autoplay policy)
 
   function ensure(){
@@ -30,6 +30,7 @@ export function createAudio(){
     const buf = ctx.createBuffer(1, len, ctx.sampleRate);
     const d = buf.getChannelData(0);
     for(let i=0;i<len;i++) d[i]=Math.random()*2-1;
+    noiseBuf = buf;
     const src = ctx.createBufferSource(); src.buffer=buf; src.loop=true;
     const bp = ctx.createBiquadFilter(); bp.type='bandpass';
     bp.frequency.value=900; bp.Q.value=1.1;
@@ -76,10 +77,25 @@ export function createAudio(){
       o.connect(g); g.connect(master);
       o.start(t); o.stop(t+dur+0.03);
     },
+    // gunshot: noise burst through a lowpass, plus a low thump
+    shot(kind='pistol'){
+      if(!gestured || !ensure()) return;
+      const t=ctx.currentTime;
+      const P = { pistol:[2600,0.16,0.5], shotgun:[1400,0.32,0.75], smg:[3000,0.09,0.35], rifle:[2200,0.2,0.55] }[kind] || [2600,0.16,0.5];
+      const src=ctx.createBufferSource(); src.buffer=noiseBuf;
+      const f=ctx.createBiquadFilter(); f.type='lowpass'; f.frequency.setValueAtTime(P[0],t); f.frequency.exponentialRampToValueAtTime(300,t+P[1]);
+      const g=ctx.createGain(); g.gain.setValueAtTime(P[2],t); g.gain.exponentialRampToValueAtTime(0.0001,t+P[1]);
+      src.connect(f); f.connect(g); g.connect(master);
+      src.start(t, Math.random()*0.5); src.stop(t+P[1]+0.02);
+      const o=ctx.createOscillator(); o.type='sine'; o.frequency.setValueAtTime(140,t); o.frequency.exponentialRampToValueAtTime(40,t+0.12);
+      const og=ctx.createGain(); og.gain.setValueAtTime(P[2]*0.8,t); og.gain.exponentialRampToValueAtTime(0.0001,t+0.14);
+      o.connect(og); og.connect(master); o.start(t); o.stop(t+0.16);
+    },
+    click(){ this.beep(1800, 0.03); },
     shutdown(){
       if(ctx){ try{ ctx.close(); }catch(e){} }
       ctx=null; master=null; started=false;
-      engOsc=engOsc2=engFilter=engGain=skidGain=null;
+      engOsc=engOsc2=engFilter=engGain=skidGain=noiseBuf=null;
     }
   };
 }
