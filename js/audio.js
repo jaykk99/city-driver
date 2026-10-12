@@ -2,7 +2,9 @@
 // All nodes are created once in unlock(); per-frame calls only set values (no allocs).
 export function createAudio(){
   let ctx=null, master=null;
-  let engOsc=null, engOsc2=null, engFilter=null, engGain=null;
+  let engOsc=null, engOsc2=null, engOsc3=null, engFilter=null, engGain=null, engWhine=null;
+  let pulseWave=null, lfo=null, lfoGain=null, shaper=null, drive=null, intakeBP=null, intakeGain=null;
+  let lastLoad=0, lastRpm=0, popCool=0, cyl=8, idleRpm=850, redRpm=7000;
   let skidGain=null, noiseBuf=null;
   let started=false, gestured=false; // never create AudioContext before a user gesture (autoplay policy)
 
@@ -15,15 +17,40 @@ export function createAudio(){
     master.gain.value = 0.5;
     master.connect(ctx.destination);
 
-    // engine: detuned saw + sub square -> lowpass -> gain
-    engOsc = ctx.createOscillator(); engOsc.type='sawtooth'; engOsc.frequency.value=70;
-    engOsc2 = ctx.createOscillator(); engOsc2.type='square'; engOsc2.frequency.value=38;
-    engFilter = ctx.createBiquadFilter(); engFilter.type='lowpass';
-    engFilter.frequency.value=400; engFilter.Q.value=2;
-    engGain = ctx.createGain(); engGain.gain.value=0;
-    engOsc.connect(engFilter); engOsc2.connect(engFilter);
-    engFilter.connect(engGain); engGain.connect(master);
-    engOsc.start(); engOsc2.start();
+    // engine: combustion-pulse oscillator (custom harmonics) + crank rumble +
+    // intake noise, through soft-clip "grit" and a load-dependent lowpass.
+    const real = new Float32Array(32), imag = new Float32Array(32);
+    for(let n = 1; n < 32; n++){
+      // strong low harmonics, odd/even mix, a resonant bump around 5-8 (exhaust note)
+      const bump = Math.exp(-Math.pow((n - 6) / 2.5, 2)) * 0.6;
+      imag[n] = (1 / Math.pow(n, 0.9)) * (n % 2 ? 1 : 0.65) + bump / n;
+    }
+    pulseWave = ctx.createPeriodicWave(real, imag);
+    engOsc = ctx.createOscillator(); engOsc.setPeriodicWave(pulseWave); engOsc.frequency.value = 50;
+    engOsc2 = ctx.createOscillator(); engOsc2.type = 'sawtooth'; engOsc2.frequency.value = 25;    // crank / half-order rumble
+    engOsc3 = ctx.createOscillator(); engOsc3.type = 'triangle'; engOsc3.frequency.value = 100;  // upper whine
+    const g1 = ctx.createGain(); g1.gain.value = 0.55;
+    const g2 = ctx.createGain(); g2.gain.value = 0.35;
+    engWhine = ctx.createGain(); engWhine.gain.value = 0.05;
+    // lope: amplitude wobble at half the firing rate (cam feel)
+    lfo = ctx.createOscillator(); lfo.frequency.value = 12;
+    lfoGain = ctx.createGain(); lfoGain.gain.value = 0.18;
+    const am = ctx.createGain(); am.gain.value = 0.82;
+    lfo.connect(lfoGain); lfoGain.connect(am.gain);
+    engOsc.connect(g1); engOsc2.connect(g2); engOsc3.connect(engWhine);
+    g1.connect(am); g2.connect(am); engWhine.connect(am);
+    // grit
+    shaper = ctx.createWaveShaper();
+    const curve = new Float32Array(1024);
+    for(let i = 0; i < 1024; i++){ const x = i / 512 - 1; curve[i] = Math.tanh(x * 2.4); }
+    shaper.curve = curve; shaper.oversample = '2x';
+    drive = ctx.createGain(); drive.gain.value = 1;
+    am.connect(drive); drive.connect(shaper);
+    engFilter = ctx.createBiquadFilter(); engFilter.type = 'lowpass'; engFilter.frequency.value = 600; engFilter.Q.value = 1.2;
+    const body = ctx.createBiquadFilter(); body.type = 'peaking'; body.frequency.value = 160; body.gain.value = 6; body.Q.value = 0.9;
+    engGain = ctx.createGain(); engGain.gain.value = 0;
+    shaper.connect(engFilter); engFilter.connect(body); body.connect(engGain); engGain.connect(master);
+    engOsc.start(); engOsc2.start(); engOsc3.start(); lfo.start();
 
     // skid: looped noise buffer -> bandpass -> gain
     const len = ctx.sampleRate;
@@ -37,7 +64,22 @@ export function createAudio(){
     skidGain = ctx.createGain(); skidGain.gain.value=0;
     src.connect(bp); bp.connect(skidGain); skidGain.connect(master);
     src.start();
+    // intake / induction roar: noise -> bandpass that tracks rpm
+    const isrc = ctx.createBufferSource(); isrc.buffer = buf; isrc.loop = true;
+    intakeBP = ctx.createBiquadFilter(); intakeBP.type = 'bandpass'; intakeBP.frequency.value = 700; intakeBP.Q.value = 0.8;
+    intakeGain = ctx.createGain(); intakeGain.gain.value = 0;
+    isrc.connect(intakeBP); intakeBP.connect(intakeGain); intakeGain.connect(master);
+    isrc.start(0, 0.37);
     return true;
+  }
+
+  function crackle(t){
+    if(!noiseBuf) return;
+    const src = ctx.createBufferSource(); src.buffer = noiseBuf;
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 600 + Math.random() * 900; f.Q.value = 2;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.35, t + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+    src.connect(f); f.connect(g); g.connect(master);
+    src.start(t, Math.random() * 0.8); src.stop(t + 0.07);
   }
 
   return {
@@ -48,17 +90,44 @@ export function createAudio(){
       if(ctx.state==='suspended') ctx.resume();
       started=true;
     },
-    // rpm01: 0..1 engine revs, load01: 0..1 throttle — call every frame while driving
-    engine(rpm01, load01){
+    // engine character for the current car: cylinders, idle and redline rpm
+    setEngine(o){ cyl = o.cyl || 8; idleRpm = o.idle || 850; redRpm = o.red || 7000; },
+    // rpm01: 0..1 between idle and redline, load01: 0..1 throttle — call every frame while driving
+    engine(rpm01, load01, shifting){
       if(!ctx || !started) return;
-      const rpm = Math.max(0, Math.min(1, rpm01));
+      const r = Math.max(0, Math.min(1.04, rpm01));
       const load = Math.max(0, Math.min(1, load01));
       const t = ctx.currentTime;
-      const f = 60 + rpm*220;
-      engOsc.frequency.setTargetAtTime(f, t, 0.03);
-      engOsc2.frequency.setTargetAtTime(f*0.5+3, t, 0.03);
-      engFilter.frequency.setTargetAtTime(300 + rpm*900, t, 0.05);
-      engGain.gain.setTargetAtTime(load*0.11 + rpm*0.04, t, 0.06);
+      if(r < 0.001 && load < 0.001){ engGain.gain.setTargetAtTime(0, t, 0.08); intakeGain.gain.setTargetAtTime(0, t, 0.08); lastRpm = 0; return; }
+      const rpm = idleRpm + (redRpm - idleRpm) * r;
+      const fire = rpm / 60 * cyl / 2;                     // firing frequency (Hz)
+      engOsc.frequency.setTargetAtTime(fire, t, 0.025);
+      engOsc2.frequency.setTargetAtTime(fire / 2, t, 0.025);
+      engOsc3.frequency.setTargetAtTime(fire * 3.01, t, 0.025);
+      lfo.frequency.setTargetAtTime(Math.max(4, fire / (cyl >= 8 ? 4 : 2)), t, 0.05);
+      lfoGain.gain.setTargetAtTime((cyl >= 8 ? 0.22 : 0.1) * (1 - r * 0.7), t, 0.05);
+      drive.gain.setTargetAtTime(0.8 + load * 2.2 + r * 0.6, t, 0.05);
+      engFilter.frequency.setTargetAtTime(380 + r * 2600 * (0.45 + load * 0.55), t, 0.04);
+      engWhine.gain.setTargetAtTime(0.03 + r * r * 0.12, t, 0.05);
+      const vol = (0.07 + load * 0.08 + r * 0.06) * (shifting ? 0.45 : 1);
+      engGain.gain.setTargetAtTime(vol, t, shifting ? 0.015 : 0.05);
+      intakeBP.frequency.setTargetAtTime(500 + r * 2400, t, 0.05);
+      intakeGain.gain.setTargetAtTime(load * (0.015 + r * 0.05), t, 0.06);
+      // exhaust crackles when you lift off at high revs
+      popCool -= 1 / 60;
+      if(lastLoad > 0.6 && load < 0.1 && r > 0.45) popCool = Math.min(popCool, -0.6);
+      if(popCool < -0.01 && load < 0.15 && r > 0.3 && Math.random() < 0.18){ crackle(t); }
+      if(popCool < -0.01) popCool += 1 / 60 * 0.5; else popCool = Math.max(popCool, 0);
+      lastLoad = load; lastRpm = r;
+    },
+    // sharp gear-change "blip"
+    shiftBlip(up){
+      if(!ctx || !started) return;
+      const t = ctx.currentTime;
+      engGain.gain.cancelScheduledValues(t);
+      engGain.gain.setValueAtTime(engGain.gain.value, t);
+      engGain.gain.linearRampToValueAtTime(engGain.gain.value * 0.35, t + 0.04);
+      if(up) crackle(t + 0.05);
     },
     skid(on){
       if(!ctx || !started) return;
@@ -81,7 +150,8 @@ export function createAudio(){
     shot(kind='pistol'){
       if(!gestured || !ensure()) return;
       const t=ctx.currentTime;
-      const P = { pistol:[2600,0.16,0.5], shotgun:[1400,0.32,0.75], smg:[3000,0.09,0.35], rifle:[2200,0.2,0.55] }[kind] || [2600,0.16,0.5];
+      const P = { pistol:[2600,0.16,0.5], glock:[2900,0.14,0.48], deagle:[1800,0.3,0.8], shotgun:[1400,0.32,0.75], smg:[3000,0.09,0.35],
+        ak:[2000,0.22,0.62], rifle:[2200,0.2,0.55], sniper:[1500,0.45,0.9], minigun:[3200,0.06,0.3] }[kind] || [2600,0.16,0.5];
       const src=ctx.createBufferSource(); src.buffer=noiseBuf;
       const f=ctx.createBiquadFilter(); f.type='lowpass'; f.frequency.setValueAtTime(P[0],t); f.frequency.exponentialRampToValueAtTime(300,t+P[1]);
       const g=ctx.createGain(); g.gain.setValueAtTime(P[2],t); g.gain.exponentialRampToValueAtTime(0.0001,t+P[1]);
@@ -95,7 +165,7 @@ export function createAudio(){
     shutdown(){
       if(ctx){ try{ ctx.close(); }catch(e){} }
       ctx=null; master=null; started=false;
-      engOsc=engOsc2=engFilter=engGain=skidGain=noiseBuf=null;
+      engOsc=engOsc2=engOsc3=engFilter=engGain=skidGain=noiseBuf=null;
     }
   };
 }

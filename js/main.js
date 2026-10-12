@@ -50,7 +50,17 @@ let tutorial=null, pickOpen=false;
 let blood=null, people=null, traffic=null, trafficHits=null;
 let hp=100, dead=false, deadT=0, hurtFlash=0;
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true};
-let missions=null, boardOpen=false;
+let missions=null, boardOpen=false, lastGear=0;
+// engine character per car: cylinders, idle, redline
+const ENGINES={ sport:{cyl:6,red:7200}, muscle:{cyl:8,red:6200,idle:750}, super:{cyl:10,red:8500}, suv:{cyl:6,red:6000},
+  truck:{cyl:8,red:5600,idle:700}, track:{cyl:4,red:8800,idle:1100}, sedan:{cyl:4,red:6500}, taxi:{cyl:4,red:6200},
+  van:{cyl:6,red:5500,idle:700}, police:{cyl:8,red:6600,idle:800}, hyper:{cyl:12,red:9000,idle:1000} };
+function applyGearbox(){
+  if(physics && physics.box) physics.box.mode = save.manual ? 'manual' : 'auto';
+  const t=save.manual?'⚙️ GEARBOX: MANUAL':'⚙️ GEARBOX: AUTO';
+  for(const id of ['m-trans','p-trans']){ const b=$(id); if(b) b.textContent=t; }
+  const gb=$('gear-btns'); if(gb) gb.classList.toggle('hidden', !save.manual);
+}
 let stolenCar=null, lockTarget=null;
 const lootedAt=new Map();     // building id -> time it was emptied (loot comes back after 8 min)
 const _proj=new THREE.Vector3();
@@ -107,6 +117,7 @@ function rebuildCar(){
   scene.add(carGroup);
   lookCache=null;
   carStats=effectiveStats(carDef, stolenCar ? {} : (save.upgrades[carDef.id]||{}));
+  if(audio && audio.setEngine) audio.setEngine(ENGINES[carDef.id]||{cyl:6});
   allWheels=(carGroup.userData.wheels||[]).slice();
   frontWheels=allWheels.filter(w=>w.position.z<0);
   brakeMats=carGroup.userData.brakeMats||[];
@@ -765,7 +776,9 @@ function gearFor(mph){
 function updateHUD(){
   const mph=Math.abs(tele.speed)*2.2;
   $('speed-val').textContent=Math.round(mph);
-  $('gear-hud').textContent=gearFor(mph);
+  $('gear-hud').textContent=(tele.reverse?'R':mph<1&&!save.manual?'N':String(tele.gear||1))+(save.manual?' M':'');
+  const tf=$('tach-fill');
+  if(tf){ tf.style.width=(Math.min(1,tele.rpm||0)*100).toFixed(1)+'%'; tf.classList.toggle('red', (tele.rpm||0)>0.9); }
   $('nitro-fill').style.width=(Math.max(0,Math.min(1,tele.nitroFrac))*100).toFixed(1)+'%';
 }
 
@@ -1138,7 +1151,12 @@ function frame(now){
     if(controls.consumeAction()) doAction();
     if(qm) qm.update(dt);
     const rpm=Math.min(1, Math.abs(tele.speed)/(carStats.topSpeed*1.15));
-    audio.engine(rpm, Math.abs(controls.input.throttle||0));
+    audio.engine(tele.rpm, Math.max(0, controls.input.throttle||0), tele.shifting);
+    if(tele.gear!==lastGear){ if(lastGear) audio.shiftBlip(tele.gear>lastGear); lastGear=tele.gear; }
+    if(save.manual){
+      if(controls.consumeGearUp()) physics.box.shift(1);
+      if(controls.consumeGearDown()) physics.box.shift(-1);
+    }else{ controls.consumeGearUp(); controls.consumeGearDown(); }
     audio.skid(tele.drifting);
   }else if(state==='drag' && !paused && !garageOpen && !editorOpen){
     if(dragMode.active) dragMode.update(dt);
@@ -1218,6 +1236,9 @@ function wireUI(){
     $('objective').classList.add('hidden');
     toast('Tutorial skipped — replay it from the main menu for $100K', 2600);
   };
+  const toggleTrans=()=>{ save.manual=!save.manual; saveSave(save); applyGearbox(); audio.beep(600,0.05);
+    toast(save.manual?'Manual: shift with ▲/▼ GEAR (G / B keys). Watch the rev bar!':'Automatic gearbox', 2600); };
+  $('m-trans').onclick=toggleTrans; $('p-trans').onclick=toggleTrans;
   $('mission-btn').onclick=()=>{ audio.beep(650,0.05); openBoard(); };
   $('mb-start').onclick=()=>startMission();
   $('mb-close').onclick=()=>{ audio.beep(500,0.05); closeBoard(); };
@@ -1302,6 +1323,7 @@ async function boot(){
       cam:()=>({c:camera.position.toArray().map(v=>+v.toFixed(2)), p:person.position.toArray().map(v=>+v.toFixed(2)), pv:person.visible, f:[foot.pos.x,foot.pos.z,foot.heading]}) };
     rebuildCar();
     physics=new CarPhysics(carStats);
+    applyGearbox();
     placeAtSpawn();
     garage=createGarage({
       save,

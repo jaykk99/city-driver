@@ -1,4 +1,46 @@
 // Arcade car physics: simple, fun, driftable. Units: meters, seconds.
+// Includes a 6-speed gearbox (auto or manual) that drives RPM, torque and the
+// engine sound: each gear has its own top speed, a torque curve, and a rev limiter.
+
+export const GEAR_SPLIT = [0, 0.24, 0.40, 0.55, 0.70, 0.85, 1.0];   // fraction of top speed per gear (1..6)
+export class Gearbox {
+  constructor(){ this.mode = 'auto'; this.reset(); }
+  reset(){ this.gear = 1; this.rpm = 0; this.shiftT = 0; this.limiter = false; this.reverse = false; this.lastShift = 0; }
+  gearTop(top, g = this.gear){ return top * GEAR_SPLIT[g]; }
+  // rpm 0..1 for a speed in a gear (with clutch slip at very low speed)
+  rpmFor(speed, top, g, throttle){
+    const v = Math.abs(speed), gt = this.gearTop(top, g), lowGt = g > 1 ? this.gearTop(top, g - 1) : 0;
+    let r = (v - lowGt * 0.35) / (gt - lowGt * 0.35);
+    if(g === 1) r = v / gt;
+    const slip = Math.max(0, 0.32 * throttle * (1 - v / Math.max(1, gt * 0.5)));
+    return Math.max(0, Math.min(1.04, Math.max(r, slip)));
+  }
+  shift(d){
+    const g = Math.max(1, Math.min(6, this.gear + d));
+    if(g === this.gear) return false;
+    this.gear = g; this.shiftT = 0.2; this.lastShift = d;
+    return true;
+  }
+  // returns a torque multiplier for the current state (0 while shifting / bouncing off the limiter)
+  update(speed, throttle, top, dt){
+    this.shiftT = Math.max(0, this.shiftT - dt);
+    this.reverse = speed < -0.5;
+    if(this.reverse){ this.gear = 1; }
+    let r = this.rpmFor(speed, top, this.gear, Math.max(0, throttle));
+    if(this.mode === 'auto' && !this.reverse && this.shiftT <= 0){
+      if(r > 0.93 && this.gear < 6 && throttle > 0.1){ this.shift(1); }
+      else if(this.gear > 1 && this.rpmFor(speed, top, this.gear - 1, 0) < 0.72 && (r < 0.4 || throttle < 0)){ this.shift(-1); }
+      r = this.rpmFor(speed, top, this.gear, Math.max(0, throttle));
+    }
+    this.limiter = r >= 1.0 && throttle > 0;
+    this.rpm += (r - this.rpm) * Math.min(1, dt * (this.shiftT > 0 ? 25 : 14));
+    if(this.shiftT > 0) return 0.15;
+    if(this.limiter) return 0;
+    // torque curve: pulls hardest around 60-80% of the rev range, lower gears multiply it
+    const tq = 0.62 + 0.5 * Math.sin(Math.PI * Math.min(1, 0.18 + r * 0.82));
+    return tq * (1.22 - (this.gear - 1) * 0.07);
+  }
+}
 // topSpeed in m/s-ish (def values ~44-68 map to displayed MPH via *2.2).
 
 export class CarPhysics {
@@ -16,6 +58,8 @@ export class CarPhysics {
     this.nitroActive = false;
     this.drifting = false;
     this.wheelSpin = 0;
+    if(!this.box) this.box = new Gearbox();
+    this.box.reset();
   }
   // input: {throttle:-1..1, steer:-1..1, handbrake:bool, nitro:bool}
   // dt seconds. Returns telemetry.
@@ -40,14 +84,18 @@ export class CarPhysics {
     const hb = !!input.handbrake;
     let a = 0;
     const driveMul = hb ? 0.25 : 1; // handbrake cuts drive
-    if(input.throttle>0) a = input.throttle * s.accel * nitroMul * driveMul * (1 - Math.max(0,fSpeed)/(s.topSpeed*nitroMul)*0.72);
+    const gearMul = this.box.update(fSpeed, input.throttle||0, s.topSpeed*nitroMul, dt);
+    if(input.throttle>0) a = input.throttle * s.accel * nitroMul * driveMul * gearMul * (1 - Math.max(0,fSpeed)/(s.topSpeed*nitroMul)*0.55);
     else if(input.throttle<0){
       a = fSpeed > 1 ? input.throttle * s.accel*1.6 : input.throttle * s.accel*0.5; // brake vs reverse
     }
     // drag + rolling resistance (extra scrub with handbrake)
     a -= fSpeed * (0.028 + (hb?0.06:0)) + Math.sign(fSpeed)*0.6;
     fSpeed += a*dt;
+    // manual: the current gear caps your speed (rev limiter)
+    const gearCap = this.box.mode === 'manual' ? this.box.gearTop(s.topSpeed*nitroMul) * 1.02 : Infinity;
     const maxF = s.topSpeed*nitroMul, maxR = -s.topSpeed*0.35;
+    if(fSpeed > gearCap) fSpeed -= (fSpeed - gearCap) * Math.min(1, dt * 1.8);   // engine braking after a downshift
     fSpeed = Math.max(maxR, Math.min(maxF, fSpeed));
     if(Math.abs(fSpeed)<0.15 && !input.throttle) fSpeed = 0;
 
@@ -87,6 +135,7 @@ export class CarPhysics {
     return {
       speed: fSpeed, drifting: this.drifting, nitro: this.nitroActive,
       nitroFrac: this.nitroLeft/s.nitroTime, steer: this.steer,
+      gear: this.box.gear, rpm: this.box.rpm, shifting: this.box.shiftT > 0, limiter: this.box.limiter, reverse: this.box.reverse,
     };
   }
 }
