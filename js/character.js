@@ -42,22 +42,46 @@ function buildGun(id){
   return g;
 }
 
-function buildHat(id, shirtHex){
+function buildHat(id, hatHex){
+  if(id === 'crown'){
+    const g = new THREE.Group();
+    const mat = new THREE.MeshStandardMaterial({ color:0xffd23f, metalness:1, roughness:0.25, emissive:0x3a2a00 });
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.09, 16, 1, true), mat);
+    band.material.side = THREE.DoubleSide; band.position.y = 0.02; g.add(band);
+    for(let i = 0; i < 6; i++){
+      const a = i / 6 * Math.PI * 2;
+      const sp = new THREE.Mesh(new THREE.ConeGeometry(0.035, 0.09, 4), mat);
+      sp.position.set(Math.cos(a) * 0.155, 0.1, Math.sin(a) * 0.155); g.add(sp);
+      const gem = new THREE.Mesh(new THREE.SphereGeometry(0.018, 6, 6), new THREE.MeshStandardMaterial({ color:hatHex, emissive:hatHex, emissiveIntensity:0.6 }));
+      gem.position.set(Math.cos(a + 0.5) * 0.162, 0.02, Math.sin(a + 0.5) * 0.162); g.add(gem);
+    }
+    return g;
+  }
+  if(id === 'helmet'){
+    const g = new THREE.Group();
+    const mat = new THREE.MeshPhysicalMaterial({ color:hatHex, metalness:0.4, roughness:0.25, clearcoat:1 });
+    const shell = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 12, 0, Math.PI*2, 0, Math.PI/1.7), mat);
+    shell.position.y = -0.06; g.add(shell);
+    const visor = new THREE.Mesh(new THREE.SphereGeometry(0.205, 16, 8, Math.PI*1.2, Math.PI*0.6, Math.PI*0.35, Math.PI*0.25),
+      new THREE.MeshStandardMaterial({ color:0x0b0f1a, metalness:0.9, roughness:0.1 }));
+    visor.position.y = -0.06; g.add(visor);
+    return g;
+  }
   if(id === 'cap'){
     const g = new THREE.Group();
-    const mat = new THREE.MeshStandardMaterial({ color:shirtHex, roughness:0.7 });
+    const mat = new THREE.MeshStandardMaterial({ color:hatHex, roughness:0.7 });
     const dome = new THREE.Mesh(new THREE.SphereGeometry(0.155, 14, 8, 0, Math.PI*2, 0, Math.PI/2), mat);
     g.add(dome);
     const brim = box(0.24, 0.02, 0.14, mat); brim.position.set(0, 0.01, -0.15); g.add(brim);
     return g;
   }
   if(id === 'beanie'){
-    const mat = new THREE.MeshStandardMaterial({ color:0x22252b, roughness:0.95 });
+    const mat = new THREE.MeshStandardMaterial({ color:hatHex, roughness:0.95 });
     return new THREE.Mesh(new THREE.SphereGeometry(0.158, 14, 8, 0, Math.PI*2, 0, Math.PI/1.8), mat);
   }
   if(id === 'cowboy'){
     const g = new THREE.Group();
-    const mat = new THREE.MeshStandardMaterial({ color:0x8b5a2b, roughness:0.85 });
+    const mat = new THREE.MeshStandardMaterial({ color:hatHex, roughness:0.85 });
     const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.02, 20), mat);
     const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.15, 0.17, 14), mat);
     crown.position.y = 0.09;
@@ -69,7 +93,7 @@ function buildHat(id, shirtHex){
 
 export function buildCharacter(outfit){
   const root = new THREE.Group();
-  const skin = skinMat(), pants = pantsMat(), shoes = shoeMat();
+  const skin = skinMat(), pants = pantsMat(), shoes = shoeMat(), hairM = hairMat();
   const shirt = new THREE.MeshStandardMaterial({ color:outfit.shirt, roughness:0.8 });
 
   const legs = [], arms = [];
@@ -94,13 +118,13 @@ export function buildCharacter(outfit){
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.15, 16, 12), skin);
   head.position.y = 1.74; head.scale.set(1, 1.12, 1); head.castShadow = true;
   root.add(head);
-  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.155, 14, 8, 0, Math.PI*2, 0, Math.PI/2.2), hairMat());
+  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.155, 14, 8, 0, Math.PI*2, 0, Math.PI/2.2), hairM);
   hair.position.y = 1.76; root.add(hair);
 
   const hatSlot = new THREE.Group(); hatSlot.position.y = 1.8; root.add(hatSlot);
   const gunSlot = new THREE.Group(); gunSlot.position.y = -0.69; arms[1].add(gunSlot);  // right hand
 
-  root.userData = { legs, arms, shirt, hatSlot, gunSlot, gunId:null, hatId:null, recoil:0 };
+  root.userData = { legs, arms, shirt, skin, pants, hair:hairM, hatSlot, gunSlot, gunId:null, hatId:null, hatColor:null, recoil:0 };
   setOutfit(root, outfit);
   return root;
 }
@@ -108,12 +132,17 @@ export function buildCharacter(outfit){
 export function setOutfit(root, outfit){
   const u = root.userData;
   u.shirt.color.setHex(outfit.shirt);
-  if(u.hatId !== outfit.hat){
+  if(outfit.pants != null) u.pants.color.setHex(outfit.pants);
+  if(outfit.skin != null) u.skin.color.setHex(outfit.skin);
+  if(outfit.hair != null) u.hair.color.setHex(outfit.hair);
+  const hc = outfit.hatColor != null ? outfit.hatColor : outfit.shirt;
+  if(u.hatId !== outfit.hat || u.hatColor !== hc){
     u.hatSlot.clear();
-    const hat = buildHat(outfit.hat, outfit.shirt);
+    const hat = buildHat(outfit.hat, hc);
     if(hat) u.hatSlot.add(hat);
-    u.hatId = outfit.hat;
+    u.hatId = outfit.hat; u.hatColor = hc;
   }
+  u.hair.visible = outfit.hat !== 'helmet';
 }
 
 export function setHeldWeapon(root, id){

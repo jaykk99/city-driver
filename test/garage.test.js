@@ -19,8 +19,8 @@ before(async () => {
 
 describe('economy constants', () => {
   it('has the expected price points and caps', () => {
-    assert.equal(PAINT_COST, 250);
-    assert.equal(WHEEL_COST, 350);
+    assert.equal(PAINT_COST, 0, 'paint is free');
+    assert.equal(WHEEL_COST, 0, 'wheels are free');
     assert.equal(MAX_UPGRADE, 5);
   });
 

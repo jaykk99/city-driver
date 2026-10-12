@@ -9,7 +9,7 @@ export function createMinimap(canvas, stores){
   const k = (S / 2) / R;
   let frame = 0;
 
-  function draw(px, pz, heading, car){
+  function draw(px, pz, heading, car, mp){
     if((frame++ & 3) !== 0) return;        // every 4th frame is plenty
     const W = (x) => S / 2 + (x - px) * k;
     const H = (z) => S / 2 + (z - pz) * k;
@@ -45,6 +45,12 @@ export function createMinimap(canvas, stores){
       g.fillStyle = '#ffffff';
       g.fillRect(W(car.x) - 3, H(car.z) - 3, 6, 6);
     }
+    // other players (green dots; hidden while they're inside a building)
+    if(mp) mp.each(r => {
+      if(r.b >= 0) return;
+      g.fillStyle = '#4ade80'; g.strokeStyle = '#0b0f1a'; g.lineWidth = 1.5;
+      g.beginPath(); g.arc(W(r.x), H(r.z), 4, 0, Math.PI * 2); g.fill(); g.stroke();
+    });
     g.restore();
     // player arrow (always centered)
     g.save();

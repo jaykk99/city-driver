@@ -170,3 +170,46 @@ body.compact #drag-result h2{font-size:30px}
 body.compact .tbtn.steer{width:80px;height:80px}
 body.compact #btn-shift{bottom:calc(120px + env(safe-area-inset-bottom))}
 body.force-landscape #game-container canvas{touch-action:none}
+
+/* ---------- online badge ---------- */
+#online-hud{position:absolute;left:62px;top:calc(50px + env(safe-area-inset-top));font-size:12px;font-weight:800;color:#4ade80;background:rgba(10,14,30,.7);padding:5px 10px;border-radius:999px;border:1px solid rgba(74,222,128,.4)}
+#online-hud.dim{color:#94a3b8;border-color:rgba(148,163,184,.3)}
+.mbtn.gold{background:linear-gradient(135deg,#ffd23f,#ff8c1a);color:#2a1f00}
+
+/* ---------- tutorial objective ---------- */
+#objective{position:fixed;top:calc(10px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:36;background:rgba(10,14,30,.88);border:2px solid #4ade80;border-radius:16px;padding:8px 14px;min-width:260px;max-width:min(440px,70vw);pointer-events:auto;box-shadow:0 6px 24px rgba(0,0,0,.4)}
+.obj-top{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.obj-top b{font-size:11px;letter-spacing:2px;color:#4ade80}
+#obj-skip{border:none;background:rgba(255,255,255,.1);color:#cbd5e1;font-size:10px;font-weight:800;padding:4px 8px;border-radius:8px;cursor:pointer}
+.obj-main{display:flex;align-items:center;gap:10px;margin-top:4px;font-weight:800;font-size:15px}
+#obj-arrow{display:inline-block;font-size:20px;color:#4ade80;transition:transform .1s linear}
+#obj-dist{font-size:12px;color:#8fa3c8;margin-top:2px;min-height:14px}
+body.compact #objective{top:calc(6px + env(safe-area-inset-top));padding:6px 12px}
+body.compact .obj-main{font-size:13px}
+/* the objective sits where the compact action button lives — push the button down */
+body.compact #btn-action{top:auto;bottom:calc(120px + env(safe-area-inset-bottom))}
+
+/* ---------- skin editor: panel on the right, live 3D preview on the left ---------- */
+#skin-editor{position:fixed;inset:0;z-index:50;pointer-events:none;background:linear-gradient(90deg,rgba(6,10,22,0) 0%,rgba(6,10,22,0) 40%,rgba(6,10,22,.55) 55%)}
+.se-panel{position:absolute;right:0;top:0;bottom:0;width:min(440px,56%);pointer-events:auto;background:rgba(8,12,26,.94);border-left:1px solid #243055;display:flex;flex-direction:column;padding:14px 14px calc(14px + env(safe-area-inset-bottom))}
+.se-panel h2{font-size:20px;margin-bottom:8px}
+.se-panel h2 small{font-size:11px;color:#4ade80;letter-spacing:2px;margin-left:6px}
+.se-body{flex:1;overflow-y:auto;margin-bottom:10px;padding-right:4px}
+.se-body .style-sec{margin-bottom:12px}
+.se-row{gap:8px}
+.se-row .swatch{width:34px;height:34px;padding:0}
+.swatch.off{background:#141c36;color:#94a3b8;font-size:10px;font-weight:800;border-color:#243055}
+.swatch.off.sel{border-color:#fff;color:#fff}
+.swatch.custom{position:relative;display:flex;align-items:center;justify-content:center;font-size:16px;background:conic-gradient(#ff2e63,#ffd23f,#4ade80,#38bdf8,#a855f7,#ff2e63);overflow:hidden}
+.swatch.custom input{position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer;border:none;padding:0}
+.se-row .wheel-opt{padding:8px 12px;font-size:13px}
+.se-name{width:100%;padding:10px 12px;border-radius:10px;border:2px solid #243055;background:#141c36;color:#fff;font-size:16px;font-weight:700;user-select:text;-webkit-user-select:text}
+.se-name:focus{outline:none;border-color:#ff5e3a}
+#se-done{width:100%}
+body.compact .se-panel{padding:8px 10px}
+body.compact .se-panel h2{font-size:16px;margin-bottom:4px}
+
+/* ---------- car pick ---------- */
+#car-pick{z-index:55}
+.pick-sub{color:#cbd5e1;margin-bottom:10px}
+#car-pick .garage-cash{font-size:30px}

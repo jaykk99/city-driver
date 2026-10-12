@@ -24,6 +24,14 @@
   <div id="gfx-btn" title="Graphics quality">✨</div>
   <canvas id="minimap" width="132" height="132"></canvas>
   <div id="weapon-hud" class="hidden"><b id="weapon-name">UNARMED</b><span id="weapon-ammo"></span></div>
+  <div id="online-hud" class="dim">🌐 …</div>
+</div>
+
+<!-- Tutorial objective -->
+<div id="objective" class="hidden">
+  <div class="obj-top"><b id="obj-step">STEP 1/6</b><button id="obj-skip">SKIP</button></div>
+  <div class="obj-main"><span id="obj-arrow">▲</span><span id="obj-text">Drive to the green marker</span></div>
+  <div id="obj-dist"></div>
 </div>
 <button id="btn-action" class="hidden">🚪 GET OUT</button>
 
@@ -55,12 +63,14 @@
   <div id="mp-status" class="mp-status hidden">● offline</div>
   <!-- Online indicator: hidden unless a multiplayer relay URL is configured (js/config.js). -->
   <div class="menu-buttons">
-    <button id="m-freeroam" class="mbtn primary">🚗 FREE ROAM</button>
+    <button id="m-freeroam" class="mbtn primary">🚗 FREE ROAM · ONLINE</button>
+    <button id="m-tutorial" class="mbtn gold">🎓 TUTORIAL · WIN $100K + FREE CAR</button>
     <button id="m-drag" class="mbtn">🏁 DRAG RACE</button>
     <button id="m-garage" class="mbtn">🔧 GARAGE</button>
+    <button id="m-editor" class="mbtn">🎨 SKIN EDITOR · FREE</button>
   </div>
   <div class="menu-car-preview"><span id="menu-car-name">—</span></div>
-  <p class="hint">Desktop: WASD / arrows · Space = handbrake / fire · Shift = nitro / run · E = get in/out, shop · Q = switch gun</p>
+  <p class="hint">Desktop: WASD / arrows · Space = handbrake / fire · Shift = nitro / run · E = get in/out, enter buildings, shop · Q = switch gun</p>
 </div>
 
 <!-- Pause / mode menu -->
@@ -70,7 +80,8 @@
     <button id="p-resume" class="mbtn primary">▶ RESUME</button>
     <button id="p-drag" class="mbtn">🏁 DRAG RACE</button>
     <button id="p-garage" class="mbtn">🔧 GARAGE</button>
-    <button id="p-freeroam" class="mbtn">🚗 FREE ROAM</button>
+    <button id="p-editor" class="mbtn">🎨 SKIN EDITOR</button>
+    <button id="p-freeroam" class="mbtn">🚗 RESPAWN</button>
     <button id="p-quit" class="mbtn">🏠 MAIN MENU</button>
   </div>
 </div>
@@ -112,6 +123,27 @@
   <div class="garage-cash">$<span id="store-cash">0</span></div>
   <div id="store-list" class="garage-panel"></div>
   <button id="store-close" class="mbtn primary">LEAVE STORE</button>
+</div>
+
+<!-- Skin editor (everything free). Left side shows the live 3D preview. -->
+<div id="skin-editor" class="hidden">
+  <div class="se-panel">
+    <h2>🎨 SKIN EDITOR <small>ALL FREE</small></h2>
+    <div class="garage-tabs">
+      <button class="gtab setab active" data-tab="car">🚗 CAR</button>
+      <button class="gtab setab" data-tab="driver">🧍 DRIVER</button>
+    </div>
+    <div id="se-body" class="se-body"></div>
+    <button id="se-done" class="mbtn primary">DONE</button>
+  </div>
+</div>
+
+<!-- Pick a car (tutorial reward) -->
+<div id="car-pick" class="overlay hidden">
+  <h2>🏆 TUTORIAL COMPLETE</h2>
+  <div class="garage-cash">+$100,000</div>
+  <p class="pick-sub">Pick any car — it's yours, free.</p>
+  <div id="pick-list" class="garage-panel"></div>
 </div>
 
 <div id="toast" class="hidden"></div>

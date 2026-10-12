@@ -7,6 +7,7 @@ import * as THREE from 'three';
 // Conventions: +X east, +Z south. Car heading 0 = -Z (north), per js/physics.js.
 
 const SEED = 1337;
+let city_doorMat = null;
 
 // Layout constants
 const BLOCKS = 5;          // 5x5 blocks
@@ -217,6 +218,7 @@ export function buildCity(scene, reserved = []) {
   buildings.receiveShadow = true;
   const tint = new THREE.Color();
   const roofSpots = []; // {x,h,w,d} for rooftop props
+  const buildingInfo = []; // enterable buildings: box + front door
   let bi = 0;
   const inset = 4; // setback from block edge
   const PARK_BX = 0, PARK_BZ = 0; // corner block becomes the parking lot
@@ -253,6 +255,14 @@ export function buildCity(scene, reserved = []) {
         else tint.setRGB(v, v * 0.82, v * 0.74);                          // brick-ish
         buildings.setColorAt(bi, tint);
         roofSpots.push({ x: px, h, w, d, z: pz });
+        {
+          // front door on the face pointing away from the block centre (toward the street)
+          const ox = px - bcx, oz = pz - bcz;
+          let nx = 0, nz = 0;
+          if (Math.abs(ox) > Math.abs(oz)) nx = ox >= 0 ? 1 : -1; else nz = oz >= 0 ? 1 : -1;
+          const door = { x: px + nx * (w / 2), z: pz + nz * (d / 2), nx, nz };
+          buildingInfo.push({ id: buildingInfo.length, minX: px - w / 2, maxX: px + w / 2, minZ: pz - d / 2, maxZ: pz + d / 2, h, door });
+        }
         colliders.push({
           minX: px - w / 2, maxX: px + w / 2,
           minZ: pz - d / 2, maxZ: pz + d / 2,
@@ -265,6 +275,28 @@ export function buildCity(scene, reserved = []) {
   buildings.instanceMatrix.needsUpdate = true;
   if (buildings.instanceColor) buildings.instanceColor.needsUpdate = true;
   scene.add(buildings);
+
+  // ---------- front doors (instanced): every building can be entered ----------
+  {
+    const doorTex = makeCanvas(64, 96, (g, w, h) => {
+      g.fillStyle = '#20262f'; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#ffd98a'; g.fillRect(0, 0, w, 6); g.fillRect(0, 0, 5, h); g.fillRect(w - 5, 0, 5, h);
+      g.fillStyle = '#6fa8d8'; g.fillRect(9, 12, w / 2 - 12, h - 20); g.fillRect(w / 2 + 3, 12, w / 2 - 12, h - 20);
+      g.fillStyle = '#cfd3d8'; g.fillRect(w / 2 - 6, h / 2, 3, 10); g.fillRect(w / 2 + 3, h / 2, 3, 10);
+    });
+    const doorGeo = new THREE.PlaneGeometry(2.2, 3.0);
+    doorGeo.translate(0, 1.5, 0);
+    const doorMat = new THREE.MeshStandardMaterial({ map: doorTex, emissive: 0xffc873, emissiveMap: doorTex, emissiveIntensity: 0.25, roughness: 0.4, metalness: 0.3 });
+    const doors = new THREE.InstancedMesh(doorGeo, doorMat, Math.max(1, buildingInfo.length));
+    buildingInfo.forEach((b, i) => {
+      const rot = b.door.nx ? (b.door.nx > 0 ? Math.PI / 2 : -Math.PI / 2) : (b.door.nz > 0 ? 0 : Math.PI);
+      setInstance(doors, i, b.door.x + b.door.nx * 0.03, 0.04, b.door.z + b.door.nz * 0.03, rot, 1, 1, 1);
+    });
+    doors.count = buildingInfo.length;
+    doors.instanceMatrix.needsUpdate = true;
+    scene.add(doors);
+    city_doorMat = doorMat;
+  }
 
   // ---------- rooftop props (AC units, vents) ----------
   {
@@ -545,6 +577,7 @@ export function buildCity(scene, reserved = []) {
   // f: 0 = day, 1 = full night
   function setGlow(f) {
     bMat.emissiveIntensity = f * 1.4;
+    if (city_doorMat) city_doorMat.emissiveIntensity = 0.25 + f * 1.2;
     headMat.emissiveIntensity = 0.35 + f * 3.0;
     glowMat.opacity = f * 0.85;
     skyMat.color.setHex(f > 0.5 ? 0x0e1626 : 0x2a3a55);
@@ -561,5 +594,5 @@ export function buildCity(scene, reserved = []) {
   // initialize shadow focus at spawn
   update(0, spawn);
 
-  return { colliders, spawn, dragStrip, update, setGlow, sun, hemi };
+  return { colliders, buildings: buildingInfo, spawn, dragStrip, update, setGlow, sun, hemi, roadLines };
 }

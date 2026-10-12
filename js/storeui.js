@@ -59,7 +59,7 @@ export function createStoreUI(api){
     list.innerHTML = '';
     const shirtSec = document.createElement('div');
     shirtSec.className = 'style-sec';
-    shirtSec.innerHTML = `<b>SHIRT · ${money(SHIRT_COST)}</b><div class="swatch-row"></div>`;
+    shirtSec.innerHTML = `<b>SHIRT · ${SHIRT_COST ? money(SHIRT_COST) : 'FREE'}</b><div class="swatch-row"></div>`;
     const row = shirtSec.querySelector('.swatch-row');
     for(const c of SHIRTS){
       const sw = document.createElement('div');
@@ -77,11 +77,15 @@ export function createStoreUI(api){
       const b = document.createElement('button');
       const owned = s.hats.includes(h.id);
       b.className = 'wheel-opt' + (s.outfit.hat === h.id ? ' sel' : '');
-      b.innerHTML = `${h.name}<small>${owned ? (s.outfit.hat === h.id ? 'wearing' : 'owned') : money(h.price)}</small>`;
+      b.innerHTML = `${h.name}<small>${s.outfit.hat === h.id ? 'wearing' : (owned || !h.price) ? 'free' : money(h.price)}</small>`;
       b.onclick = () => result(buyHat(s, h.id));
       hr.appendChild(b);
     }
     list.appendChild(hatSec);
+    const tip = document.createElement('p');
+    tip.className = 'store-tip';
+    tip.textContent = 'Everything here is free. More colors, pants, skin tone & hair in 🎨 SKIN EDITOR (pause menu).';
+    list.appendChild(tip);
   }
 
   function render(){

@@ -1,243 +1,178 @@
-// Multiplayer client for CITY DRIVER — fully optional.
-// Socket.io comes from a CDN <script> (global `io`); THREE via the app importmap.
-// Usage (from main.js):
-//   import { createMultiplayer } from './multiplayer.js';
-//   import { buildCar, CAR_DEFS } from './cars.js';
-//   const mp = createMultiplayer(buildCar, CAR_DEFS);
-//   mp.connect(scene);                       // no-op when MP_SERVER_URL is ''
-//   // per frame:
-//   mp.update(dt, { x, z, heading, speed, carId, colorHex });
-//   mp.disconnect();                         // on quit
+// CITY DRIVER — live multiplayer. Everyone who opens the game joins one shared
+// city over Supabase Realtime (see net.js). Each client broadcasts a small
+// state packet a few times a second; other players appear as their car (with
+// their skin) or on foot as their driver (with their outfit, name tag and gun).
+// Shots are broadcast too, so you see other players' bullets fly.
 import * as THREE from 'three';
-import { MP_SERVER_URL, MP_NAME } from './config.js';
+import { createRealtime } from './net.js';
+import { MP_URL, MP_KEY, MP_TOPIC } from './config.js';
 
-const EMIT_MS = 100;      // 10 Hz position updates
-const MAX_REMOTES = 12;   // cap rendered remote cars (nearest ones win)
-const LERP_SPEED = 9;     // remote-car follow responsiveness
+const SEND_MOVING_MS = 160;   // ~6 Hz while moving
+const SEND_IDLE_MS = 1000;    // 1 Hz when standing still
+const LOOK_EVERY_MS = 2500;   // re-send skin so late joiners see it
+const TIMEOUT_MS = 7000;      // drop players we stop hearing from
+const MAX_REMOTES = 16;
+const LERP = 10;
 
-function shortestAngle(a, b){
-  let d = (b - a) % (Math.PI * 2);
-  if (d > Math.PI) d -= Math.PI * 2;
-  if (d < -Math.PI) d += Math.PI * 2;
-  return d;
-}
+const angleDiff = (a, b) => { let d = (b - a) % (Math.PI * 2); if(d > Math.PI) d -= Math.PI * 2; if(d < -Math.PI) d += Math.PI * 2; return d; };
 
-function roundedRect(c, x, y, w, h, r){
-  c.moveTo(x + r, y);
-  c.arcTo(x + w, y, x + w, y + h, r);
-  c.arcTo(x + w, y + h, x, y + h, r);
-  c.arcTo(x, y + h, x, y, r);
-  c.arcTo(x, y, x + w, y, r);
-  c.closePath();
-}
-
-// Small floating name tag above a remote car.
-function makeNameLabel(name){
-  const text = String(name || 'Driver').slice(0, 24);
-  const font = '600 26px system-ui, -apple-system, sans-serif';
-  const pad = 14, h = 42;
-  const meas = document.createElement('canvas').getContext('2d');
-  meas.font = font;
-  const w = Math.max(60, Math.ceil(meas.measureText(text).width) + pad * 2);
-  const canvas = document.createElement('canvas');
-  canvas.width = w; canvas.height = h;
-  const c = canvas.getContext('2d');
-  c.fillStyle = 'rgba(8,12,22,0.68)';
-  c.beginPath();
-  roundedRect(c, 1, 1, w - 2, h - 2, 12);
-  c.fill();
-  c.font = font; c.fillStyle = '#ffffff'; c.textBaseline = 'middle';
-  c.fillText(text, pad, h / 2 + 1);
-  const tex = new THREE.CanvasTexture(canvas);
-  const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
-  spr.scale.set(w / 95, h / 95, 1);
-  spr.position.y = 2.15;
+function nameTag(name){
+  const text = String(name || 'Driver').slice(0, 16);
+  const font = '700 28px system-ui, -apple-system, sans-serif';
+  const meas = document.createElement('canvas').getContext('2d'); meas.font = font;
+  const w = Math.max(70, Math.ceil(meas.measureText(text).width) + 30), h = 44;
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgba(8,12,22,0.72)';
+  g.beginPath(); g.roundRect ? g.roundRect(1, 1, w - 2, h - 2, 14) : g.rect(1, 1, w - 2, h - 2); g.fill();
+  g.fillStyle = '#4ade80'; g.beginPath(); g.arc(16, h / 2, 5, 0, Math.PI * 2); g.fill();
+  g.font = font; g.fillStyle = '#fff'; g.textBaseline = 'middle'; g.fillText(text, 26, h / 2 + 1);
+  const tex = new THREE.CanvasTexture(c);
+  const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, transparent:true, depthTest:false }));
+  spr.scale.set(w / 90, h / 90, 1);
   spr.renderOrder = 999;
   return spr;
 }
 
-// Repaint a freshly built remote car to its owner's color.
-// Mirrors paintCar() logic: only meshes that used the def's original body color.
-function paintRemote(group, fromHex, toHex){
-  if (fromHex === toHex) return;
-  group.traverse(o => {
-    if (o.isMesh && o.material && o.material.color && o.material.color.getHex() === fromHex){
-      o.material = o.material.clone();
-      o.material.color.setHex(toHex);
-    }
-  });
-  group.userData.bodyColor = toHex;
-}
+// deps = { scene, CAR_DEFS, buildCar, applyCarSkin, buildCharacter, setOutfit, setHeldWeapon,
+//          animateCharacter, unpackLook, remoteShot(x0,z0,x1,z1), onCount(n), onStatus(s) }
+export function createMultiplayer(deps){
+  const myId = Math.random().toString(36).slice(2, 10);
+  const remotes = new Map();
+  let rt = null, lastSend = 0, lastLook = 0, lastSig = '', lastLookSig = '';
 
-function setMenuStatus(status, count){
-  try {
-    const el = document.getElementById('mp-status');
-    if (!el) return;
-    const labels = { off: '● offline', connecting: '● connecting…', on: `● online · ${count}` };
-    el.textContent = labels[status] || '● offline';
-    el.className = 'mp-status ' + status;
-  } catch (_) { /* menu not present — ignore */ }
-}
+  function count(){ return remotes.size + 1; }
+  function notify(){ if(deps.onCount) deps.onCount(count()); }
 
-export function createMultiplayer(buildCar, CAR_DEFS){
-  let status = 'off';           // 'off' | 'connecting' | 'on'
-  let socket = null;
-  let scene = null;
-  let myId = null;
-  let helloSent = false;
-  let lastEmit = 0;
-  let lastLocal = null;
-  const remotes = new Map();    // playerId -> { group, tx, tz, theading }
-  let roster = [];              // latest known [{id, carId, color, name}]
-
-  function refreshMenu(){ setMenuStatus(status, remotes.size + (status === 'on' ? 1 : 0)); }
-
-  function removeRemote(pid){
-    const r = remotes.get(pid);
-    if (!r) return;
-    remotes.delete(pid);
-    if (scene && r.group) scene.remove(r.group);
+  function removeRemote(id){
+    const r = remotes.get(id); if(!r) return;
+    if(r.car) deps.scene.remove(r.car);
+    if(r.person) deps.scene.remove(r.person);
+    if(r.tag) r.tag.parent && r.tag.parent.remove(r.tag);
+    remotes.delete(id);
+    notify();
   }
 
-  function spawnRemote(p){
-    try {
-      const def = (CAR_DEFS || []).find(d => d.id === p.carId) || CAR_DEFS[0];
-      const group = buildCar(def);
-      if (Number.isFinite(p.color) && p.color !== def.color) paintRemote(group, def.color, p.color);
-      group.add(makeNameLabel(p.name));
-      group.position.set(0, 0, 0);
-      group.rotation.y = 0;
-      if (scene) scene.add(group);
-      remotes.set(p.id, { group, tx: 0, tz: 0, theading: 0 });
-      refreshMenu();
-    } catch (_) { /* never break solo play */ }
+  function ensureCar(r){
+    const sig = r.carId + '|' + r.lookSig;
+    if(r.car && r.carSig === sig) return;
+    if(r.car) deps.scene.remove(r.car);
+    const def = deps.CAR_DEFS.find(d => d.id === r.carId) || deps.CAR_DEFS[0];
+    const car = deps.buildCar(def);
+    if(r.look) deps.applyCarSkin(car, r.look.paint, r.look.carSkin);
+    car.position.set(r.cx, 0, r.cz); car.rotation.y = r.ch;
+    deps.scene.add(car);
+    r.car = car; r.carSig = sig;
+  }
+  function ensurePerson(r){
+    if(!r.person){
+      r.person = deps.buildCharacter(r.look ? r.look.outfit : { shirt:0x2b6cb0, hat:'none' });
+      r.person.position.set(r.x, 0, r.z);
+      deps.scene.add(r.person);
+      r.outfitSig = '';
+    }
+    const os = r.look ? JSON.stringify(r.look.outfit) : '';
+    if(r.look && os !== r.outfitSig){ deps.setOutfit(r.person, r.look.outfit); r.outfitSig = os; }
+    deps.setHeldWeapon(r.person, r.weapon || null);
   }
 
-  // Keep at most the 12 nearest roster entries rendered.
-  function reconcile(){
-    const hx = lastLocal ? lastLocal.x : 0;
-    const hz = lastLocal ? lastLocal.z : 0;
-    const others = roster.filter(p => p.id && p.id !== myId);
-    for (const pid of [...remotes.keys()]){
-      if (!others.some(p => p.id === pid)) removeRemote(pid);
+  function onState(p){
+    if(!p || !p.id || p.id === myId) return;
+    let r = remotes.get(p.id);
+    if(!r){
+      if(remotes.size >= MAX_REMOTES) return;
+      r = { id:p.id, name:'', x:+p.x || 0, z:+p.z || 0, h:+p.h || 0, cx:0, cz:0, ch:0,
+        tx:0, tz:0, th:0, mode:'car', carId:'sport', look:null, lookSig:'', car:null, person:null,
+        tag:null, tagName:'', phase:0, speed:0, b:-1, weapon:null, seen:0 };
+      remotes.set(p.id, r);
+      notify();
     }
-    const ranked = others
-      .map(p => {
-        const r = remotes.get(p.id);
-        const d = r ? (r.tx - hx) * (r.tx - hx) + (r.tz - hz) * (r.tz - hz) : Infinity;
-        return { p, d };
-      })
-      .sort((a, b) => a.d - b.d)
-      .slice(0, MAX_REMOTES);
-    const keep = new Set(ranked.map(e => e.p.id));
-    for (const pid of [...remotes.keys()]){
-      if (!keep.has(pid)) removeRemote(pid);
+    r.seen = performance.now();
+    r.mode = p.m === 'foot' ? 'foot' : 'car';
+    r.tx = +p.x || 0; r.tz = +p.z || 0; r.th = +p.h || 0;
+    r.carId = String(p.c || 'sport');
+    r.b = Number.isInteger(p.b) ? p.b : -1;
+    r.weapon = p.w || null;
+    r.firing = !!p.f;
+    if(r.mode === 'foot' && Number.isFinite(p.px)){ r.cx = +p.px; r.cz = +p.pz; r.ch = +p.ph || 0; }
+    if(p.L){ const sig = JSON.stringify(p.L); if(sig !== r.lookSig){ r.lookSig = sig; r.look = deps.unpackLook(p.L); } }
+    if(p.n && p.n !== r.tagName){
+      if(r.tag && r.tag.parent) r.tag.parent.remove(r.tag);
+      r.tag = nameTag(p.n); r.tagName = p.n; r.name = p.n;
     }
-    for (const { p } of ranked){
-      if (!remotes.has(p.id)) spawnRemote(p);
-    }
+    if(!r.placed){ r.x = r.tx; r.z = r.tz; r.h = r.th; if(r.mode === 'car'){ r.cx = r.tx; r.cz = r.tz; r.ch = r.th; } r.placed = true; }
   }
 
-  function fail(){
-    status = 'off';
-    refreshMenu();
-    if (socket){ try { socket.close(); } catch (_) {} socket = null; }
+  function onShot(p){
+    if(!p || p.id === myId || !Array.isArray(p.s)) return;
+    const r = remotes.get(p.id);
+    if(r){ r.recoil = 0.35; }
+    if(r && deps.localBuilding !== undefined && r.b !== deps.localBuilding()) return;
+    for(const s of p.s.slice(0, 3)) if(Array.isArray(s) && s.length === 4) deps.remoteShot(+s[0], +s[1], +s[2], +s[3]);
   }
 
-  function connect(sc){
-    if (!MP_SERVER_URL) return;                    // disabled: stays 'off'
-    if (status !== 'off') return;
-    if (typeof io === 'undefined') return;         // CDN blocked: stays 'off'
-    scene = sc;
-    status = 'connecting';
-    refreshMenu();
-    let s;
-    try {
-      s = io(MP_SERVER_URL, { transports: ['websocket', 'polling'], reconnectionAttempts: 8, timeout: 9000 });
-    } catch (_) { fail(); return; }
-    socket = s;
+  function connect(){
+    if(rt || !MP_URL || !MP_KEY) return;
+    rt = createRealtime({ url:MP_URL, key:MP_KEY, topic:MP_TOPIC, onStatus:s => { if(deps.onStatus) deps.onStatus(s, count()); } });
+    rt.on('st', onState);
+    rt.on('sh', onShot);
+    rt.on('bye', p => { if(p && p.id) removeRemote(p.id); });
+    rt.connect();
+    window.addEventListener('pagehide', () => { try{ rt.send('bye', { id:myId }); }catch(_){ } });
+  }
 
-    s.on('connect', () => { helloSent = false; }); // (re)send hello on first update
-    s.on('welcome', d => {
-      myId = d && d.id;
-      status = 'on';
-      refreshMenu();
-    });
-    s.on('players', list => {
-      if (Array.isArray(list)){ roster = list; reconcile(); }
-    });
-    s.on('join', p => {
-      if (p && p.id && p.id !== myId){
-        if (!roster.some(q => q.id === p.id)) roster.push(p);
-        reconcile();
+  // local = { name, mode, x, z, h, speed, car, look, px, pz, ph, b, w, firing }
+  function update(dt, local, now){
+    now = now || performance.now();
+    // send
+    if(rt && rt.status === 'on' && local){
+      const sig = local.mode + (local.x | 0) + ',' + (local.z | 0) + ',' + (local.h * 10 | 0) + local.b + (local.w || '');
+      const moving = sig !== lastSig || Math.abs(local.speed) > 0.3;
+      if(now - lastSend >= (moving ? SEND_MOVING_MS : SEND_IDLE_MS)){
+        lastSend = now; lastSig = sig;
+        const msg = { id:myId, n:local.name, m:local.mode, x:+local.x.toFixed(2), z:+local.z.toFixed(2), h:+local.h.toFixed(3),
+          c:local.car, b:local.b, w:local.w || null };
+        if(local.mode === 'foot'){ msg.px = +local.px.toFixed(2); msg.pz = +local.pz.toFixed(2); msg.ph = +local.ph.toFixed(3); }
+        const lookSig = JSON.stringify(local.look);
+        if(lookSig !== lastLookSig || now - lastLook > LOOK_EVERY_MS){ msg.L = local.look; lastLook = now; lastLookSig = lookSig; }
+        rt.send('st', msg);
       }
-    });
-    s.on('pos', d => {
-      if (!d || !d.id || d.id === myId) return;
-      const r = remotes.get(d.id);
-      if (!r) return;
-      r.tx = +d.x || 0; r.tz = +d.z || 0; r.theading = +d.heading || 0;
-    });
-    s.on('left', d => {
-      if (!d || !d.id) return;
-      roster = roster.filter(q => q.id !== d.id);
-      removeRemote(d.id);
-      refreshMenu();
-    });
-    s.on('full', () => fail());                    // room at capacity
-    s.on('reconnect_failed', () => { if (!myId) fail(); });
-    s.on('connect_error', () => { if (!myId && status === 'connecting'){ /* retries continue */ } });
-  }
-
-  function disconnect(){
-    for (const pid of [...remotes.keys()]) removeRemote(pid);
-    roster = [];
-    myId = null; helloSent = false;
-    if (socket){ try { socket.disconnect(); } catch (_) {} socket = null; }
-    scene = null;
-    status = 'off';
-    refreshMenu();
-  }
-
-  function update(dt, local){
-    if (local) lastLocal = local;
-    // Smooth remote cars toward their latest targets.
-    const k = Math.min(1, Math.max(0, dt) * LERP_SPEED);
-    for (const [, r] of remotes){
-      r.group.position.x += (r.tx - r.group.position.x) * k;
-      r.group.position.z += (r.tz - r.group.position.z) * k;
-      r.group.rotation.y += shortestAngle(r.group.rotation.y, r.theading) * k;
     }
-    // Throttled local-state broadcast.
-    if (socket && status === 'on' && local && myId){
-      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-      if (now - lastEmit >= EMIT_MS){
-        lastEmit = now;
-        try {
-          if (!helloSent){
-            socket.emit('hello', {
-              carId: local.carId || 'falcon',
-              color: Number.isFinite(local.colorHex) ? local.colorHex : null,
-              name: MP_NAME,
-            });
-            helloSent = true;
-          } else {
-            socket.volatile.emit('pos', {
-              x: +(+local.x || 0).toFixed(2),
-              z: (+local.z || 0).toFixed(2),
-              heading: (+local.heading || 0).toFixed(3),
-              speed: (+local.speed || 0).toFixed(1),
-            });
-          }
-        } catch (_) { /* transient — next tick retries */ }
+    // remotes
+    const k = Math.min(1, dt * LERP);
+    const myB = local ? local.b : -1;
+    for(const [id, r] of remotes){
+      if(now - r.seen > TIMEOUT_MS){ removeRemote(id); continue; }
+      const px = r.x, pz = r.z;
+      r.x += (r.tx - r.x) * k; r.z += (r.tz - r.z) * k; r.h += angleDiff(r.h, r.th) * k;
+      r.speed = dt > 0 ? Math.hypot(r.x - px, r.z - pz) / dt : 0;
+      if(r.mode === 'car'){ r.cx = r.x; r.cz = r.z; r.ch = r.h; }
+      ensureCar(r);
+      r.car.position.set(r.cx, 0, r.cz); r.car.rotation.y = r.ch;
+      r.car.visible = myB === -1;                      // cars live outdoors
+      if(r.mode === 'foot'){
+        ensurePerson(r);
+        r.person.visible = r.b === myB;
+        r.person.position.x = r.x; r.person.position.z = r.z; r.person.rotation.y = r.h;
+        r.phase += r.speed * dt * 2.1;
+        r.recoil = Math.max(0, (r.recoil || 0) - dt);
+        deps.animateCharacter(r.person, r.phase, r.speed, !!r.weapon && r.recoil > 0, dt);
+      }else if(r.person){ r.person.visible = false; }
+      // name tag rides on whatever represents them
+      if(r.tag){
+        const host = r.mode === 'foot' ? r.person : r.car;
+        if(host && r.tag.parent !== host){ if(r.tag.parent) r.tag.parent.remove(r.tag); host.add(r.tag); r.tag.position.set(0, r.mode === 'foot' ? 2.35 : 2.3, 0); }
       }
     }
   }
 
-  return {
-    get status(){ return status; },
-    connect,
-    disconnect,
-    update,
-  };
+  function sendShots(shots){
+    if(!rt || rt.status !== 'on' || !shots || !shots.length) return;
+    rt.send('sh', { id:myId, s:shots.map(s => s.map(v => +v.toFixed(2))) });
+  }
+
+  // nearby remote players (for the minimap)
+  function each(fn){ for(const r of remotes.values()) fn(r); }
+
+  return { connect, update, sendShots, each, get count(){ return count(); }, get status(){ return rt ? rt.status : 'off'; } };
 }

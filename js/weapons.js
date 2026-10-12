@@ -1,6 +1,8 @@
-// CITY DRIVER — shooting: hitscan rays, tracers, muzzle flash, impact sparks.
-// Rays are 2D (XZ) at chest height; they stop on buildings/walls and knock
-// down shooting-range targets. Light auto-aim helps on touch screens.
+// CITY DRIVER — shooting: visible bullets, muzzle flash, impact sparks.
+// Aim is resolved with a 2D (XZ) ray at chest height so you always know what
+// you hit, but every shot fires a real glowing bullet with a tracer trail that
+// flies to that point — the hit (target knockdown, sparks) lands when the
+// bullet arrives. Light auto-aim helps on touch screens.
 import * as THREE from 'three';
 import { weaponDef } from './shop.js';
 import { rayAABB, rayCircle } from './onfoot.js';
@@ -9,42 +11,91 @@ import { hitTarget } from './stores.js';
 
 const AIM_CONE = 0.22;   // rad — snap to a target inside this cone
 const SHOT_Y = 1.45;
+export const BULLET_SPEED = 85;    // m/s — slow enough to watch it fly
+const TRAIL = 4.5;                 // tracer length behind the bullet (m)
 
 export function createWeapons(scene){
-  // tracer pool
-  const tracers = [];
-  for(let i = 0; i < 16; i++){
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
-    const m = new THREE.LineBasicMaterial({ color:0xffe08a, transparent:true, opacity:0, depthWrite:false, blending:THREE.AdditiveBlending });
-    const l = new THREE.Line(g, m);
-    l.frustumCulled = false; l.visible = false;
-    scene.add(l);
-    tracers.push({ l, life:0 });
+  // bullet pool: glowing slug + thick additive tracer trail (meshes, so they
+  // stay visible on phones where GL lines are always 1px)
+  const bullets = [];
+  const slugGeo = new THREE.CapsuleGeometry(0.07, 0.5, 2, 8).rotateX(Math.PI / 2);
+  const trailGeo = new THREE.CylinderGeometry(0.008, 0.05, 1, 6, 1, true).rotateX(Math.PI / 2).translate(0, 0, 0.5);
+  for(let i = 0; i < 48; i++){
+    const slug = new THREE.Mesh(slugGeo, new THREE.MeshBasicMaterial({ color:0xfff6c8, transparent:true, opacity:1, blending:THREE.AdditiveBlending, depthWrite:false }));
+    slug.visible = false; slug.frustumCulled = false;
+    const glow = new THREE.Mesh(new THREE.SphereGeometry(0.22, 8, 6), new THREE.MeshBasicMaterial({ color:0xff9a2e, transparent:true, opacity:0.45, blending:THREE.AdditiveBlending, depthWrite:false }));
+    slug.add(glow);
+    const trail = new THREE.Mesh(trailGeo, new THREE.MeshBasicMaterial({ color:0xffb347, transparent:true, opacity:0.75, blending:THREE.AdditiveBlending, depthWrite:false, side:THREE.DoubleSide }));
+    trail.visible = false; trail.frustumCulled = false;
+    scene.add(slug, trail);
+    bullets.push({ slug, trail, live:false, x0:0, z0:0, dx:0, dz:0, dist:0, travel:0, hitT:null, onHit:null, wall:false });
   }
-  let ti = 0;
+  let bi = 0;
   const flash = new PuffPool(scene, 8, { color:0xffc860, opacity:0.95, blending:THREE.AdditiveBlending });
   const sparks = new PuffPool(scene, 30, { color:0xffb347, opacity:0.9, blending:THREE.AdditiveBlending });
   const dust = new PuffPool(scene, 20, { color:0xb8b0a0, opacity:0.5 });
   let cooldown = 0;
 
-  function tracer(x0, z0, x1, z1){
-    const t = tracers[ti]; ti = (ti + 1) % tracers.length;
-    const a = t.l.geometry.attributes.position.array;
-    a[0] = x0; a[1] = SHOT_Y; a[2] = z0; a[3] = x1; a[4] = SHOT_Y - 0.05; a[5] = z1;
-    t.l.geometry.attributes.position.needsUpdate = true;
-    t.l.visible = true; t.life = 0.07; t.l.material.opacity = 1;
+  // launch a bullet from (x0,z0) along (dx,dz) that stops after `dist` m.
+  // hitT: target it will knock down on arrival; wall: sparks on arrival.
+  function fire(x0, z0, dx, dz, dist, hitT, wall, onHit){
+    const b = bullets[bi]; bi = (bi + 1) % bullets.length;
+    Object.assign(b, { live:true, x0, z0, dx, dz, dist:Math.max(0.5, dist), travel:0, hitT, wall, onHit });
+    b.slug.visible = true; b.trail.visible = true;
+    b.slug.rotation.y = Math.atan2(dx, dz);
+    place(b);
+  }
+  function place(b){
+    const d = Math.min(b.travel, b.dist);
+    const hx = b.x0 + b.dx * d, hz = b.z0 + b.dz * d;
+    b.slug.position.set(hx, SHOT_Y, hz);
+    setTrail(b, hx, hz, Math.min(TRAIL, d));
+  }
+  // trail mesh points backwards (+local z) from the bullet head, length len
+  function setTrail(b, hx, hz, len){
+    b.trail.position.set(hx, SHOT_Y, hz);
+    b.trail.rotation.y = Math.atan2(-b.dx, -b.dz);
+    b.trail.scale.set(1, 1, Math.max(0.01, len));
+  }
+  function impact(b){
+    const ex = b.x0 + b.dx * b.dist, ez = b.z0 + b.dz * b.dist;
+    if(b.hitT){
+      if(hitTarget(b.hitT) && b.onHit) b.onHit(b.hitT);
+      for(let k = 0; k < 5; k++) sparks.emit(ex, SHOT_Y, ez, { vx:(Math.random() - 0.5) * 4, vy:Math.random() * 3, vz:(Math.random() - 0.5) * 4, life:0.25, size:0.25, grow:0.1 });
+    }else if(b.wall){
+      sparks.emit(ex - b.dx * 0.1, SHOT_Y, ez - b.dz * 0.1, { vx:-b.dx * 2, vy:1.5, vz:-b.dz * 2, life:0.18, size:0.3, grow:0.2 });
+      dust.emit(ex - b.dx * 0.2, SHOT_Y, ez - b.dz * 0.2, { vx:-b.dx, vy:0.6, vz:-b.dz, life:0.5, size:0.4, grow:1.2 });
+    }
+  }
+  function stepBullets(dt){
+    for(const b of bullets){
+      if(!b.live) continue;
+      b.travel += BULLET_SPEED * dt;
+      if(b.travel >= b.dist){
+        if(b.slug.visible){ impact(b); b.slug.visible = false; }
+        // let the trail catch up and vanish into the impact point
+        if(b.travel - b.dist >= TRAIL){ b.live = false; b.trail.visible = false; continue; }
+        const ex = b.x0 + b.dx * b.dist, ez = b.z0 + b.dz * b.dist, back = TRAIL - (b.travel - b.dist);
+        setTrail(b, ex, ez, Math.min(back, b.dist));
+        continue;
+      }
+      place(b);
+    }
+  }
+
+  // bullets fired by other players (visual only) — muzzle + tracer + impact sparks
+  function remoteShot(x0, z0, x1, z1){
+    const dx = x1 - x0, dz = z1 - z0, d = Math.hypot(dx, dz);
+    if(!(d > 0.1)) return;
+    flash.emit(x0, SHOT_Y, z0, { vx:dx / d * 2, vy:0, vz:dz / d * 2, life:0.06, size:0.7, grow:0.6 });
+    fire(x0, z0, dx / d, dz / d, d, null, true, null);
   }
 
   // ctx: { save, pos:{x,z}, heading, colliders, targets, audio, onTargetHit() }
   // trigger: true while fire is held; edge: true on the frame it was pressed
   function update(dt, ctx, trigger, edge){
     cooldown = Math.max(0, cooldown - dt);
-    for(const t of tracers){
-      if(!t.l.visible) continue;
-      t.life -= dt;
-      if(t.life <= 0) t.l.visible = false; else t.l.material.opacity = t.life / 0.07;
-    }
+    stepBullets(dt);
     flash.update(dt); sparks.update(dt); dust.update(dt);
 
     const id = ctx.save.equipped;
@@ -78,6 +129,7 @@ export function createWeapons(scene){
     flash.emit(mx, SHOT_Y, mz, { vx:fx * 2, vy:0, vz:fz * 2, life:0.06, size:w.id === 'shotgun' ? 1.1 : 0.7, grow:0.6 });
 
     let hits = 0;
+    const shots = [];
     for(let p = 0; p < w.pellets; p++){
       const h = aimH + (Math.random() - 0.5) * 2 * w.spread;
       const dx = -Math.sin(h), dz = -Math.cos(h);
@@ -91,19 +143,14 @@ export function createWeapons(scene){
         const d = rayCircle(mx, mz, dx, dz, t.x, t.z, t.r, tBest);
         if(d < tBest){ tBest = d; hitT = t; }
       }
-      const ex = mx + dx * tBest, ez = mz + dz * tBest;
-      if(p < 3 || w.pellets === 1) tracer(mx, mz, ex, ez);
-      if(hitT){
-        if(hitTarget(hitT)){ hits++; ctx.onTargetHit && ctx.onTargetHit(hitT); }
-        for(let k = 0; k < 4; k++) sparks.emit(ex, SHOT_Y, ez, { vx:(Math.random() - 0.5) * 4, vy:Math.random() * 3, vz:(Math.random() - 0.5) * 4, life:0.25, size:0.25, grow:0.1 });
-      }else if(tBest < w.range){
-        sparks.emit(ex - dx * 0.1, SHOT_Y, ez - dz * 0.1, { vx:-dx * 2, vy:1.5, vz:-dz * 2, life:0.18, size:0.3, grow:0.2 });
-        dust.emit(ex - dx * 0.2, SHOT_Y, ez - dz * 0.2, { vx:-dx, vy:0.6, vz:-dz, life:0.5, size:0.4, grow:1.2 });
-      }
+      if(hitT) hits++;
+      fire(mx, mz, dx, dz, tBest, hitT, tBest < w.range, ctx.onTargetHit);
+      if(p < 3) shots.push([mx, mz, mx + dx * tBest, mz + dz * tBest]);
     }
+    if(ctx.onShot) ctx.onShot(shots);
     ctx.audio.shot && ctx.audio.shot(w.id);
     return { fired:true, hits };
   }
 
-  return { update };
+  return { update, remoteShot };
 }

@@ -20,10 +20,13 @@ import { buildStores, STORE_LOTS } from './stores.js';
 import { createWeapons } from './weapons.js';
 import { createStoreUI } from './storeui.js';
 import { createMinimap } from './minimap.js';
+import { ensureSkins, carSkinFor, packLook, unpackLook } from './skins.js';
+import { createSkinEditor } from './skineditor.js';
+import { createInteriors, styleFor, STYLE_NAMES } from './interiors.js';
+import { createTutorial, TUTORIAL_REWARD } from './tutorial.js';
+import { createMultiplayer } from './multiplayer.js';
 
-const { CAR_DEFS, buildCar, effectiveStats, paintCar } = Cars;
-// added by the cars track; may not exist yet in this worktree — guard it
-const setWheelStyle = typeof Cars.setWheelStyle==='function' ? Cars.setWheelStyle : null;
+const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin } = Cars;
 
 const $ = id => document.getElementById(id);
 
@@ -35,7 +38,10 @@ let save=null;
 let state='boot';              // menu | freeroam | drag
 let paused=false, garageOpen=false, garageReturn='menu';
 let tele={speed:0,drifting:false,nitro:false,nitroFrac:1,steer:0};
-let mpTried=false;
+// --- buildings / editor / tutorial / car pick ---
+let interiors=null, inside=null, curColliders=null;
+let editor=null, editorOpen=false, editorReturn='menu', editorAngle=0.6;
+let tutorial=null, pickOpen=false;
 // --- stunt rewards (free-roam cash loop) ---
 let stunts=newStuntState();
 // --- AAA graphics state ---
@@ -52,7 +58,8 @@ const parkedCar={x:0,z:0};
 const camPos=new THREE.Vector3(), camGoal=new THREE.Vector3(), fwdV=new THREE.Vector3();
 const cityPos={x:0,z:0};
 const collideRes={x:0,z:0,hitX:false,hitZ:false};
-const mpLocal={x:0,z:0,heading:0,speed:0,car:'falcon'};
+const mpLocal={name:'',mode:'car',x:0,z:0,h:0,speed:0,car:'sport',look:null,px:0,pz:0,ph:0,b:-1,w:null};
+let lookCache=null;
 const playerInfo={def:null,stats:null,group:null};
 let allWheels=[], frontWheels=[], brakeMats=[];
 let lastFov=62, frameN=0;
@@ -83,10 +90,9 @@ function rebuildCar(){
   carDef=CAR_DEFS.find(d=>d.id===save.currentCar)||CAR_DEFS[0];
   if(carGroup) scene.remove(carGroup);
   carGroup=buildCar(carDef);
-  const p=save.paint[carDef.id];
-  if(typeof p==='number' && p!==(carDef.colors&&carDef.colors[0])) paintCar(carGroup, p);
-  if(setWheelStyle) setWheelStyle(carGroup, save.wheels[carDef.id]||0);
+  applyCarSkin(carGroup, save.paint[carDef.id], carSkinFor(save, carDef.id));
   scene.add(carGroup);
+  lookCache=null;
   carStats=effectiveStats(carDef, save.upgrades[carDef.id]||{});
   allWheels=(carGroup.userData.wheels||[]).slice();
   frontWheels=allWheels.filter(w=>w.position.z<0);
@@ -181,7 +187,7 @@ function updateEffects(dt){
 function collide(x, z){ return collideR(x, z, 1.15); }
 function collideR(x, z, R){
   let cx=x, cz=z, hitX=false, hitZ=false;
-  const cols=city.colliders;
+  const cols=curColliders||city.colliders;
   for(let i=0;i<cols.length;i++){
     const c=cols[i];
     if(cx+R<c.minX||cx-R>c.maxX||cz+R<c.minZ||cz-R>c.maxZ) continue;
@@ -212,6 +218,7 @@ function collideR(x, z, R){
 // on-foot collision: buildings + the parked car (two circles along its length)
 function footCollide(x, z, r){
   const res=collideR(x, z, r);
+  if(inside) return res;
   const h=physics.heading, fx=-Math.sin(h), fz=-Math.cos(h);
   for(const o of [-1.25, 0, 1.25]){
     const cx=physics.pos.x+fx*o, cz=physics.pos.z+fz*o, rr=1.0+r;
@@ -270,6 +277,13 @@ function updateFootCamera(dt){
   const dist=aiming?3.6:4.6, height=aiming?2.2:2.6;
   const rx=Math.cos(h), rz=-Math.sin(h), side=aiming?0.7:0.35;   // over-the-shoulder
   camGoal.set(px-fwdV.x*dist+rx*side, height, pz-fwdV.z*dist+rz*side);
+  if(inside){
+    // keep the camera inside the room so walls never block the view
+    const bd=inside.room.bounds, m=0.45;
+    camGoal.x=Math.max(bd.minX+m, Math.min(bd.maxX-m, camGoal.x));
+    camGoal.z=Math.max(bd.minZ+m, Math.min(bd.maxZ-m, camGoal.z));
+    camGoal.y=Math.min(camGoal.y, 3.9);
+  }
   const k=1-Math.exp(-dt*7);
   camPos.x+=(camGoal.x-camPos.x)*k;
   camPos.y+=(camGoal.y-camPos.y)*k;
@@ -316,8 +330,70 @@ function setAction(kind, target, text){
     b.classList.toggle('hidden', !text);
   }
 }
+// nearest city building whose wall you're standing against (or its front door)
+function nearBuilding(x, z){
+  let best=null, bd=1.5;
+  for(const b of city.buildings){
+    const dd=dist2D(x, z, b.door.x+b.door.nx*0.5, b.door.z+b.door.nz*0.5);
+    if(dd<2.2) return b;                        // front door wins
+    const qx=Math.max(b.minX, Math.min(x, b.maxX)), qz=Math.max(b.minZ, Math.min(z, b.maxZ));
+    const d=Math.hypot(x-qx, z-qz);
+    if(d<bd){ bd=d; best=b; }
+  }
+  return best;
+}
+function snapFootCamera(){
+  const h=foot.heading;
+  fwdV.set(-Math.sin(h),0,-Math.cos(h));
+  camPos.set(foot.pos.x-fwdV.x*4.6, 2.6, foot.pos.z-fwdV.z*4.6);
+  if(inside){
+    const bd=inside.room.bounds, m=0.45;
+    camPos.x=Math.max(bd.minX+m, Math.min(bd.maxX-m, camPos.x));
+    camPos.z=Math.max(bd.minZ+m, Math.min(bd.maxZ-m, camPos.z));
+  }
+  camera.position.copy(camPos);
+}
+function enterBuilding(b){
+  const room=interiors.get(styleFor(b.id));
+  // where to come back out: at the door if you used it, else where you stood
+  const atDoor=dist2D(foot.pos.x, foot.pos.z, b.door.x, b.door.z)<2.6;
+  let bx, bz, nx, nz;
+  if(atDoor){ nx=b.door.nx; nz=b.door.nz; bx=b.door.x+nx*1.4; bz=b.door.z+nz*1.4; }
+  else{
+    const qx=Math.max(b.minX, Math.min(foot.pos.x, b.maxX)), qz=Math.max(b.minZ, Math.min(foot.pos.z, b.maxZ));
+    const dx=foot.pos.x-qx, dz=foot.pos.z-qz, d=Math.hypot(dx,dz)||1;
+    nx=dx/d; nz=dz/d; bx=qx+nx*1.4; bz=qz+nz*1.4;
+  }
+  inside={ b, room, back:{ x:bx, z:bz, heading:Math.atan2(-nx, -nz) } };
+  curColliders=room.colliders;
+  weaponCtx.colliders=room.colliders; weaponCtx.targets=[];
+  foot.reset(room.spawn.x, room.spawn.z, room.spawn.heading);
+  person.position.set(foot.pos.x, 0, foot.pos.z);
+  snapFootCamera();
+  setAction(null,null,'');
+  audio.beep(640,0.07);
+  toast('🏢 Inside: '+STYLE_NAMES[room.style]+' — EXIT pad is behind you', 2200);
+}
+function exitBuilding(){
+  if(!inside) return;
+  const bk=inside.back;
+  inside=null; curColliders=null;
+  weaponCtx.colliders=city.colliders; weaponCtx.targets=shops.targets;
+  const r=footCollide(bk.x, bk.z, 0.45);
+  foot.reset(r.x, r.z, bk.heading);
+  person.position.set(foot.pos.x, 0, foot.pos.z);
+  snapFootCamera();
+  setAction(null,null,'');
+  audio.beep(520,0.07);
+}
 function updateAction(){
   if(onFoot){
+    if(inside){
+      const d=dist2D(foot.pos.x, foot.pos.z, inside.room.exit.x, inside.room.exit.z);
+      if(d<0.8){ exitBuilding(); return; }      // step on the pad
+      if(d<2.4) return setAction('exit', null, '🚪 EXIT BUILDING');
+      return setAction(null, null, '');
+    }
     let best=null, bd=2.4;
     for(const s of shops.stores){
       const d=dist2D(foot.pos.x, foot.pos.z, s.door.x, s.door.z);
@@ -325,6 +401,8 @@ function updateAction(){
     }
     if(best) return setAction('shop', best, (best.type==='garage'?'🔧 ':best.type==='guns'?'🔫 ':'👕 ')+'ENTER '+best.name);
     if(dist2D(foot.pos.x, foot.pos.z, physics.pos.x, physics.pos.z)<4.2) return setAction('in', null, '🚗 GET IN');
+    const b=nearBuilding(foot.pos.x, foot.pos.z);
+    if(b) return setAction('enter', b, '🏢 ENTER BUILDING');
     return setAction(null, null, '');
   }
   if(Math.abs(tele.speed)<4) return setAction('out', null, '🚪 GET OUT');
@@ -333,6 +411,8 @@ function updateAction(){
 function doAction(){
   if(actionKind==='out') getOut();
   else if(actionKind==='in') getIn();
+  else if(actionKind==='enter' && actionTarget) enterBuilding(actionTarget);
+  else if(actionKind==='exit') exitBuilding();
   else if(actionKind==='shop' && actionTarget){
     if(actionTarget.type==='garage') openGarage('play');
     else openStore(actionTarget);
@@ -390,8 +470,11 @@ function updateHUD(){
 
 // ---------------- state transitions ----------------
 function hideOverlays(){ for(const o of ['main-menu','pause-menu','garage']) $(o).classList.add('hidden'); }
+// ESC / pause shouldn't fight the editor or car picker
+function overlayBusy(){ return editorOpen || pickOpen; }
 function leaveFootMode(){
   if(storeOpen) closeStore();
+  if(inside) exitBuilding();
   if(onFoot) getIn();
   setAction(null,null,'');
 }
@@ -406,6 +489,9 @@ function showMenu(){
   $('hud').classList.add('hidden');
   $('touch-controls').classList.add('hidden');
   $('drag-ui').classList.add('hidden');
+  if(tutorial && tutorial.active) tutorial.stop();
+  $('objective').classList.add('hidden');
+  $('m-tutorial').classList.toggle('hidden', !!save.tutorialDone);
   audio.engine(0,0); audio.skid(false);
 }
 
@@ -421,8 +507,8 @@ function startFreeroam(){
   controls.attach(); controls.setMode('drive');
   placeAtSpawn();
   syncCash();
-  connectMP();
-  toast('Free roam — drift to earn cash, find the drag strip!');
+  if(!save.tutorialDone && !save.tutorialSkipped) startTutorial();
+  else toast('Free roam — drift for cash, walk into any building!');
 }
 
 function startDrag(){
@@ -439,7 +525,7 @@ function startDrag(){
 
 function openPause(){
   if(state!=='freeroam' && state!=='drag') return;
-  if(garageOpen || storeOpen) return;
+  if(garageOpen || storeOpen || overlayBusy()) return;
   paused=true;
   setAction(null,null,'');
   hideOverlays();
@@ -464,31 +550,146 @@ function closeGarage(){
   syncCash();
 }
 
-// ---------------- multiplayer ----------------
-function setMp(cls, txt){
-  const e=$('mp-status');
-  e.className='mp-status '+cls;
-  e.textContent='● '+txt;
+// ---------------- skin editor (free) ----------------
+// The preview is the live scene: the camera orbits your car or your driver.
+let editorPersonWasVisible=false;
+function openEditor(ret, tab){
+  editorReturn=ret;
+  if(garageOpen){ garageOpen=false; }
+  if(state==='freeroam') paused=true;
+  editorOpen=true;
+  hideOverlays();
+  $('hud').classList.add('hidden');
+  $('touch-controls').classList.add('hidden');
+  setAction(null,null,'');
+  editorPersonWasVisible=person.visible;
+  editor.open(tab||'car');
 }
-async function connectMP(){
-  if(mp || mpTried) return;
-  mpTried=true;
-  // Multiplayer is only attempted when a relay URL is configured.
-  // With MP_SERVER_URL == '' the menu's online indicator stays hidden —
-  // the game is fully solo and never advertises a dead feature.
-  let mod=null, url='';
-  try{ mod=await import('./multiplayer.js'); }
-  catch(e){ return; }
-  try{ const cfg=await import('./config.js'); url=cfg.MP_SERVER_URL||''; }
-  catch(e){ /* no config */ }
-  if(!url) return;
-  $('mp-status').classList.remove('hidden');
-  setMp('connecting','connecting…');
-  try{
-    mp=mod.createMultiplayer(buildCar, CAR_DEFS);
-    mp.connect(scene);
-    setMp('on', mp.status||'online');
-  }catch(e){ setMp('off','error'); }
+function editorTab(tab){
+  // driver tab: stand the driver beside the car if they're not already out
+  if(!onFoot){
+    if(tab==='driver'){
+      const sp=exitSpot(physics.pos.x, physics.pos.z, physics.heading);
+      person.position.set(sp.x, 0, sp.z); person.rotation.y=physics.heading;
+      animateCharacter(person, 0, 0, false, 0);
+      person.visible=true;
+    }else person.visible=false;
+  }
+}
+function closeEditor(){
+  editorOpen=false;
+  editor.close();
+  person.visible=onFoot;
+  syncPersonGear();
+  if(editorReturn==='menu'){ showMenu(); return; }
+  if(editorReturn==='garage'){ openGarage(garageReturn); return; }
+  if(state==='freeroam'||state==='drag'){
+    $('hud').classList.toggle('hidden', state!=='freeroam');
+    $('touch-controls').classList.remove('hidden');
+    if(editorReturn==='pause'){ paused=true; $('pause-menu').classList.remove('hidden'); }
+    else paused=false;
+    if(onFoot) snapFootCamera(); else snapCamera();
+  }
+}
+function updateEditorCamera(dt){
+  editorAngle+=dt*0.35;
+  const drv=editor.tab==='driver';
+  const tx=drv?person.position.x:physics.pos.x, tz=drv?person.position.z:physics.pos.z;
+  const R=drv?3.4:7.2, H=drv?1.7:2.6, Y=drv?1.05:0.75;
+  camera.position.set(tx+Math.sin(editorAngle)*R, H, tz+Math.cos(editorAngle)*R);
+  // look a bit to the right of the subject so it sits left of the panel
+  const rx=Math.cos(editorAngle), rz=-Math.sin(editorAngle);
+  const off=drv?0.9:2.2;
+  camera.lookAt(tx+rx*off, Y, tz+rz*off);
+  if(Math.abs(55-lastFov)>0.25){ lastFov=55; camera.fov=55; camera.updateProjectionMatrix(); }
+  cityPos.x=tx; cityPos.z=tz; city.update(dt, cityPos);
+}
+
+// ---------------- tutorial mission ($100K + free car) ----------------
+function startTutorial(){
+  if(!tutorial) return;
+  tutorial.start();
+  $('objective').classList.remove('hidden');
+  updateObjective();
+  toast('🎓 TUTORIAL — finish it for $'+TUTORIAL_REWARD.toLocaleString()+' + a free car!', 3200);
+}
+function updateObjective(){
+  if(!tutorial.active){ $('objective').classList.add('hidden'); return; }
+  $('obj-step').textContent='STEP '+(tutorial.step+1)+'/'+tutorial.total;
+  $('obj-text').textContent=tutorial.text;
+  const tg=tutorial.target();
+  const px=onFoot?foot.pos.x:physics.pos.x, pz=onFoot?foot.pos.z:physics.pos.z, h=onFoot?foot.heading:physics.heading;
+  const arrow=$('obj-arrow'), dist=$('obj-dist');
+  if(tg && !inside){
+    const a=Math.atan2(-(tg.x-px), -(tg.z-pz));
+    const rel=Math.atan2(Math.sin(a-h), Math.cos(a-h));
+    arrow.style.transform='rotate('+(-rel).toFixed(3)+'rad)';
+    arrow.classList.remove('hidden');
+    dist.textContent=Math.round(Math.hypot(tg.x-px, tg.z-pz))+' m';
+  }else{
+    arrow.classList.add('hidden');
+    dist.textContent=tutorial.text.startsWith('DRIFT') ? Math.round(tutorial.driftProgress*100)+'%' : '';
+  }
+}
+function finishTutorial(){
+  save.tutorialDone=true;
+  addCash(TUTORIAL_REWARD);
+  saveSave(save);
+  $('objective').classList.add('hidden');
+  audio.beep(880,0.1); setTimeout(()=>audio.beep(1175,0.14),120);
+  openCarPick();
+}
+function openCarPick(){
+  pickOpen=true;
+  setAction(null,null,'');
+  const maxStat={topSpeed:1,accel:1,handling:1,grip:1};
+  for(const d of CAR_DEFS) for(const k in maxStat) maxStat[k]=Math.max(maxStat[k], d.stats[k]);
+  const bar=(l,v,m)=>`<div class="stat-row"><span>${l}</span><div class="sbar"><i style="width:${Math.max(5,Math.round(v/m*100))}%"></i></div></div>`;
+  $('pick-list').innerHTML=CAR_DEFS.map(d=>`<div class="car-card"><div class="cinfo"><b>${d.name}</b><small>${d.desc} · worth $${d.price.toLocaleString()}</small>`+
+    `<div class="stat-bars">${bar('SPD',d.stats.topSpeed,maxStat.topSpeed)}${bar('ACC',d.stats.accel,maxStat.accel)}${bar('HDL',d.stats.handling,maxStat.handling)}${bar('GRP',d.stats.grip,maxStat.grip)}</div></div>`+
+    `<button class="buy-btn" data-id="${d.id}">PICK FREE</button></div>`).join('');
+  $('car-pick').classList.remove('hidden');
+}
+function pickCar(id){
+  const def=CAR_DEFS.find(d=>d.id===id); if(!def) return;
+  if(!save.owned.includes(id)) save.owned.push(id);
+  if(!save.upgrades[id]) save.upgrades[id]={engine:0,turbo:0,tires:0,suspension:0,nitro:0};
+  if(typeof save.paint[id]!=='number') save.paint[id]=def.colors[0];
+  save.currentCar=id;
+  saveSave(save);
+  refreshSceneKeep();
+  $('car-pick').classList.add('hidden');
+  pickOpen=false;
+  syncCash();
+  toast('🏆 '+def.name+' is yours! +$'+TUTORIAL_REWARD.toLocaleString()+' in the bank', 3200);
+  audio.beep(990,0.1);
+}
+
+// ---------------- multiplayer ----------------
+function setMp(cls, n){
+  const e=$('mp-status');
+  e.classList.remove('hidden');
+  e.className='mp-status '+cls;
+  e.textContent = cls==='on' ? '● online · '+n+(n===1?' player':' players') : cls==='connecting' ? '● connecting…' : '● offline';
+  const o=$('online-hud');
+  o.textContent = cls==='on' ? '🌐 '+n+' online' : '🌐 …';
+  o.classList.toggle('dim', cls!=='on');
+}
+function buildLocalPacket(){
+  mpLocal.name=save.name;
+  mpLocal.car=carDef.id;
+  if(!lookCache) lookCache=packLook(save, carDef.id);
+  mpLocal.look=lookCache;
+  mpLocal.b=inside ? inside.b.id : -1;
+  if(onFoot){
+    mpLocal.mode='foot'; mpLocal.x=foot.pos.x; mpLocal.z=foot.pos.z; mpLocal.h=foot.heading; mpLocal.speed=foot.speed;
+    mpLocal.px=physics.pos.x; mpLocal.pz=physics.pos.z; mpLocal.ph=physics.heading;
+    mpLocal.w=save.equipped||null;
+  }else{
+    mpLocal.mode='car'; mpLocal.x=physics.pos.x; mpLocal.z=physics.pos.z; mpLocal.h=physics.heading; mpLocal.speed=tele.speed;
+    mpLocal.w=null;
+  }
+  return mpLocal;
 }
 
 // ---------------- scene ----------------
@@ -590,18 +791,23 @@ function frame(now){
   if(dt>0.1) dt=0.1;                       // clamp
   frameN++;
 
-  if(state==='freeroam' && !paused && !garageOpen && !storeOpen && onFoot){
+  const playing = state==='freeroam' && !paused && !garageOpen && !storeOpen && !editorOpen && !pickOpen;
+  if(editorOpen){
+    updateEditorCamera(dt);
+  }else if(playing && onFoot){
     updateFoot(dt);
     city.update(dt, foot.pos);
     shops.update(dt);
+    interiors.update(dt, inside && inside.room);
     smoke.update(dt); exhaust.update(dt);
     if(qm) qm.update(dt);
     audio.engine(0,0); audio.skid(false);
     parkedCar.x=physics.pos.x; parkedCar.z=physics.pos.z;
-    minimap.draw(foot.pos.x, foot.pos.z, foot.heading, parkedCar);
+    if(inside) minimap.draw(inside.back.x, inside.back.z, foot.heading, parkedCar, mp);
+    else minimap.draw(foot.pos.x, foot.pos.z, foot.heading, parkedCar, mp);
     updateAction();
     if(controls.consumeAction()) doAction();
-  }else if(state==='freeroam' && !paused && !garageOpen && !storeOpen){
+  }else if(playing){
     tele=physics.update(controls.input, dt, collide);
     // stunt rewards: drifting pays cash, so free roam has its own economy
     const award=stuntUpdate(stunts, tele.drifting, tele.speed, dt);
@@ -613,24 +819,30 @@ function frame(now){
     updateHUD();
     updateEffects(dt);
     shops.update(dt);
-    weapons.update(dt, weaponCtx, false, false);   // let tracers fade
-    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null);
+    weapons.update(dt, weaponCtx, false, false);   // let bullets finish flying
+    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null, mp);
     updateAction();
     if(controls.consumeAction()) doAction();
     if(qm) qm.update(dt);
     const rpm=Math.min(1, Math.abs(tele.speed)/(carStats.topSpeed*1.15));
     audio.engine(rpm, Math.abs(controls.input.throttle||0));
     audio.skid(tele.drifting);
-    if(mp){
-      mpLocal.x=physics.pos.x; mpLocal.z=physics.pos.z;
-      mpLocal.heading=physics.heading; mpLocal.speed=tele.speed; mpLocal.car=carDef.id;
-      mp.update(dt, mpLocal);
-      if(frameN%120===0 && mp.status) setMp('on', mp.status);
-    }
-  }else if(state==='drag' && !paused && !garageOpen){
+  }else if(state==='drag' && !paused && !garageOpen && !editorOpen){
     if(dragMode.active) dragMode.update(dt);
   }else{
     audio.engine(0,0); audio.skid(false);
+  }
+  // tutorial mission
+  if(playing && tutorial && tutorial.active){
+    const r=tutorial.update(dt, { pos:onFoot?foot.pos:physics.pos, drifting:!onFoot&&tele.drifting,
+      speed:onFoot?0:tele.speed, onFoot, inside:inside?inside.b.id:-1 });
+    if(r==='next'){ audio.beep(880,0.08); toast('✅ Nice! Next: '+tutorial.text, 2200); }
+    else if(r==='done') finishTutorial();
+    if(frameN%3===0) updateObjective();
+  }
+  // multiplayer: always interpolate others; only broadcast while playing free roam
+  if(mp){
+    mp.update(dt, state==='freeroam' ? buildLocalPacket() : null, now);
   }
   if(smoke && (state!=='freeroam'||paused||garageOpen||storeOpen)){ smoke.update(dt); exhaust.update(dt); }
   if(postfx) postfx.render();
@@ -651,6 +863,17 @@ function wireUI(){
   $('menu-btn').onclick=openPause;
   $('garage-close').onclick=closeGarage;
   $('drag-exit').onclick=()=>{ if(dragMode.active) dragMode.exit(); startFreeroam(); };
+  // skin editor / tutorial / car pick
+  $('m-editor').onclick=()=>{ audio.unlock(); audio.beep(600,0.05); openEditor('menu','car'); };
+  $('p-editor').onclick=()=>{ audio.beep(600,0.05); openEditor('pause', onFoot?'driver':'car'); };
+  $('se-done').onclick=()=>{ audio.beep(500,0.05); closeEditor(); };
+  $('m-tutorial').onclick=()=>{ audio.unlock(); orient.goLandscape(); audio.beep(600,0.06); save.tutorialSkipped=false; saveSave(save); startFreeroam(); };
+  $('obj-skip').onclick=()=>{
+    tutorial.stop(); save.tutorialSkipped=true; saveSave(save);
+    $('objective').classList.add('hidden');
+    toast('Tutorial skipped — replay it from the main menu for $100K', 2600);
+  };
+  $('pick-list').addEventListener('click', e=>{ const b=e.target.closest('button[data-id]'); if(b) pickCar(b.dataset.id); });
   // AAA: time-of-day + quality buttons
   if($('tod-btn')) $('tod-btn').onclick=()=>{ audio.beep(600,0.05); cycleTimeOfDay(); };
   if($('gfx-btn')) $('gfx-btn').onclick=()=>{
@@ -685,7 +908,7 @@ function onViewResize(w, h){
 // ---------------- boot ----------------
 async function boot(){
   try{
-    save=ensureArsenal(loadSave());
+    save=ensureSkins(ensureArsenal(loadSave()));
     audio=createAudio();
     orient=initOrientation(onViewResize);
     await initScene();
@@ -696,13 +919,21 @@ async function boot(){
     scene.add(person);
     weapons=createWeapons(scene);
     Object.assign(weaponCtx, { save, colliders:city.colliders, targets:shops.targets, audio, toast,
-      onTargetHit:()=>{ addCash(TARGET_PAY); toast('TARGET +$'+TARGET_PAY, 900); } });
+      onTargetHit:()=>{ addCash(TARGET_PAY); toast('TARGET +$'+TARGET_PAY, 900); },
+      onShot:shots=>{ if(mp) mp.sendShots(shots); } });
+    interiors=createInteriors(scene);
+    tutorial=createTutorial(scene, city);
     storeUI=createStoreUI({ save, persist:()=>saveSave(save), toast:m=>toast(m,1600),
       beep:(f,d)=>audio.beep(f,d), onChange:()=>{ syncCash(); syncPersonGear(); } });
     minimap=createMinimap($('minimap'), shops.stores);
     syncPersonGear(); updateModeHUD();
     // test hook: ?debug exposes a teleport for automated smoke tests
-    if(/[?&]debug\b/.test(location.search)) window.__cd={ tp:(x,z,h)=>{ if(onFoot){ foot.reset(x,z,h||0); } else { physics.pos.x=x; physics.pos.z=z; physics.heading=h||0; } }, save:()=>save, stores:()=>shops.stores };
+    if(/[?&]debug\b/.test(location.search)) window.__cd={ tp:(x,z,h)=>{ if(onFoot){ foot.reset(x,z,h||0); } else { physics.pos.x=x; physics.pos.z=z; physics.heading=h||0; } }, save:()=>save, stores:()=>shops.stores,
+      buildings:()=>city.buildings, inside:()=>inside&&{id:inside.b.id, style:inside.room.style}, enter:b=>enterBuilding(b), exit:()=>exitBuilding(),
+      getOut:()=>getOut(), tut:()=>tutorial&&{active:tutorial.active, step:tutorial.step}, finishTut:()=>finishTutorial(), pick:id=>pickCar(id),
+      mp:()=>mp&&{status:mp.status,count:mp.count}, state:()=>({state,onFoot,editorOpen,pickOpen,cash:save.cash}),
+      shot:(a,b,c,d)=>weapons.remoteShot(a,b,c,d),
+      cam:()=>({c:camera.position.toArray().map(v=>+v.toFixed(2)), p:person.position.toArray().map(v=>+v.toFixed(2)), pv:person.visible, f:[foot.pos.x,foot.pos.z,foot.heading]}) };
     rebuildCar();
     physics=new CarPhysics(carStats);
     placeAtSpawn();
@@ -713,7 +944,27 @@ async function boot(){
       onPaint:()=>refreshSceneKeep(),
       onWheels:()=>refreshSceneKeep(),
       refreshScene:()=>refreshSceneKeep(),
+      openEditor:()=>openEditor('garage','car'),
     });
+    editor=createSkinEditor({
+      save, cars:CAR_DEFS, persist:()=>saveSave(save), beep:(f,d)=>audio.beep(f,d),
+      onCar:(swapped)=>{
+        if(swapped) refreshSceneKeep();
+        else applyCarSkin(carGroup, save.paint[carDef.id], carSkinFor(save, carDef.id));
+        lookCache=null;
+      },
+      onOutfit:()=>{ setOutfit(person, save.outfit); lookCache=null; },
+      onName:()=>{ lookCache=null; },
+      onTab:t=>editorTab(t),
+    });
+    mp=createMultiplayer({
+      scene, CAR_DEFS, buildCar, applyCarSkin, buildCharacter, setOutfit, setHeldWeapon, animateCharacter, unpackLook,
+      remoteShot:(a,b,c,d)=>weapons.remoteShot(a,b,c,d),
+      localBuilding:()=>inside?inside.b.id:-1,
+      onStatus:(s,n)=>setMp(s==='on'?'on':s==='connecting'?'connecting':'off', n),
+      onCount:n=>{ if(mp && mp.status==='on') setMp('on', n); },
+    });
+    mp.connect();
     dragMode=createDragMode({
       scene, camera, buildCar, CAR_DEFS, effectiveStats,
       getPlayer:()=>{ playerInfo.def=carDef; playerInfo.stats=carStats; playerInfo.group=carGroup; return playerInfo; },

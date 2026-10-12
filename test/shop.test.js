@@ -14,7 +14,7 @@ describe('ensureArsenal', () => {
     assert.equal(s.equipped, null);
     assert.equal(s.outfit.shirt, SHIRTS[0]);
     assert.equal(s.outfit.hat, 'none');
-    assert.deepEqual(s.hats, ['none']);
+    assert.ok(s.hats.includes('none') && s.hats.includes('crown'), 'every hat is unlocked');
   });
   it('drops unknown weapons and repairs a bad equipped id', () => {
     const s = ensureArsenal({ cash: 0, weapons: ['pistol', 'laser', 'pistol'], ammo: { pistol: -4, laser: 9 }, equipped: 'laser' });
@@ -64,16 +64,16 @@ describe('gun store', () => {
 });
 
 describe('clothing store', () => {
-  it('charges for shirts and hats; owned hats are free to swap', () => {
-    const s = fresh(1000);
+  it('clothing is free: shirts (any color) and hats cost nothing', () => {
+    const s = fresh(0);
+    assert.equal(SHIRT_COST, 0);
     assert.ok(buyShirt(s, SHIRTS[3]).ok);
-    assert.equal(s.cash, 1000 - SHIRT_COST);
-    assert.equal(buyShirt(s, SHIRTS[3]).ok, false);
-    assert.ok(buyHat(s, 'cap').ok);
-    const c = s.cash;
-    buyHat(s, 'none'); buyHat(s, 'cap');
-    assert.equal(s.cash, c);
-    assert.equal(s.outfit.hat, 'cap');
+    assert.ok(buyShirt(s, 0x123456).ok, 'custom colors allowed');
+    assert.equal(s.outfit.shirt, 0x123456);
+    assert.equal(buyShirt(s, 0x123456).ok, false);
+    assert.ok(buyHat(s, 'crown').ok);
+    assert.equal(s.cash, 0);
+    assert.equal(s.outfit.hat, 'crown');
   });
 });
 

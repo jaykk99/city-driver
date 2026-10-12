@@ -1,9 +1,8 @@
 // Multiplayer configuration for CITY DRIVER.
-// The game runs 100% solo while MP_SERVER_URL is '' (or the server is unreachable).
+// Online play runs over Supabase Realtime "broadcast" (no game server needed).
+// The key below is Supabase's public anon key — it is designed to be shipped
+// in browser code. Set MP_URL to '' to make the game fully solo.
 
-// Set this to your deployed relay URL to enable online play, e.g.
-//   export const MP_SERVER_URL = 'https://city-driver-mp.onrender.com';
-export const MP_SERVER_URL = '';
-
-// Random display name shown above your car.
-export const MP_NAME = 'Driver' + Math.floor(1000 + Math.random() * 9000);
+export const MP_URL = 'https://fhbqxujlnqlmzvulrdxt.supabase.co';
+export const MP_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZoYnF4dWpsbnFsbXp2dWxyZHh0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MTc0NDQsImV4cCI6MjEwMzE5MzQ0NH0.ThFmY_FXQlnaaI8GNLz9xSHATOacM9iOb8u0G0WFJ2w';
+export const MP_TOPIC = 'city-driver-v2';

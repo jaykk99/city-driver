@@ -11,7 +11,11 @@ Open-world 3D driving game for mobile browsers. Built with Three.js — no app s
 - **Arcade physics** — acceleration, braking, speed-sensitive steering, handbrake drifts, nitro boost
 - **Garage** — upgrade engine, turbo, tires, suspension, nitro (5 levels each), paint shop (8 colors), 3 wheel styles. Upgrades change real stats. Progress saved in localStorage
 - **Drag racing** — quarter-mile strip, Christmas-tree lights, reaction-time launch, 5-gear shift-timing minigame, AI opponent, cash payouts
-- **Multiplayer (not live yet)** — a Socket.io relay client is built in and will show other drivers in the same city, but no relay server is deployed yet, so the game runs fully solo. Deploy `server/` and set `MP_SERVER_URL` in `js/config.js` to turn it on
+- **Live multiplayer** — everyone who opens the game shares one city over Supabase Realtime (no game server). Other players show up as their car or on foot with their skin, name tag and gun, and you see their bullets fly. Online count on the menu + HUD, players on the minimap
+- **Free skin editor** — any car paint color, rims, racing stripes, underglow, window tint; driver shirt/pants/skin tone/hair/hat (incl. crown + helmet) and your online name. All free
+- **Tutorial mission** — drive, drift, get out, enter a building, leave it. Pays **$100,000** once, then you pick **any car free**
+- **Enter any building** — every building has a lit front door; walk up and tap ENTER BUILDING. Lobbies, apartments, offices and diners, each furnished, with an EXIT pad
+- **Visible bullets** — glowing slugs with tracer trails that fly to where they hit
 - **On foot** — tap GET OUT to leave your car and walk the city (joystick + run), GET IN to drive again
 - **Stores** — LOCK & LOAD gun store (4 guns + ammo), THREADZ clothing (shirts, hats), AUTO SHOP (opens the garage). Walk into the glowing ring at the door
 - **Shooting range** — behind the gun store; knock down targets for cash
@@ -33,21 +37,15 @@ npm run build # → js/bundle.js (three.js + game, zero CDN requests)
 > `index.html` loads only `js/bundle.js` — the game makes **no CDN requests**,
 > so a slow/down CDN can never hang the loading screen.
 
-# multiplayer relay (optional — not deployed)
+## Multiplayer
 
-> Status: the relay code in `server/` works locally, but no public relay is
-> deployed yet. Until one is, the game runs fully solo and the menu shows no
-> online indicator. Deploy steps below when ready.
-cd server && npm install && npm start
-# → set MP_SERVER_URL in js/config.js to the relay URL
-```
+Runs over Supabase Realtime broadcast on a public channel (`js/net.js`, ~100 lines, no library).
+Settings live in `js/config.js` (`MP_URL`, `MP_KEY` = the public anon key, `MP_TOPIC`).
+Set `MP_URL = ''` to make the game fully solo.
 
 ## Deploy
 
 - **Game client:** Vercel → Import `jaykk99/city-driver` → Deploy (pure static, zero config)
-- **Multiplayer relay:** Render → New Web Service → point at this repo (`render.yaml` auto-configures) → copy URL into `js/config.js` → redeploy client
-
-Without the relay URL the game runs fully solo — multiplayer is purely additive.
 
 ## Tech
 

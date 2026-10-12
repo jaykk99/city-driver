@@ -14,14 +14,12 @@ export const WEAPONS = [
     ammoBox:60, ammoPrice:200, start:60, desc:'Long range, dead accurate.' },
 ];
 
+import { HATS as HAT_IDS, HAT_NAMES, normalizeOutfit } from './skins.js';
+
+// Clothing is FREE (skin editor update).
 export const SHIRTS = [0x2b6cb0,0xe53e3e,0x2f855a,0x1a202c,0xf7fafc,0xd69e2e,0x805ad5,0xed64a6];
-export const SHIRT_COST = 150;
-export const HATS = [
-  { id:'none',   name:'No hat',  price:0 },
-  { id:'cap',    name:'Snapback',price:200 },
-  { id:'beanie', name:'Beanie',  price:200 },
-  { id:'cowboy', name:'Stetson', price:450 },
-];
+export const SHIRT_COST = 0;
+export const HATS = HAT_IDS.map(id => ({ id, name:HAT_NAMES[id], price:0 }));
 
 // Shooting-range payout per knocked-down target.
 export const TARGET_PAY = 15;
@@ -37,13 +35,8 @@ export function ensureArsenal(save){
   for(const id of Object.keys(save.ammo)) if(!valid.has(id)) delete save.ammo[id];
   for(const id of save.weapons) save.ammo[id] = Math.max(0, save.ammo[id] | 0);
   if(!save.weapons.includes(save.equipped)) save.equipped = save.weapons[0] || null;
-  if(!save.outfit || typeof save.outfit !== 'object') save.outfit = {};
-  if(!SHIRTS.includes(save.outfit.shirt)) save.outfit.shirt = SHIRTS[0];
-  const hatIds = new Set(HATS.map(h => h.id));
-  if(!Array.isArray(save.hats)) save.hats = ['none'];
-  save.hats = save.hats.filter(h => hatIds.has(h));
-  if(!save.hats.includes('none')) save.hats.unshift('none');
-  if(!save.hats.includes(save.outfit.hat)) save.outfit.hat = 'none';
+  save.outfit = normalizeOutfit(save.outfit);
+  save.hats = HATS.map(h => h.id);          // every hat is free
   return save;
 }
 
@@ -96,7 +89,7 @@ export function useAmmo(save, id){
 }
 
 export function buyShirt(save, hex){
-  if(!SHIRTS.includes(hex)) return fail('Unknown color');
+  if(!Number.isInteger(hex) || hex < 0 || hex > 0xffffff) return fail('Unknown color');
   if(save.outfit.shirt === hex) return fail('Already wearing it');
   if(save.cash < SHIRT_COST) return fail('Not enough cash');
   save.cash -= SHIRT_COST;

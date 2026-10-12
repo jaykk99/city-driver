@@ -5,8 +5,9 @@
 import { CAR_DEFS } from './cars.js';
 
 const SAVE_KEY = 'citydriver_save_v1';
-export const PAINT_COST = 250;
-export const WHEEL_COST = 350;
+// cosmetics are free (skin editor)
+export const PAINT_COST = 0;
+export const WHEEL_COST = 0;
 export const MAX_UPGRADE = 5;
 export const PAINTS = [0xd7263d,0x1f6feb,0xffb300,0x2d6a4f,0x6b7280,0xf8fafc,0x7c3aed,0x111827];
 export const WHEEL_STYLES = ['Sport','Chrome','Stealth'];
@@ -121,16 +122,14 @@ export function createGarage(api){
 
   function renderStyle(){
     const id=save.currentCar;
-    const curPaint=save.paint[id], curWheels=save.wheels[id];
+    const curPaint=save.paint[id];
     const swatches=PAINTS.map(h=>
       `<button class="swatch${h===curPaint?' sel':''}" data-hex="${h}" style="background:${hex(h)}" aria-label="paint"></button>`
     ).join('');
-    const wheels=WHEEL_STYLES.map((n,i)=>
-      `<button class="wheel-opt${i===curWheels?' sel':''}" data-idx="${i}"><b>${n}</b><small>$${WHEEL_COST}</small></button>`
-    ).join('');
     styleEl.innerHTML =
-      `<div class="style-sec"><b>Paint — $${PAINT_COST} each</b><div class="swatch-row">${swatches}</div></div>`+
-      `<div class="style-sec"><b>Wheels — $${WHEEL_COST} each</b><div class="swatch-row">${wheels}</div></div>`;
+      `<div class="style-sec"><b>Quick paint — FREE</b><div class="swatch-row">${swatches}</div></div>`+
+      `<button class="mbtn primary" data-act="editor" style="width:100%">🎨 OPEN SKIN EDITOR — all free</button>`+
+      `<p class="store-tip">Any color, rims, stripes, underglow, window tint, and your driver's look.</p>`;
   }
 
   function refresh(){ syncCash(); renderCars(); renderUpgrades(); renderStyle(); }
@@ -166,27 +165,19 @@ export function createGarage(api){
 
   styleEl.addEventListener('click', e=>{
     const id=save.currentCar;
+    if(e.target.closest('button[data-act="editor"]')){ if(api.openEditor) api.openEditor(); return; }
     const sw=e.target.closest('button.swatch');
     if(sw){
       const h=parseInt(sw.dataset.hex,10);
-      if(save.paint[id]!==h&&save.cash>=PAINT_COST){
-        save.cash-=PAINT_COST; save.paint[id]=h;
+      if(save.paint[id]!==h){
+        save.paint[id]=h;
         saveSave(save); api.onPaint(h); refresh();
-      }
-      return;
-    }
-    const w=e.target.closest('button.wheel-opt');
-    if(w){
-      const idx=parseInt(w.dataset.idx,10);
-      if(save.wheels[id]!==idx&&save.cash>=WHEEL_COST){
-        save.cash-=WHEEL_COST; save.wheels[id]=idx;
-        saveSave(save); api.onWheels(idx); refresh();
       }
     }
   });
 
   // tabs
-  const tabs=[...document.querySelectorAll('.gtab')];
+  const tabs=[...document.querySelectorAll('#garage .gtab')];
   const panels={cars:carsEl, upgrades:upgEl, style:styleEl};
   tabs.forEach(t=>t.addEventListener('click',()=>{
     tabs.forEach(x=>x.classList.toggle('active',x===t));

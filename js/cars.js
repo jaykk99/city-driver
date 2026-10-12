@@ -85,7 +85,7 @@ const PROFILES = {
   },
 };
 
-function extrudeProfile(pts, width, mat, arches, bevel=0.045){
+export function extrudeProfile(pts, width, mat, arches, bevel=0.045){
   const s = new THREE.Shape();
   s.moveTo(pts[0][0], pts[0][1]);
   for(let i=1;i<pts.length;i++) s.lineTo(pts[i][0], pts[i][1]);
@@ -236,7 +236,8 @@ export function buildCar(idOrDef, colorHex, wheelStyle='stock'){
   group.userData = {
     defId:id, bodyColor:colorHex, wheels,
     frontWheels: wheels.filter(w=>w.position.z<0),
-    rim, setBrake:(on)=>{},
+    rim, glass, paint, setBrake:(on)=>{},
+    profile:P, frontZ, rearZ,
   };
   return group;
 }
@@ -274,4 +275,67 @@ export function effectiveStats(idOrDef, upgrades){
     nitroTime:  base.nitroTime  + 0.5*lv('nitro'),
     nitroPower: base.nitroPower * (1 + 0.08*lv('nitro')),
   };
+}
+
+// ---- free skin editor: paint, rims, stripes, underglow, window tint ----
+const TINT_COLORS = { clear:0x4a5b6e, dark:0x0e141c, limo:0x020304 };
+export function applyCarSkin(group, paintHex, skin){
+  const u = group.userData;
+  if(typeof paintHex === 'number' && u.paint){ u.paint.color.setHex(paintHex); u.bodyColor = paintHex; }
+  if(!skin) return group;
+  if(u.rim) u.rim.color.setHex(skin.rims);
+  if(u.glass) u.glass.color.setHex(TINT_COLORS[skin.tint] ?? TINT_COLORS.dark);
+  // rebuild the decal parts
+  if(u.skinParts){ group.remove(u.skinParts); u.skinParts.traverse(o => { if(o.isMesh){ o.geometry.dispose(); } }); }
+  const parts = new THREE.Group();
+  u.skinParts = parts;
+  group.add(parts);
+  const P = u.profile;
+  if(P && skin.stripes !== 'none'){
+    const sm = new THREE.MeshPhysicalMaterial({ color:skin.stripe, metalness:0.4, roughness:0.35, clearcoat:1, clearcoatRoughness:0.1 });
+    if(skin.stripes === 'side'){
+      const len = (u.rearZ - u.frontZ) * 0.86, mid = (u.rearZ + u.frontZ) / 2;
+      const y = P.wheelR + 0.22;
+      for(const s of [-1, 1]){
+        const b = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.09, len), sm);
+        b.position.set(s * (P.W / 2 + 0.05), y, mid);
+        parts.add(b);
+      }
+    }else{
+      const offs = skin.stripes === 'dual' ? [-0.22, 0.22] : [0];
+      const w = skin.stripes === 'dual' ? 0.16 : 0.34;
+      for(const ox of offs){
+        for(const pts of [P.body, P.roof]){
+          if(!pts) continue;
+          const m = extrudeProfile(pts, w, sm, null, 0.045);
+          m.castShadow = false;
+          m.scale.set(1, 1.012, 1.004);
+          m.position.set(ox, 0.006, 0);
+          parts.add(m);
+        }
+      }
+    }
+  }
+  if(skin.glow != null && P){
+    const gm = new THREE.MeshBasicMaterial({ color:skin.glow, transparent:true, opacity:0.75,
+      blending:THREE.AdditiveBlending, depthWrite:false, map:glowTexture() });
+    const len = (u.rearZ - u.frontZ) + 1.2;
+    const g = new THREE.Mesh(new THREE.PlaneGeometry(P.W + 1.4, len).rotateX(-Math.PI / 2), gm);
+    g.position.set(0, 0.07, (u.rearZ + u.frontZ) / 2);
+    g.renderOrder = 2;
+    parts.add(g);
+  }
+  return group;
+}
+
+let _glowTex = null;
+function glowTexture(){
+  if(_glowTex) return _glowTex;
+  const c = document.createElement('canvas'); c.width = 64; c.height = 128;
+  const g = c.getContext('2d');
+  const gr = g.createRadialGradient(32, 64, 4, 32, 64, 62);
+  gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.55, 'rgba(255,255,255,0.45)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+  g.save(); g.scale(1, 1); g.fillStyle = gr; g.fillRect(0, 0, 64, 128); g.restore();
+  _glowTex = new THREE.CanvasTexture(c);
+  return _glowTex;
 }
