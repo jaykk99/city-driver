@@ -16,7 +16,7 @@ const LERP = 10;
 
 const angleDiff = (a, b) => { let d = (b - a) % (Math.PI * 2); if(d > Math.PI) d -= Math.PI * 2; if(d < -Math.PI) d += Math.PI * 2; return d; };
 
-function nameTag(name){
+function nameTag(name, team){
   const text = String(name || 'Driver').slice(0, 16);
   const font = '700 28px system-ui, -apple-system, sans-serif';
   const meas = document.createElement('canvas').getContext('2d'); meas.font = font;
@@ -25,7 +25,8 @@ function nameTag(name){
   const g = c.getContext('2d');
   g.fillStyle = 'rgba(8,12,22,0.72)';
   g.beginPath(); g.roundRect ? g.roundRect(1, 1, w - 2, h - 2, 14) : g.rect(1, 1, w - 2, h - 2); g.fill();
-  g.fillStyle = '#4ade80'; g.beginPath(); g.arc(16, h / 2, 5, 0, Math.PI * 2); g.fill();
+  g.fillStyle = team === 'red' ? '#ff3b4e' : team === 'blue' ? '#3b8bff' : '#4ade80';
+  g.beginPath(); g.arc(16, h / 2, 5, 0, Math.PI * 2); g.fill();
   g.font = font; g.fillStyle = '#fff'; g.textBaseline = 'middle'; g.fillText(text, 26, h / 2 + 1);
   const tex = new THREE.CanvasTexture(c);
   const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, transparent:true, depthTest:false }));
@@ -93,12 +94,15 @@ export function createMultiplayer(deps){
     r.carId = String(p.c || 'sport');
     r.b = Number.isInteger(p.b) ? p.b : -1;
     r.weapon = p.w || null;
+    const team = p.tm || null;
+    if(team !== r.team){ r.team = team; r.tagName = ''; }
+    r.dead = p.hp === 0;
     r.firing = !!p.f;
     if(r.mode === 'foot' && Number.isFinite(p.px)){ r.cx = +p.px; r.cz = +p.pz; r.ch = +p.ph || 0; }
     if(p.L){ const sig = JSON.stringify(p.L); if(sig !== r.lookSig){ r.lookSig = sig; r.look = deps.unpackLook(p.L); } }
-    if(p.n && p.n !== r.tagName){
+    if(p.n && (p.n !== r.tagName || !r.tag)){
       if(r.tag && r.tag.parent) r.tag.parent.remove(r.tag);
-      r.tag = nameTag(p.n); r.tagName = p.n; r.name = p.n;
+      r.tag = nameTag(p.n, r.team); r.tagName = p.n; r.name = p.n;
     }
     if(!r.placed){ r.x = r.tx; r.z = r.tz; r.h = r.th; if(r.mode === 'car'){ r.cx = r.tx; r.cz = r.tz; r.ch = r.th; } r.placed = true; }
   }
@@ -111,15 +115,29 @@ export function createMultiplayer(deps){
     for(const s of p.s.slice(0, 3)) if(Array.isArray(s) && s.length === 4) deps.remoteShot(+s[0], +s[1], +s[2], +s[3]);
   }
 
-  function connect(){
-    if(rt || !MP_URL || !MP_KEY) return;
-    rt = createRealtime({ url:MP_URL, key:MP_KEY, topic:MP_TOPIC, onStatus:s => { if(deps.onStatus) deps.onStatus(s, count()); } });
+  let topic = null;
+  function clearRemotes(){ for(const id of [...remotes.keys()]) removeRemote(id); }
+  // join a channel (game mode). connect(null) = go offline (single player).
+  function connect(t){
+    if(t === undefined) t = MP_TOPIC;
+    if(t === topic && rt) return;
+    disconnect();
+    topic = t;
+    if(!t || !MP_URL || !MP_KEY){ if(deps.onStatus) deps.onStatus('off', 1); return; }
+    rt = createRealtime({ url:MP_URL, key:MP_KEY, topic:t, onStatus:s => { if(deps.onStatus) deps.onStatus(s, count()); } });
     rt.on('st', onState);
     rt.on('sh', onShot);
     rt.on('bye', p => { if(p && p.id) removeRemote(p.id); });
+    rt.on('hit', p => { if(p && p.t === myId && deps.onHit) deps.onHit(p, remotes.get(p.id)); });
+    rt.on('kill', p => { if(p && deps.onKill) deps.onKill(p); });
     rt.connect();
-    window.addEventListener('pagehide', () => { try{ rt.send('bye', { id:myId }); }catch(_){ } });
   }
+  function disconnect(){
+    if(rt){ try{ rt.send('bye', { id:myId }); }catch(_){ } rt.close(); rt = null; }
+    clearRemotes();
+    lastSig = ''; lastLookSig = '';
+  }
+  window.addEventListener('pagehide', () => { try{ rt && rt.send('bye', { id:myId }); }catch(_){ } });
 
   // local = { name, mode, x, z, h, speed, car, look, px, pz, ph, b, w, firing }
   function update(dt, local, now){
@@ -131,7 +149,7 @@ export function createMultiplayer(deps){
       if(now - lastSend >= (moving ? SEND_MOVING_MS : SEND_IDLE_MS)){
         lastSend = now; lastSig = sig;
         const msg = { id:myId, n:local.name, m:local.mode, x:+local.x.toFixed(2), z:+local.z.toFixed(2), h:+local.h.toFixed(3),
-          c:local.car, b:local.b, w:local.w || null };
+          c:local.car, b:local.b, w:local.w || null, tm:local.team || null, hp:local.dead ? 0 : 1 };
         if(local.mode === 'foot'){ msg.px = +local.px.toFixed(2); msg.pz = +local.pz.toFixed(2); msg.ph = +local.ph.toFixed(3); }
         const lookSig = JSON.stringify(local.look);
         if(lookSig !== lastLookSig || now - lastLook > LOOK_EVERY_MS){ msg.L = local.look; lastLook = now; lastLookSig = lookSig; }
@@ -156,7 +174,8 @@ export function createMultiplayer(deps){
         r.person.position.x = r.x; r.person.position.z = r.z; r.person.rotation.y = r.h;
         r.phase += r.speed * dt * 2.1;
         r.recoil = Math.max(0, (r.recoil || 0) - dt);
-        deps.animateCharacter(r.person, r.phase, r.speed, !!r.weapon && r.recoil > 0, dt);
+        if(r.dead){ r.person.rotation.x = -Math.PI / 2 + 0.05; r.person.position.y = 0.12; }
+        else { r.person.rotation.x = 0; deps.animateCharacter(r.person, r.phase, r.speed, !!r.weapon && r.recoil > 0, dt); }
       }else if(r.person){ r.person.visible = false; }
       // name tag rides on whatever represents them
       if(r.tag){
@@ -174,5 +193,7 @@ export function createMultiplayer(deps){
   // nearby remote players (for the minimap)
   function each(fn){ for(const r of remotes.values()) fn(r); }
 
-  return { connect, update, sendShots, each, get count(){ return count(); }, get status(){ return rt ? rt.status : 'off'; } };
+  function send(ev, payload){ if(rt && rt.status === 'on') rt.send(ev, Object.assign({ id:myId }, payload)); }
+  return { connect, disconnect, update, sendShots, send, each, myId,
+    get topic(){ return topic; }, get count(){ return count(); }, get status(){ return rt ? rt.status : 'off'; } };
 }

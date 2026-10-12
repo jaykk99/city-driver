@@ -195,6 +195,8 @@ export function createTraffic(deps){
       c.group.rotation.y = c.h;
       const spin = c.speed * dt * 2.6;
       for(const w of c.group.userData.wheels) w.rotation.x += spin;
+      const fl = c.group.userData.flashers;
+      if(fl){ const on = ((time * 6) | 0) % 2; fl[0].emissiveIntensity = on ? 4 : 0.25; fl[1].emissiveIntensity = on ? 0.25 : 4; }
     }
   }
 

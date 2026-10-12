@@ -223,3 +223,17 @@ body.compact #health-hud{top:auto;left:auto;right:14px;bottom:calc(150px + env(s
 #wasted{position:fixed;inset:0;z-index:45;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(20,0,0,.45);pointer-events:none;filter:grayscale(.3)}
 #wasted h1{font-size:72px;font-weight:900;letter-spacing:6px;color:#d7263d;text-shadow:0 4px 0 #000,0 0 30px rgba(0,0,0,.8);font-family:Georgia,serif}
 #wasted p{color:#e2e8f0;margin-top:6px;letter-spacing:3px}
+
+/* ---------- team deathmatch ---------- */
+.mbtn.danger{background:linear-gradient(135deg,#d7263d,#7a1010)}
+#tdm-hud{position:fixed;top:calc(8px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:34;text-align:center;pointer-events:none}
+.tdm-score{display:flex;align-items:center;gap:12px;background:rgba(10,14,30,.85);padding:6px 14px;border-radius:14px;font-weight:900;font-size:15px;letter-spacing:1px}
+.tdm-score i{font-style:normal;font-size:10px;color:#94a3b8;letter-spacing:1px}
+.tdm-score b{font-size:22px}
+.red{color:#ff4d5e}.blue{color:#4d9bff}
+#tdm-you{margin-top:4px;font-size:11px;font-weight:800;letter-spacing:1px;color:#cbd5e1;text-shadow:0 1px 4px #000}
+#tdm-you.red{color:#ff4d5e}#tdm-you.blue{color:#4d9bff}
+#killfeed{position:fixed;right:12px;top:calc(176px + env(safe-area-inset-top));z-index:34;display:flex;flex-direction:column;gap:4px;align-items:flex-end;pointer-events:none}
+#killfeed div{background:rgba(10,14,30,.8);padding:4px 10px;border-radius:8px;font-size:12px;font-weight:700}
+#tdm-win{position:fixed;top:34%;left:0;right:0;text-align:center;z-index:44;font-size:48px;font-weight:900;letter-spacing:3px;text-shadow:0 4px 0 #000,0 0 30px rgba(0,0,0,.8);pointer-events:none}
+body.compact #killfeed{top:calc(150px + env(safe-area-inset-top))}

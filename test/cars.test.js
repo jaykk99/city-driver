@@ -7,8 +7,8 @@ import { CAR_DEFS, carDef, effectiveStats } from '../js/cars.js';
 const STAT_KEYS = ['topSpeed', 'accel', 'handling', 'grip', 'nitroTime', 'nitroPower'];
 
 describe('CAR_DEFS', () => {
-  it('has 6 cars with unique ids', () => {
-    assert.equal(CAR_DEFS.length, 6);
+  it('has 11 cars with unique ids', () => {
+    assert.equal(CAR_DEFS.length, 11);
     const ids = CAR_DEFS.map(c => c.id);
     assert.equal(new Set(ids).size, ids.length, 'duplicate car ids');
   });
@@ -30,7 +30,7 @@ describe('CAR_DEFS', () => {
   it('faster cars cost more (rough price sanity)', () => {
     const byPrice = [...CAR_DEFS].sort((a, b) => a.price - b.price);
     assert.equal(byPrice[0].id, 'sport');
-    assert.equal(byPrice[byPrice.length - 1].id, 'track');
+    assert.equal(byPrice[byPrice.length - 1].id, 'hyper');
   });
 });
 

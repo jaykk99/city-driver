@@ -28,6 +28,14 @@
   <div id="health-hud"><span>❤</span><div class="hp-bar"><div id="hp-fill"></div></div></div>
 </div>
 
+<!-- Team deathmatch -->
+<div id="tdm-hud" class="hidden">
+  <div class="tdm-score"><span class="red">RED <b id="tdm-red">0</b></span><i>first to 25</i><span class="blue"><b id="tdm-blue">0</b> BLUE</span></div>
+  <div id="tdm-you">joining…</div>
+</div>
+<div id="killfeed"></div>
+<div id="tdm-win" class="hidden"></div>
+
 <!-- Tutorial objective -->
 <div id="objective" class="hidden">
   <div class="obj-top"><b id="obj-step">STEP 1/6</b><button id="obj-skip">SKIP</button></div>
@@ -64,7 +72,9 @@
   <div id="mp-status" class="mp-status hidden">● offline</div>
   <!-- Online indicator: hidden unless a multiplayer relay URL is configured (js/config.js). -->
   <div class="menu-buttons">
-    <button id="m-freeroam" class="mbtn primary">🚗 FREE ROAM · ONLINE</button>
+    <button id="m-freeroam" class="mbtn primary">🧍 SINGLE PLAYER</button>
+    <button id="m-online" class="mbtn primary">🌐 ONLINE FREE ROAM</button>
+    <button id="m-tdm" class="mbtn danger">⚔️ TEAM DEATHMATCH</button>
     <button id="m-tutorial" class="mbtn gold">🎓 TUTORIAL · WIN $100K + FREE CAR</button>
     <button id="m-drag" class="mbtn">🏁 DRAG RACE</button>
     <button id="m-garage" class="mbtn">🔧 GARAGE</button>

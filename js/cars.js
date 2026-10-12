@@ -17,6 +17,16 @@ export const CAR_DEFS = [
     stats:{ topSpeed:45, accel:15, handling:0.8,  grip:1.1,  nitroTime:4.2, nitroPower:1.35 } },
   { id:'track',  name:'Vortex R',    desc:'Track weapon. Max grip, max downforce.', price:35000, colors:[0x18c0c0,0xc01818,0xf2f2f2,0x14161c,0xff5a1a],
     stats:{ topSpeed:68, accel:23, handling:1.25, grip:1.35, nitroTime:2.8, nitroPower:1.5 } },
+  { id:'sedan',  name:'Prairie Sedan', desc:'Comfy daily driver. Easy to handle.', price:6000, colors:[0x6b7280,0x1a3a6b,0xf2f2f2,0x7a1010,0x14161c],
+    stats:{ topSpeed:48, accel:14, handling:1.0, grip:1.0, nitroTime:3.0, nitroPower:1.3 } },
+  { id:'taxi',   name:'Peg City Cab', desc:'Yellow cab with a roof sign. Nimble.', price:7500, colors:[0xffc400,0xffc400,0xf2f2f2],
+    stats:{ topSpeed:49, accel:15, handling:1.05, grip:1.0, nitroTime:3.0, nitroPower:1.3 }, extra:'taxi' },
+  { id:'van',    name:'Delivery Van', desc:'Big box on wheels. Slow, heavy, tough.', price:9000, colors:[0xf2f2f2,0x1f6feb,0x2d6a4f,0xc01818],
+    stats:{ topSpeed:42, accel:12, handling:0.8, grip:1.0, nitroTime:4.0, nitroPower:1.3 } },
+  { id:'police', name:'Interceptor', desc:'Police-spec V8 with a light bar.', price:28000, colors:[0x14161c,0xf2f2f2,0x1a3a6b],
+    stats:{ topSpeed:60, accel:19, handling:1.1, grip:1.15, nitroTime:3.4, nitroPower:1.4 }, extra:'police' },
+  { id:'hyper',  name:'Aurora Hyper', desc:'The fastest thing in the city. Wings and all.', price:90000, colors:[0xff5e3a,0xa855f7,0x18c0c0,0xf2f2f2,0x14161c],
+    stats:{ topSpeed:76, accel:27, handling:1.3, grip:1.4, nitroTime:3.2, nitroPower:1.55 } },
 ];
 export const carDef = id => CAR_DEFS.find(c=>c.id===id) || CAR_DEFS[0];
 
@@ -40,6 +50,7 @@ const plateMat = () => new THREE.MeshStandardMaterial({ color:0xe8e8e8, roughnes
 
 // ---- side profiles: [x, y], +X = FRONT, Y = up. Arches cut as holes. ----
 const ARCH = (x, y, r) => ({ x, y, r });
+const PROFILE_ALIAS = { taxi:'sedan', police:'sedan' };
 const PROFILES = {
   sport: {
     W:1.86, wb:1.35, wheelR:0.34, track:1.58,
@@ -75,6 +86,26 @@ const PROFILES = {
     glass:[[0.64,1.03],[0.48,1.54],[-0.42,1.58],[-0.62,1.05]],
     roof:[[0.52,1.5],[-0.46,1.54],[-0.5,1.48],[0.48,1.44]],
     bed:true, splitter:false,
+  },
+  sedan: {
+    W:1.84, wb:1.4, wheelR:0.33, track:1.58,
+    body:[[2.3,0.3],[2.34,0.5],[2.15,0.68],[1.25,0.78],[0.6,0.82],[-1.5,0.84],[-2.1,0.8],[-2.3,0.62],[-2.3,0.36],[-2.0,0.22],[2.0,0.22]],
+    glass:[[0.62,0.8],[0.25,1.28],[-1.05,1.3],[-1.5,0.84]],
+    roof:[[0.28,1.24],[-1.08,1.26],[-1.12,1.2],[0.24,1.18]],
+    splitter:false,
+  },
+  van: {
+    W:2.0, wb:1.6, wheelR:0.36, track:1.68,
+    body:[[2.45,0.3],[2.5,0.6],[2.35,0.95],[1.6,1.1],[0.95,1.1],[0.95,2.0],[-2.45,2.0],[-2.5,1.85],[-2.5,0.35],[-2.2,0.24],[2.2,0.24]],
+    glass:[[1.62,1.1],[1.05,1.95],[0.9,1.95],[0.9,1.1]],
+    roof:null, splitter:false,
+  },
+  hyper: {
+    W:2.04, wb:1.4, wheelR:0.34, track:1.72,
+    body:[[2.4,0.2],[2.45,0.38],[2.2,0.5],[1.2,0.6],[0.5,0.68],[-1.3,0.74],[-2.0,0.72],[-2.35,0.6],[-2.4,0.38],[-2.3,0.2],[-2.0,0.14],[2.0,0.14]],
+    glass:[[0.6,0.66],[0.0,1.0],[-0.9,1.02],[-1.4,0.74]],
+    roof:[[0.04,0.97],[-0.92,0.99],[-0.95,0.93],[0.0,0.92]],
+    wing:true, splitter:true, canards:true,
   },
   track: {
     W:2.02, wb:1.38, wheelR:0.335, track:1.70,
@@ -133,7 +164,7 @@ export function buildCar(idOrDef, colorHex, wheelStyle='stock'){
   const def = typeof idOrDef === 'string' ? carDef(idOrDef) : (idOrDef || CAR_DEFS[0]);
   const id = def.id || 'sport';
   if (typeof colorHex !== 'number') colorHex = (typeof def.color === 'number') ? def.color : def.colors[0];
-  const P = PROFILES[id] || PROFILES.sport;
+  const P = PROFILES[id] || PROFILES[PROFILE_ALIAS[id]] || PROFILES.sport;
   const group = new THREE.Group();
   const paint = paintMat(colorHex);
   const glass = glassMat(), chrome = chromeMat(), trim = darkTrimMat();
@@ -233,7 +264,33 @@ export function buildCar(idOrDef, colorHex, wheelStyle='stock'){
     wing.rotation.x = big?-0.12:0; wing.castShadow = true; group.add(wing);
   }
 
+  // ---- taxi sign / police light bar ----
+  let flashers = null;
+  if(def.extra === 'taxi' || def.extra === 'police'){
+    const roofY = Math.max(...(P.roof || P.glass).map(p => p[1])) + 0.02;
+    const roofX = (P.roof || P.glass).reduce((a, p) => a + p[0], 0) / (P.roof || P.glass).length;
+    if(def.extra === 'taxi'){
+      const c = document.createElement('canvas'); c.width = 128; c.height = 32;
+      const g = c.getContext('2d'); g.fillStyle = '#ffd23f'; g.fillRect(0, 0, 128, 32);
+      g.fillStyle = '#111'; g.font = 'bold 22px sans-serif'; g.textAlign = 'center'; g.fillText('TAXI', 64, 24);
+      const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+      const sign = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.2, 0.26),
+        new THREE.MeshStandardMaterial({ map:tex, emissive:0xffffff, emissiveMap:tex, emissiveIntensity:0.6 }));
+      sign.position.set(0, roofY + 0.1, -roofX); sign.rotation.y = Math.PI / 2; group.add(sign);
+    }else{
+      const base = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.1, 0.28), trim);
+      base.position.set(0, roofY + 0.05, -roofX); group.add(base);
+      const red = new THREE.MeshStandardMaterial({ color:0x550000, emissive:0xff1a1a, emissiveIntensity:2.5 });
+      const blue = new THREE.MeshStandardMaterial({ color:0x000055, emissive:0x1a4dff, emissiveIntensity:2.5 });
+      const l = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.12, 0.24), red); l.position.set(-0.27, roofY + 0.14, -roofX);
+      const r = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.12, 0.24), blue); r.position.set(0.27, roofY + 0.14, -roofX);
+      group.add(l, r);
+      flashers = [red, blue];
+    }
+  }
+
   group.userData = {
+    flashers,
     defId:id, bodyColor:colorHex, wheels,
     frontWheels: wheels.filter(w=>w.position.z<0),
     rim, glass, paint, setBrake:(on)=>{},

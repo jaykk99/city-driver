@@ -135,6 +135,8 @@ const _hw=new THREE.Vector3();
 function syncCarTransform(dt){
   carGroup.position.set(physics.pos.x, 0, physics.pos.z);
   carGroup.rotation.y=physics.heading;
+  const fl=carGroup.userData.flashers;
+  if(fl){ const on=((performance.now()/170)|0)%2; fl[0].emissiveIntensity=on?4:0.25; fl[1].emissiveIntensity=on?0.25:4; }
   const spin=tele.speed*dt*2.4;
   for(let i=0;i<allWheels.length;i++) allWheels[i].rotation.x+=spin;
   for(let i=0;i<frontWheels.length;i++) frontWheels[i].rotation.y=tele.steer*0.45;
@@ -250,12 +252,12 @@ function footCollide(x, z, r){
 // ---------------- on foot ----------------
 function syncPersonGear(){
   if(!person) return;
-  setOutfit(person, save.outfit);
-  setHeldWeapon(person, save.equipped);
-  const w=save.equipped && weaponDef(save.equipped);
+  setOutfit(person, currentOutfit());
+  setHeldWeapon(person, gear().equipped);
+  const w=gear().equipped && weaponDef(gear().equipped);
   $('weapon-name').textContent = w ? w.name.toUpperCase() : 'UNARMED';
   const a=$('weapon-ammo');
-  a.textContent = w ? String(save.ammo[w.id]|0) : (save.weapons.length ? 'tap 🔫 to draw' : 'guns at LOCK & LOAD');
+  a.textContent = w ? String(gear().ammo[w.id]|0) : (gear().weapons.length ? 'tap 🔫 to draw' : 'guns at LOCK & LOAD');
   a.classList.toggle('tip', !w);
 }
 function updateModeHUD(){
@@ -319,23 +321,23 @@ function updateFoot(dt){
   person.position.x=foot.pos.x; person.position.z=foot.pos.z;
   person.rotation.y=foot.heading;
   if(controls.consumeCycle()){
-    const id=cycleWeapon(save);
+    const id=cycleWeapon(gear());
     saveSave(save); syncPersonGear();
-    if(save.weapons.length) toast(id ? weaponDef(id).name : 'Holstered', 1200);
+    if(gear().weapons.length) toast(id ? weaponDef(id).name : 'Holstered', 1200);
     else toast('No guns yet — visit LOCK & LOAD', 1600);
   }
   weaponCtx.pos.x=foot.pos.x; weaponCtx.pos.z=foot.pos.z; weaponCtx.heading=foot.heading;
   const edge=controls.consumeFireEdge();
-  if(edge && !save.equipped && save.weapons.length){ cycleWeapon(save); syncPersonGear(); }
+  if(edge && !gear().equipped && gear().weapons.length){ cycleWeapon(gear()); syncPersonGear(); }
   const res=weapons.update(dt, weaponCtx, controls.input.fire, edge);
   if(res.fired){
     if(people && !inside) people.scare(foot.pos.x, foot.pos.z, 45);
     kickRecoil(person); aimHold=0.9; ammoDirty++;
-    $('weapon-ammo').textContent=String(save.ammo[save.equipped]|0);
+    $('weapon-ammo').textContent=String(gear().ammo[gear().equipped]|0);
   }
-  if(controls.input.fire && save.equipped) aimHold=Math.max(aimHold,0.3);
+  if(controls.input.fire && gear().equipped) aimHold=Math.max(aimHold,0.3);
   aimHold=Math.max(0, aimHold-dt);
-  animateCharacter(person, foot.phase, foot.speed, aimHold>0 && !!save.equipped, dt);
+  animateCharacter(person, foot.phase, foot.speed, aimHold>0 && !!gear().equipped, dt);
   updateFootCamera(dt);
   if(ammoDirty && frameN%120===0){ saveSave(save); ammoDirty=0; }
 }
@@ -450,6 +452,109 @@ function closeStore(){
   syncPersonGear(); syncCash();
 }
 
+// ---------------- game modes ----------------
+// single = offline city · online = shared free roam · tdm = team deathmatch
+let mode='single';
+const TDM_TOPIC='city-driver-tdm', TDM_TARGET=25;
+const TEAM_COLORS={ red:0xd7263d, blue:0x1f6feb };
+const tdm={ team:null, score:{red:0,blue:0}, over:0, lastAttacker:null, kills:0, deaths:0 };
+const tdmLoadout={ weapons:['ak','glock','shotgun','sniper'], ammo:{ak:9999,glock:9999,shotgun:9999,sniper:9999}, equipped:'ak' };
+const remoteHits=[];
+function gear(){ return weaponCtx.save || save; }
+function currentOutfit(){ return mode==='tdm' && tdm.team ? Object.assign({}, save.outfit, { shirt:TEAM_COLORS[tdm.team] }) : save.outfit; }
+function startMode(m){
+  mode=m;
+  mp.connect(m==='single' ? null : m==='tdm' ? TDM_TOPIC : undefined);
+  people.clearEnemies();
+  people.setCount(m==='tdm' ? 0 : 14);
+  weaponCtx.save = m==='tdm' ? tdmLoadout : save;
+  $('tdm-hud').classList.toggle('hidden', m!=='tdm');
+  startFreeroam();
+  if(m==='tdm'){
+    if(tutorial.active){ tutorial.stop(); $('objective').classList.add('hidden'); }
+    tdm.score.red=tdm.score.blue=0; tdm.kills=tdm.deaths=0; tdm.over=0;
+    // join the smaller team once we've heard the roster
+    tdm.team=null;
+    setTimeout(()=>{ if(mode==='tdm'){ pickTeam(); tdmSpawn(); } }, 1600);
+    toast('⚔️ TEAM DEATHMATCH — first team to '+TDM_TARGET+' kills wins', 3000);
+  }else{
+    person && setOutfit(person, save.outfit);
+    toast(m==='single' ? '🧍 Single player — the city is all yours' : '🌐 Online free roam — '+mp.count+' in the city', 2600);
+  }
+}
+function pickTeam(){
+  let r=0, b=0;
+  mp.each(p=>{ if(p.team==='red') r++; else if(p.team==='blue') b++; });
+  tdm.team = r<b ? 'red' : b<r ? 'blue' : (Math.random()<0.5?'red':'blue');
+  setOutfit(person, currentOutfit());
+  lookCache=null;
+  updateTdmHud();
+  toast('You are on '+tdm.team.toUpperCase()+' team', 2200);
+}
+function tdmBase(team){ return team==='red' ? { x:-176, z:3, heading:-Math.PI/2 } : { x:176, z:-3, heading:Math.PI/2 }; }
+function tdmSpawn(){
+  leaveFootMode();
+  const b=tdmBase(tdm.team||'red');
+  physics.pos.x=b.x+(Math.random()-0.5)*6; physics.pos.z=b.z+(Math.random()-0.5)*20; physics.heading=b.heading;
+  physics.vel.x=physics.vel.z=0; tele.speed=0;
+  syncCarTransform(0); snapCamera();
+  getOut();
+  tdmLoadout.equipped='ak'; syncPersonGear();
+}
+function updateTdmHud(){
+  $('tdm-red').textContent=tdm.score.red;
+  $('tdm-blue').textContent=tdm.score.blue;
+  const y=$('tdm-you');
+  y.textContent = tdm.team ? 'YOU: '+tdm.team.toUpperCase()+' · '+tdm.kills+'K / '+tdm.deaths+'D' : 'joining…';
+  y.className = tdm.team || '';
+}
+function addKill(p){
+  if(!p || !p.kt || !(p.kt in tdm.score)) return;
+  tdm.score[p.kt]++;
+  if(p.k===mp.myId){ tdm.kills++; addCash(150); }
+  const kf=$('killfeed');
+  const row=document.createElement('div');
+  row.innerHTML=`<b class="${p.kt}">${esc(p.kn||'?')}</b> ☠ <b class="${p.kt==='red'?'blue':'red'}">${esc(p.vn||'?')}</b>`;
+  kf.prepend(row); while(kf.children.length>4) kf.lastChild.remove();
+  setTimeout(()=>row.remove(), 6000);
+  updateTdmHud();
+  if(!tdm.over && (tdm.score.red>=TDM_TARGET || tdm.score.blue>=TDM_TARGET)){
+    const w=tdm.score.red>=TDM_TARGET?'red':'blue';
+    tdm.over=8;
+    $('tdm-win').textContent=(w===tdm.team?'🏆 ':'')+w.toUpperCase()+' TEAM WINS!';
+    $('tdm-win').className=w;
+    if(w===tdm.team){ addCash(2500); toast('+$2,500 for the win!', 2500); }
+  }
+}
+const esc=t=>String(t).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function onRemotePlayerHit(ref, dmg, dx, dz){
+  if(mode!=='tdm' || !tdm.team) return;
+  mp.send('hit', { t:ref.id, d:dmg, tm:tdm.team, n:save.name });
+  blood.hit(ref.x, 1.25, ref.z, dx, dz, 1);
+}
+function onPlayerDied(){
+  if(mode!=='tdm') return;
+  tdm.deaths++;
+  const a=tdm.lastAttacker;
+  const p={ k:a?a.id:null, kn:a?a.name:'the street', kt:a?a.team:null, v:mp.myId, vn:save.name };
+  if(a){ mp.send('kill', p); addKill(p); }
+  updateTdmHud();
+}
+function respawnPoint(){
+  if(mode==='tdm') return tdmBase(tdm.team||'red');
+  return { x:city.spawn.x, z:city.spawn.z, heading:city.spawn.heading||0 };
+}
+function updateRemoteHits(){
+  remoteHits.length=0;
+  if(mode!=='tdm' || !tdm.team) return;
+  const myB=inside?inside.b.id:-1;
+  mp.each(r=>{
+    if(r.team===tdm.team || r.dead || r.b!==myB || !r.placed) return;
+    const ref={ kind:'player', id:r.id, name:r.name, team:r.team, x:r.x, z:r.z };
+    remoteHits.push({ x:r.x, z:r.z, r:r.mode==='car'?1.5:0.5, ref });
+  });
+}
+
 // ---------------- health / wasted ----------------
 function syncHP(){
   const f=$('hp-fill'); if(!f) return;
@@ -476,11 +581,12 @@ function respawn(){
   dead=false; hp=100; syncHP();
   $('wasted').classList.add('hidden');
   if(person){ person.rotation.x=0; person.position.y=0; }
-  const fee=Math.min(500, Math.round(save.cash*0.05));
+  const fee=mode==='tdm' ? 0 : Math.min(500, Math.round(save.cash*0.05));
   if(fee>0){ save.cash-=fee; saveSave(save); syncCash(); }
   leaveFootMode();
   if(typeof respawnPoint==='function'){ const sp=respawnPoint(); physics.pos.x=sp.x; physics.pos.z=sp.z; physics.heading=sp.heading; physics.vel.x=physics.vel.z=0; snapCamera(); syncCarTransform(0); }
   else placeAtSpawn();
+  if(mode==='tdm'){ tdm.lastAttacker=null; tdmSpawn(); return; }
   toast(fee>0 ? '🏥 Hospital bill: -$'+fee : '🏥 Back on your feet', 2200);
 }
 
@@ -546,6 +652,9 @@ function showMenu(){
   if(tutorial && tutorial.active) tutorial.stop();
   $('objective').classList.add('hidden');
   $('m-tutorial').classList.toggle('hidden', !!save.tutorialDone);
+  if(mp && mode!=='online'){ mode='online'; mp.connect(undefined); }
+  weaponCtx.save=save; $('tdm-hud').classList.add('hidden'); $('tdm-win').classList.add('hidden'); tdm.over=0;
+  if(person) setOutfit(person, save.outfit); lookCache=null;
   audio.engine(0,0); audio.skid(false);
 }
 
@@ -732,13 +841,18 @@ function setMp(cls, n){
 function buildLocalPacket(){
   mpLocal.name=save.name;
   mpLocal.car=carDef.id;
-  if(!lookCache) lookCache=packLook(save, carDef.id);
+  if(!lookCache){
+    lookCache=packLook(save, carDef.id);
+    if(mode==='tdm' && tdm.team) lookCache.o[0]=TEAM_COLORS[tdm.team];
+  }
+  mpLocal.team = mode==='tdm' ? tdm.team : null;
+  mpLocal.dead = dead;
   mpLocal.look=lookCache;
   mpLocal.b=inside ? inside.b.id : -1;
   if(onFoot){
     mpLocal.mode='foot'; mpLocal.x=foot.pos.x; mpLocal.z=foot.pos.z; mpLocal.h=foot.heading; mpLocal.speed=foot.speed;
     mpLocal.px=physics.pos.x; mpLocal.pz=physics.pos.z; mpLocal.ph=physics.heading;
-    mpLocal.w=save.equipped||null;
+    mpLocal.w=gear().equipped||null;
   }else{
     mpLocal.mode='car'; mpLocal.x=physics.pos.x; mpLocal.z=physics.pos.z; mpLocal.h=physics.heading; mpLocal.speed=tele.speed;
     mpLocal.w=null;
@@ -911,6 +1025,12 @@ function frame(now){
     else if(r==='done') finishTutorial();
     if(frameN%3===0) updateObjective();
   }
+  updateRemoteHits();
+  if(tdm.over>0){
+    tdm.over-=dt;
+    $('tdm-win').classList.remove('hidden');
+    if(tdm.over<=0){ $('tdm-win').classList.add('hidden'); tdm.score.red=tdm.score.blue=0; updateTdmHud(); if(mode==='tdm' && !dead) tdmSpawn(); }
+  }
   // multiplayer: always interpolate others; only broadcast while playing free roam
   if(mp){
     mp.update(dt, state==='freeroam' ? buildLocalPacket() : null, now);
@@ -922,7 +1042,9 @@ function frame(now){
 
 // ---------------- UI wiring ----------------
 function wireUI(){
-  $('m-freeroam').onclick=()=>{ audio.unlock(); orient.goLandscape(); audio.beep(600,0.06); startFreeroam(); };
+  $('m-freeroam').onclick=()=>{ audio.unlock(); orient.goLandscape(); audio.beep(600,0.06); startMode('single'); };
+  $('m-online').onclick=()=>{ audio.unlock(); orient.goLandscape(); audio.beep(600,0.06); startMode('online'); };
+  $('m-tdm').onclick=()=>{ audio.unlock(); orient.goLandscape(); audio.beep(600,0.06); startMode('tdm'); };
   $('m-drag').onclick=()=>{ audio.unlock(); orient.goLandscape(); audio.beep(600,0.06); startDrag(); };
   $('store-close').onclick=()=>{ audio.beep(500,0.05); closeStore(); };
   $('m-garage').onclick=()=>{ audio.unlock(); openGarage('menu'); };
@@ -1000,7 +1122,7 @@ async function boot(){
       onPlayerHit:(d)=>hurtPlayer(d) });
     traffic=createTraffic({ scene, lines:city.roadLines, buildCar, applyCarSkin, CAR_DEFS });
     trafficHits=traffic.hitList();
-    weaponCtx.hitables=[people.hitList, trafficHits];
+    weaponCtx.hitables=[people.hitList, trafficHits, remoteHits];
     weaponCtx.onPersonHit=(ref, dmg, dx, dz)=>{
       if(ref.kind==='ped' || ref.kind==='enemy') people.damage(ref, dmg, dx, dz);
       else if(typeof onRemotePlayerHit==='function' && ref.kind==='player') onRemotePlayerHit(ref, dmg, dx, dz);
@@ -1044,6 +1166,12 @@ async function boot(){
       scene, CAR_DEFS, buildCar, applyCarSkin, buildCharacter, setOutfit, setHeldWeapon, animateCharacter, unpackLook,
       remoteShot:(a,b,c,d)=>weapons.remoteShot(a,b,c,d),
       localBuilding:()=>inside?inside.b.id:-1,
+      onHit:(p)=>{
+        if(mode!=='tdm' || !tdm.team || p.tm===tdm.team || dead) return;
+        tdm.lastAttacker={ id:p.id, name:p.n, team:p.tm };
+        hurtPlayer(+p.d||10);
+      },
+      onKill:(p)=>{ if(mode==='tdm') addKill(p); },
       onStatus:(s,n)=>setMp(s==='on'?'on':s==='connecting'?'connecting':'off', n),
       onCount:n=>{ if(mp && mp.status==='on') setMp('on', n); },
     });
