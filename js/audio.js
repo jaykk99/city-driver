@@ -6,6 +6,7 @@ export function createAudio(){
   let pulseWave=null, lfo=null, lfoGain=null, shaper=null, drive=null, intakeBP=null, intakeGain=null;
   let lastLoad=0, lastRpm=0, popCool=0, cyl=8, idleRpm=850, redRpm=7000;
   let skidGain=null, noiseBuf=null;
+  let turboOsc=null, turboOsc2=null, turboGain=null, turboBP=null, lastBoost=0;
   let started=false, gestured=false; // never create AudioContext before a user gesture (autoplay policy)
 
   function ensure(){
@@ -162,10 +163,46 @@ export function createAudio(){
       o.connect(og); og.connect(master); o.start(t); o.stop(t+0.16);
     },
     click(){ this.beep(1800, 0.03); },
+    // forced induction: turbo whistle / blower whine rises with boost; blow-off "pssh" when you lift
+    turbo(boost01, kind, lifted){
+      if(!ctx || !started) return;
+      const t = ctx.currentTime;
+      if(!turboOsc){
+        turboOsc = ctx.createOscillator(); turboOsc.type = 'sine';
+        turboOsc2 = ctx.createOscillator(); turboOsc2.type = 'sawtooth';
+        const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 6; f.frequency.value = 2400;
+        turboGain = ctx.createGain(); turboGain.gain.value = 0;
+        turboOsc.connect(turboGain); turboOsc2.connect(f); f.connect(turboGain); turboGain.connect(master);
+        turboOsc.start(); turboOsc2.start(); turboBP = f;
+      }
+      const b = Math.max(0, Math.min(1, boost01 || 0));
+      if(kind === 'roots' || kind === 'centri'){
+        turboOsc.frequency.setTargetAtTime(900 + b * 1600, t, 0.05);
+        turboOsc2.frequency.setTargetAtTime(450 + b * 900, t, 0.05);
+        turboBP.frequency.setTargetAtTime(1200 + b * 1800, t, 0.05);
+        turboGain.gain.setTargetAtTime(kind ? 0.012 + b * 0.05 : 0, t, 0.06);
+      }else{
+        turboOsc.frequency.setTargetAtTime(2200 + b * 4200, t, 0.08);
+        turboOsc2.frequency.setTargetAtTime(1100 + b * 2100, t, 0.08);
+        turboBP.frequency.setTargetAtTime(3000 + b * 3000, t, 0.08);
+        turboGain.gain.setTargetAtTime(kind ? b * b * 0.045 : 0, t, 0.08);
+      }
+      // blow-off valve: boost was high and the throttle snapped shut
+      if(kind === 'turbo' && lifted && lastBoost > 0.55){
+        const src = ctx.createBufferSource(); src.buffer = noiseBuf;
+        const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 1.2;
+        bp.frequency.setValueAtTime(3200, t); bp.frequency.exponentialRampToValueAtTime(900, t + 0.45);
+        const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.16 * lastBoost, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+        src.connect(bp); bp.connect(g); g.connect(master); src.start(t, Math.random() * 0.5); src.stop(t + 0.55);
+        lastBoost = 0;
+      }
+      if(!lifted) lastBoost = b;
+    },
     shutdown(){
       if(ctx){ try{ ctx.close(); }catch(e){} }
       ctx=null; master=null; started=false;
       engOsc=engOsc2=engOsc3=engFilter=engGain=skidGain=noiseBuf=null;
+      turboOsc=turboOsc2=turboGain=turboBP=null;
     }
   };
 }

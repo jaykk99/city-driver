@@ -451,6 +451,7 @@ export function applyCarSkin(group, paintHex, skin){
     g.renderOrder = 2;
     parts.add(g);
   }
+  if(u.build) applyBuildVisual(group, u.build);   // keep new decals lifted with the body
   return group;
 }
 
@@ -464,4 +465,104 @@ function glowTexture(){
   g.save(); g.scale(1, 1); g.fillStyle = gr; g.fillRect(0, 0, 64, 128); g.restore();
   _glowTex = new THREE.CanvasTexture(c);
   return _glowTex;
+}
+
+// ---- tuning parts on the model: lift, tire size, offset, slicks, off-road + drag parts ----
+// b = { rideHeight, tireScale, offset, slicks, adder, body:[...] } (see tuning.js buildStats / main.applyBuildVisual)
+export function applyBuildVisual(group, b){
+  const u = group.userData, P = u.profile;
+  if(!P) return group;
+  b = b || {};
+  const ts = b.tireScale || 1, off = b.offset || 0;
+  const lift = (b.rideHeight || 0) + (ts - 1) * P.wheelR;
+  // remember stock positions once
+  for(const c of group.children){
+    if(c === u.buildParts) continue;
+    if(c.userData.p0 === undefined) c.userData.p0 = c.position.clone();
+  }
+  for(const c of group.children){
+    if(c === u.buildParts || !c.userData.p0) continue;
+    const p0 = c.userData.p0;
+    if(u.wheels.includes(c)){
+      const rear = p0.z > 0;
+      c.scale.set(ts * (b.slicks && rear ? 1.45 : 1) * (ts > 1.15 ? 1.15 : 1), ts, ts);
+      c.position.set(Math.sign(p0.x) * (Math.abs(p0.x) + off + (ts - 1) * 0.12), P.wheelR * ts, p0.z);
+    }else c.position.set(p0.x, p0.y + lift, p0.z);
+  }
+  // rebuild the bolt-on parts
+  if(u.buildParts){ group.remove(u.buildParts); u.buildParts.traverse(o => { if(o.isMesh) o.geometry.dispose(); }); }
+  const parts = new THREE.Group(); parts.position.y = lift;
+  u.buildParts = parts; group.add(parts);
+  const has = id => (b.body || []).includes(id);
+  const W2 = P.W / 2, frontZ = u.frontZ, rearZ = u.rearZ;
+  const L = -frontZ, R = -rearZ;
+  const hoodY = Math.max(...P.body.filter(p => p[0] > L - 1.4 && p[0] < L - 0.3).map(p => p[1]));
+  const roofPts = P.roof || P.glass;
+  const roofY = Math.max(...roofPts.map(p => p[1])), roofX = roofPts.reduce((a, p) => a + p[0], 0) / roofPts.length;
+  const steel = new THREE.MeshStandardMaterial({ color:0x1c1e22, metalness:0.7, roughness:0.45 });
+  const chromeM = new THREE.MeshStandardMaterial({ color:0xdfe3e8, metalness:1, roughness:0.2 });
+  const tube = (len, r, mat = steel) => new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 10), mat);
+  const add = (m, x, y, z, rx = 0, ry = 0, rz = 0) => { m.position.set(x, y, z); m.rotation.set(rx, ry, rz); m.castShadow = true; parts.add(m); return m; };
+
+  if(has('bullbar')){
+    add(tube(P.W * 0.9, 0.05), 0, 0.42, frontZ - 0.16, 0, 0, Math.PI / 2);
+    add(tube(P.W * 0.62, 0.045), 0, 0.82, frontZ - 0.14, 0, 0, Math.PI / 2);
+    for(const s of [-1, 1]) add(tube(0.45, 0.045), s * P.W * 0.3, 0.62, frontZ - 0.15);
+    add(new THREE.Mesh(new THREE.BoxGeometry(P.W * 0.95, 0.2, 0.16), steel), 0, 0.32, frontZ - 0.06);
+  }
+  if(has('winch')){
+    add(new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.18), steel), 0, 0.36, frontZ - 0.2);
+    add(tube(0.36, 0.06, new THREE.MeshStandardMaterial({ color:0x8a6d2a, roughness:0.7 })), 0, 0.36, frontZ - 0.21, 0, 0, Math.PI / 2);
+  }
+  if(has('snorkel')){
+    const x = W2 + 0.05, z = -(L - 1.2);
+    add(tube(Math.max(0.4, roofY - 0.55), 0.055), x, 0.55 + (roofY - 0.55) / 2, z);
+    add(new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.12, 0.2), steel), x, roofY + 0.04, z - 0.06);
+  }
+  if(has('rack')){
+    const rz = -roofX;
+    for(const s of [-1, 1]) add(tube(1.3, 0.025), s * (W2 - 0.25), roofY + 0.1, rz, Math.PI / 2);
+    for(const k of [-0.5, 0, 0.5]) add(tube(P.W - 0.45, 0.022), 0, roofY + 0.1, rz + k, 0, 0, Math.PI / 2);
+    for(const s of [-1, 1]) for(const k of [-0.6, 0.6]) add(tube(0.12, 0.02), s * (W2 - 0.25), roofY + 0.05, rz + k);
+  }
+  if(has('lightbar')){
+    const lb = new THREE.MeshStandardMaterial({ color:0xffffff, emissive:0xeaf6ff, emissiveIntensity:2.8 });
+    add(new THREE.Mesh(new THREE.BoxGeometry(P.W * 0.72, 0.1, 0.1), steel), 0, roofY + 0.18, -roofX - 0.55);
+    add(new THREE.Mesh(new THREE.BoxGeometry(P.W * 0.68, 0.06, 0.03), lb), 0, roofY + 0.18, -roofX - 0.61);
+    u.lightbar = true;
+  }else u.lightbar = false;
+  if(has('flares')){
+    const fm = new THREE.MeshStandardMaterial({ color:0x111214, roughness:0.75 });
+    for(const w of u.wheels){
+      const f = new THREE.Mesh(new THREE.TorusGeometry(P.wheelR * ts + 0.1, 0.06, 6, 16, Math.PI), fm);
+      f.scale.set(1, 1, 2.2);
+      add(f, w.position.x + Math.sign(w.position.x) * 0.06, P.wheelR * ts - lift, w.position.z, 0, Math.PI / 2, 0);
+    }
+  }
+  if(has('skid')) add(new THREE.Mesh(new THREE.BoxGeometry(P.W * 0.7, 0.04, 1.0), new THREE.MeshStandardMaterial({ color:0x9aa3ad, metalness:0.8, roughness:0.35 })), 0, 0.12, frontZ + 0.6);
+  if(has('wing')){
+    const wy = roofY + 0.05, wz = rearZ - 0.35;
+    for(const s of [-1, 1]) add(new THREE.Mesh(new THREE.BoxGeometry(0.05, wy - 0.6, 0.3), steel), s * (W2 - 0.4), 0.6 + (wy - 0.6) / 2, wz);
+    add(new THREE.Mesh(new THREE.BoxGeometry(P.W * 1.02, 0.05, 0.55), steel), 0, wy, wz, -0.18);
+    for(const s of [-1, 1]) add(new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.3, 0.6), steel), s * P.W * 0.51, wy - 0.06, wz);
+  }
+  if(has('wheelie')){
+    for(const s of [-1, 1]) add(tube(1.4, 0.03, chromeM), s * 0.35, 0.3 - lift * 0.5, rearZ + 0.7, Math.PI / 2 - 0.12);
+    for(const s of [-1, 1]){
+      const wh = add(new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.05, 12), steel), s * 0.35, 0.07 - lift, rearZ + 1.38, 0, 0, Math.PI / 2);
+      wh.castShadow = false;
+    }
+  }
+  // power adders that show: a blower through the hood, an intercooler behind the grille
+  if(b.adder === 'roots' || b.adder === 'centri'){
+    const bm = new THREE.MeshStandardMaterial({ color:0xc9cfd6, metalness:0.55, roughness:0.3, emissive:0x22262b, emissiveIntensity:0.6 });
+    const bz = -(L - 0.95);
+    add(new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.22, 0.6), bm), 0, hoodY + 0.12, bz);
+    for(let i = 0; i < 6; i++) add(new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.02, 0.04), bm), 0, hoodY + 0.12 + (i - 2.5) * 0.03, bz - 0.31);
+    add(new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.14, 0.34), new THREE.MeshStandardMaterial({ color:0xc8202a, metalness:0.4, roughness:0.4 })), 0, hoodY + 0.3, bz + 0.05);
+  }else if(b.adder && b.adder !== 'none'){
+    add(new THREE.Mesh(new THREE.BoxGeometry(P.W * 0.6, 0.18, 0.05), new THREE.MeshStandardMaterial({ color:0x2a2d33, metalness:0.6, roughness:0.4 })), 0, 0.42, frontZ + 0.03);
+  }
+  u.build = b;
+  return group;
 }

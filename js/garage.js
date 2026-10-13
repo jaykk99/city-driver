@@ -178,10 +178,12 @@ export function createGarage(api){
 
   // tabs
   const tabs=[...document.querySelectorAll('#garage .gtab')];
-  const panels={cars:carsEl, upgrades:upgEl, style:styleEl};
+  const panels={};
+  for(const t of tabs) panels[t.dataset.tab]=$('garage-'+t.dataset.tab);
   tabs.forEach(t=>t.addEventListener('click',()=>{
     tabs.forEach(x=>x.classList.toggle('active',x===t));
     for(const k in panels) panels[k].classList.toggle('hidden', k!==t.dataset.tab);
+    if(api.onTab) api.onTab(t.dataset.tab);
   }));
 
   refresh();

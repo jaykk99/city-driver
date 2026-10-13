@@ -10,6 +10,11 @@ Open-world 3D driving game for mobile browsers. Built with Three.js — no app s
 - **6 driveable cars** — Falcon S (sports), Vortex GT (supercar), Brute 500 (muscle), Ranger XLT (pickup), Titan SUV, Ghost R (track). All procedurally modeled in code, distinct handling/top speed
 - **Arcade physics** — acceleration, braking, speed-sensitive steering, handbrake drifts, nitro boost
 - **Garage** — upgrade engine, turbo, tires, suspension, nitro (5 levels each), paint shop (8 colors), 3 wheel styles. Upgrades change real stats. Progress saved in localStorage
+- **Tuning shop (garage)** — parts-based builds, per car:
+  - *Performance:* engine swaps (turbo I4 → V6/V8 → 9.4L big block → V10/V12 → 1,100 hp Pro Mod), small/big/twin turbos (spool lag) or roots/centrifugal blowers, nitrous 50–500 shot + bottle size, ECU/intake/exhaust stages, weight reduction, close-ratio or drag gearboxes, street/sport/drag-slick/all-terrain/mud tires, brakes
+  - *Off-road:* lowered → 6" lift, 33"–40" tires (bigger tires need more lift), 4x4, bull bar, winch, snorkel, roof rack, LED light bar, fender flares, skid plates, drag wing, wheelie bars — all shown on the car
+  - *Tune:* boost PSI, final drive, wheel offset sliders · *Dyno:* HP/torque curve, 0-60, 60 ft, ¼-mile ET + trap
+  - Power vs traction is real: too much power on street tires spins; turbos lag, blowers don't; mud/grass/dirt slow cars that aren't built for it (Prairie Off-Road Park west of downtown)
 - **Drag racing** — quarter-mile strip, Christmas-tree lights, reaction-time launch, 5-gear shift-timing minigame, AI opponent, cash payouts
 - **Live multiplayer** — everyone who opens the game shares one city over Supabase Realtime (no game server). Other players show up as their car or on foot with their skin, name tag and gun, and you see their bullets fly. Online count on the menu + HUD, players on the minimap
 - **Free skin editor** — any car paint color, rims, racing stripes, underglow, window tint; driver shirt/pants/skin tone/hair/hat (incl. crown + helmet) and your online name. All free

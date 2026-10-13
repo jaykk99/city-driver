@@ -280,3 +280,47 @@ body.compact #mission-btn{top:calc(204px + env(safe-area-inset-top))}
 #tach-fill.red{background:linear-gradient(90deg,#ffd23f,#ef4444)}
 #tach i{position:absolute;right:0;top:0;bottom:0;width:10%;background:rgba(239,68,68,.45)}
 body.compact #tach{margin:3px auto 0}
+
+/* ---------- tuning shop ---------- */
+#garage .garage-tabs{flex-wrap:wrap;justify-content:center}
+#garage .gtab{padding:9px 14px;font-size:13px}
+.tsec{background:#10172e;border:1px solid #243055;border-radius:14px;padding:10px 12px}
+.tsec-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:8px}
+.tsec-h b{font-size:13px;letter-spacing:1px;color:#ffd23f;text-transform:uppercase}
+.tsec-h small{font-size:11px;color:#8fa3c8}
+.topts{display:flex;flex-wrap:wrap;gap:8px}
+.topt{flex:1 1 130px;display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:9px 11px;border:2px solid #243055;border-radius:12px;background:#141c36;color:#fff;cursor:pointer;text-align:left}
+.topt.sm{flex:1 1 90px}
+.topt b{font-size:13px}
+.topt i{font-style:normal;font-size:11px;color:#8fa3c8}
+.topt small{font-size:11px;font-weight:800;color:#4ade80;margin-top:2px}
+.topt small.poor{color:#f87171}
+.topt.cur{border-color:#ff5e3a;background:#24142a}
+.topt.cur small{color:#ffd23f}
+.topt.locked{opacity:.45;cursor:not-allowed}
+.topt.locked small{color:#94a3b8}
+.tstat{display:flex;flex-wrap:wrap;gap:6px 14px;background:#0b1122;border:1px solid #2d3a66;border-radius:12px;padding:9px 12px;font-size:12px;color:#8fa3c8;position:sticky;top:0;z-index:2}
+.tstat b{color:#fff;font-size:15px}
+.tslider{display:flex;align-items:center;gap:10px;font-size:12px;color:#8fa3c8}
+.tslider input{flex:1;accent-color:#ff5e3a;height:28px}
+.tslider span:last-child{min-width:62px;text-align:right;color:#fff;font-weight:800;font-size:14px}
+.dyno-wrap{position:relative;background:#0b1122;border:1px solid #2d3a66;border-radius:12px;padding:6px}
+#dyno-cv{width:100%;height:auto;display:block}
+.dyno-legend{position:absolute;top:10px;right:14px;display:flex;gap:12px;font-size:11px;font-weight:800}
+.hpc{color:#ff5e3a}.tqc{color:#38bdf8}
+.dyno-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.dyno-cards div{background:#10172e;border:1px solid #243055;border-radius:12px;padding:8px 10px;display:flex;flex-direction:column}
+.dyno-cards small{font-size:10px;letter-spacing:1px;color:#8fa3c8}
+.dyno-cards b{font-size:20px}
+.dyno-cards i{font-style:normal;font-size:10px;color:#8fa3c8}
+#drag-result .slip{font-family:ui-monospace,monospace;color:#ffd23f}
+@media (max-width:620px){ .dyno-cards{grid-template-columns:repeat(2,1fr)} }
+
+/* ---------- boost gauge + surface ---------- */
+#boost-hud{position:absolute;left:14px;bottom:calc(168px + env(safe-area-inset-bottom));font-size:12px;color:#8fa3c8;text-shadow:0 2px 6px #000}
+#boost-hud b{font-size:18px;color:#38bdf8}
+.boost-bar{width:110px;height:6px;border-radius:4px;background:rgba(255,255,255,.15);overflow:hidden;margin-top:3px}
+#boost-fill{height:100%;width:0;background:linear-gradient(90deg,#38bdf8,#a855f7)}
+#surface-hud{position:absolute;left:50%;transform:translateX(-50%);top:calc(64px + env(safe-area-inset-top));font-size:12px;font-weight:900;letter-spacing:1px;background:rgba(10,14,30,.75);padding:4px 10px;border-radius:999px;color:#fbbf24}
+body.compact #boost-hud{left:auto;right:14px;bottom:calc(178px + env(safe-area-inset-bottom));text-align:right}
+body.compact #boost-hud .boost-bar{margin-left:auto}

@@ -32,10 +32,21 @@ export function _newPlayerSim(stats){
     limiterT: 0,
     bogMul: 1,          // decays back to 1 after a bad shift
     reacted: false, reaction: null,
-    et: null, trap: 0,
+    et: null, trap: 0, sixtyFt: null, eighth: null,
+    nitroLeft: stats.nitroTime || 0, nitroOn: false, boost: 0, spinning: false,
     stats,
   };
 }
+
+// matched opponent: an AI tuned to run close to a target ET (keeps races tight as you build)
+export function _aiSimForET(stats, et){
+  const sim = _newAiSim(stats);
+  const k = sim.k, denom = et - (1 - Math.exp(-k * et)) / k;
+  sim.et = et; sim.top = 402 / denom;
+  return sim;
+}
+// faster classes pay more: a 6-second car earns ~5x a 13-second car
+export function classMultiplier(et){ return et == null ? 1 : Math.max(1, Math.pow(12.8 / Math.max(4, et), 2.2)); }
 
 export function _playerAccel(sim, throttle, dt){
   const top = sim.stats.topSpeed;
@@ -43,6 +54,21 @@ export function _playerAccel(sim, throttle, dt){
   const grip = 1 - Math.min(1, sim.speed / (gearTop * 1.02));
   let a = throttle * sim.stats.accel * GEAR_MULT[sim.gear] * Math.max(0, grip);
   a *= sim.bogMul;
+  // tuned cars: boost builds with rpm (turbos lag, blowers don't), tires limit the launch
+  const st = sim.stats;
+  if(st.boostGain){
+    const r = sim.rpm;
+    const tgt = throttle <= 0 ? 0 : st.boostKind === 'roots' ? 0.7 + 0.3 * r : st.boostKind === 'centri' ? Math.min(1, r * r * 1.15)
+      : Math.max(0, Math.min(1, (r - (st.spoolAt || 0)) / 0.22));
+    sim.boost = (sim.boost || 0) + (tgt - (sim.boost || 0)) * Math.min(1, dt * (st.spoolRate || 3));
+    a *= 1 + st.boostGain * sim.boost;
+  }
+  if(sim.nitroOn) a *= st.nitroPower || 1.3;
+  sim.spinning = false;
+  if(st.traction && a > 0 && sim.speed < 22){
+    const cap = st.traction * (0.75 + 0.25 * Math.min(1, sim.speed / 22));
+    if(a > cap){ sim.spinning = a - cap > 2.5; a = cap + (a - cap) * 0.12; }
+  }
   a -= sim.speed * 0.028 + Math.sign(sim.speed) * 0.6; // drag + rolling resistance
   sim.speed = Math.max(0, sim.speed + a * dt);
   sim.dist += sim.speed * dt;
@@ -242,7 +268,7 @@ export function createDragMode(deps){
     const pET = p.et, aET = a.finishET;
     const reaction = p.reaction != null ? p.reaction.toFixed(3) + 's' : '—';
     const trap = (p.trap * MPH).toFixed(1);
-    const cash = payoutForRace(won, pET, aET);
+    const cash = Math.round(payoutForRace(won, pET, aET) * classMultiplier(aET));
     const title = resultTitle(won, falseStart);
     deps.addCash(cash);
     resultEl.innerHTML =
@@ -251,6 +277,7 @@ export function createDragMode(deps){
       '<p>ET: ' + (pET == null ? 'DNF' : pET.toFixed(3) + 's') +
       ' &nbsp;·&nbsp; AI ET: ' + (aET == null ? 'DNF' : aET.toFixed(3) + 's') + '</p>' +
       '<p>Trap speed: ' + trap + ' MPH &nbsp;·&nbsp; Reaction: ' + reaction + '</p>' +
+      '<p class="slip">60ft ' + (p.sixtyFt != null ? p.sixtyFt.toFixed(3) : '—') + ' · 1/8 ' + (p.eighth != null ? p.eighth.toFixed(3) : '—') + ' · 1/4 ' + (pET == null ? '—' : pET.toFixed(3)) + '</p>' +
       '<p>+$' + cash + ' cash</p>' +
       '<button id="drag-rematch" class="mbtn primary">REMATCH</button>' +
       '<button id="drag-back" class="mbtn">EXIT</button>';
@@ -284,7 +311,8 @@ export function createDragMode(deps){
     deps.scene.add(aiGroup);
     placeOnStrip(aiGroup, -2);
     S.aiGroup = aiGroup;
-    S.ai = newAiSim(deps.effectiveStats(aiDef));
+    const want = deps.predictET ? deps.predictET() : null;
+    S.ai = want ? _aiSimForET(deps.effectiveStats(aiDef), want * rand(0.94, 1.07)) : newAiSim(deps.effectiveStats(aiDef));
 
     S.active = true; S.finished = false; S.t = 0; S.ambersLit = 0;
     S.greenT = 0; S.msgTimer = 0;
@@ -362,8 +390,13 @@ export function createDragMode(deps){
       // AI launches after its reaction delay
       if (!a.launched && S.greenT >= a.reactDelay){ a.launched = true; a.launchT = S.greenT; }
 
+      // nitrous: hold N₂O / Shift
+      p.nitroOn = !!(input.nitro && p.nitroLeft > 0 && p.speed > 1);
+      if(p.nitroOn) p.nitroLeft = Math.max(0, p.nitroLeft - dt);
       // player physics + shifting
       playerAccel(p, throttle, dt);
+      if(p.sixtyFt == null && p.dist >= 18.29) p.sixtyFt = S.greenT;
+      if(p.eighth == null && p.dist >= 201) p.eighth = S.greenT;
       if (deps.controls.consumeShift && deps.controls.consumeShift()) doShift(p);
 
       // limiter: pinned at redline too long -> cut
@@ -395,7 +428,7 @@ export function createDragMode(deps){
       rpmBar.style.width = (Math.min(1, p.rpm) * 100) + '%';
       try {
         deps.audio.engine(p.rpm, throttle);
-        deps.audio.skid(throttle > 0.8 && p.speed < 8 && p.gear === 0);
+        deps.audio.skid(p.spinning || (throttle > 0.8 && p.speed < 4 && p.gear === 0));
       } catch(e){}
     }
 

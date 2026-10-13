@@ -28,10 +28,12 @@ import { createMultiplayer } from './multiplayer.js';
 import { createBlood } from './blood.js';
 import { createPeople } from './npcs.js';
 import { createTraffic } from './traffic.js';
-import { HOSPITAL_SPAWN, GRID_HALF } from './world.js';
+import { HOSPITAL_SPAWN, GRID_HALF, surfaceAt, surfaceGrip } from './world.js';
+import { buildStats, normalizeBuild, migrateLegacy, timeslip } from './tuning.js';
+import { createTuningUI } from './tuningui.js';
 import { createMissionRunner, generateMission, TOTAL_MISSIONS, EMERALD_FORTUNE } from './missions.js';
 
-const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin } = Cars;
+const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
 
 const $ = id => document.getElementById(id);
 
@@ -46,7 +48,7 @@ let tele={speed:0,drifting:false,nitro:false,nitroFrac:1,steer:0};
 // --- buildings / editor / tutorial / car pick ---
 let interiors=null, inside=null, curColliders=null;
 let editor=null, editorOpen=false, editorReturn='menu', editorAngle=0.6;
-let tutorial=null, pickOpen=false;
+let tutorial=null, pickOpen=false, tuningUI=null;
 // --- world life: pedestrians, traffic, blood; player health ---
 let blood=null, people=null, traffic=null, trafficHits=null;
 let hp=100, dead=false, deadT=0, hurtFlash=0;
@@ -117,12 +119,36 @@ function rebuildCar(){
   else applyCarSkin(carGroup, save.paint[carDef.id], carSkinFor(save, carDef.id));
   scene.add(carGroup);
   lookCache=null;
-  carStats=effectiveStats(carDef, stolenCar ? {} : (save.upgrades[carDef.id]||{}));
-  if(audio && audio.setEngine) audio.setEngine(ENGINES[carDef.id]||{cyl:6});
+  const bld = stolenCar ? normalizeBuild({}) : buildFor(carDef.id);
+  carStats=buildStats(carDef, bld);
+  applyBuildVisual(carGroup, { rideHeight:carStats.rideHeight, tireScale:carStats.tireScale, offset:carStats.offset,
+    slicks:bld.tires==='slicks', adder:bld.adder, body:bld.body });
+  etCache=null;
+  if(audio && audio.setEngine) audio.setEngine(carStats.engine || ENGINES[carDef.id] || {cyl:6});
   allWheels=(carGroup.userData.wheels||[]).slice();
   frontWheels=allWheels.filter(w=>w.position.z<0);
   brakeMats=carGroup.userData.brakeMats||[];
   $('menu-car-name').textContent=carDef.name;
+}
+
+// per-car parts build (migrates the old 0-5 upgrade levels the first time)
+function buildFor(id){
+  if(!save.build) save.build={};
+  if(!save.parts) save.parts={};
+  if(!save.build[id]) save.build[id]=migrateLegacy(save.upgrades && save.upgrades[id]);
+  save.build[id]=normalizeBuild(save.build[id]);
+  return save.build[id];
+}
+let etCache=null;
+function predictET(){ if(etCache==null){ const t=timeslip(carStats); etCache=t.et||14; } return etCache; }
+// live tune (slider drags): new stats without rebuilding the whole car each tick
+function refreshStatsOnly(){
+  const bld=buildFor(carDef.id);
+  carStats=buildStats(carDef, bld);
+  physics.stats=carStats; physics.box.shiftTime=carStats.shiftTime||0.2;
+  applyBuildVisual(carGroup, { rideHeight:carStats.rideHeight, tireScale:carStats.tireScale, offset:carStats.offset,
+    slicks:bld.tires==='slicks', adder:bld.adder, body:bld.body });
+  etCache=null;
 }
 
 function snapCamera(){
@@ -182,7 +208,7 @@ function updateEffects(dt){
   if(!smoke || state!=='freeroam' || paused || garageOpen) return;
   carGroup.updateMatrixWorld();
   const n=allWheels.length;
-  if(tele.drifting && particleScale>0.3){
+  if((tele.drifting || tele.spinning || (tele.surface==='mud' && Math.abs(tele.speed)>3)) && particleScale>0.3){
     for(let i=0;i<n;i++){
       const w=allWheels[i];
       if(w.position.z<0) continue;               // rear wheels only
@@ -781,6 +807,14 @@ function updateHUD(){
   const tf=$('tach-fill');
   if(tf){ tf.style.width=(Math.min(1,tele.rpm||0)*100).toFixed(1)+'%'; tf.classList.toggle('red', (tele.rpm||0)>0.9); }
   $('nitro-fill').style.width=(Math.max(0,Math.min(1,tele.nitroFrac))*100).toFixed(1)+'%';
+  const bh=$('boost-hud');
+  if(bh){
+    const on=!!carStats.boostKind;
+    bh.classList.toggle('hidden', !on);
+    if(on){ $('boost-val').textContent=(tele.psi||0).toFixed(1); $('boost-fill').style.width=(Math.min(1,tele.boost||0)*100).toFixed(0)+'%'; }
+  }
+  const sh=$('surface-hud');
+  if(sh){ const sf=tele.surface||'road'; sh.textContent = sf==='road' ? '' : (sf==='mud'?'🟤 MUD':sf==='dirt'?'🟫 DIRT':'🟩 GRASS')+(tele.spinning?' · WHEELSPIN':''); sh.classList.toggle('hidden', sf==='road' && !tele.spinning); if(sf==='road' && tele.spinning) sh.textContent='💨 WHEELSPIN'; }
 }
 
 // ---------------- state transitions ----------------
@@ -855,7 +889,7 @@ function closePause(){ paused=false; hideOverlays(); }
 
 function openGarage(ret){
   garageReturn=ret; garageOpen=true;
-  garage.refresh(); syncCash();
+  garage.refresh(); if(tuningUI) tuningUI.refresh(); syncCash();
   hideOverlays();
   $('garage').classList.remove('hidden');
 }
@@ -1135,6 +1169,7 @@ function frame(now){
     updateAction();
     if(controls.consumeAction()) doAction();
   }else if(playing){
+    physics.surf=surfaceGrip(surfaceAt(physics.pos.x, physics.pos.z), carStats.offroad, carStats.snorkel);
     tele=physics.update(controls.input, dt, collide);
     // stunt rewards: drifting pays cash, so free roam has its own economy
     const award=stuntUpdate(stunts, tele.drifting, tele.speed, dt);
@@ -1153,16 +1188,18 @@ function frame(now){
     if(qm) qm.update(dt);
     const rpm=Math.min(1, Math.abs(tele.speed)/(carStats.topSpeed*1.15));
     audio.engine(tele.rpm, Math.max(0, controls.input.throttle||0), tele.shifting);
+    if(audio.turbo) audio.turbo(tele.boost||0, carStats.boostKind, (controls.input.throttle||0)<0.1);
     if(tele.gear!==lastGear){ if(lastGear) audio.shiftBlip(tele.gear>lastGear); lastGear=tele.gear; }
     if(save.manual){
       if(controls.consumeGearUp()) physics.box.shift(1);
       if(controls.consumeGearDown()) physics.box.shift(-1);
     }else{ controls.consumeGearUp(); controls.consumeGearDown(); }
-    audio.skid(tele.drifting);
+    audio.skid(tele.drifting || tele.spinning || (tele.surface==='mud' && Math.abs(tele.speed)>3));
   }else if(state==='drag' && !paused && !garageOpen && !editorOpen){
     if(dragMode.active) dragMode.update(dt);
   }else{
     audio.engine(0,0); audio.skid(false);
+    if(audio.turbo && !garageOpen) audio.turbo(0, null);
   }
   // world life: pedestrians, gunmen, traffic, blood
   if(state==='freeroam' && !paused && !garageOpen && !editorOpen){
@@ -1330,12 +1367,16 @@ async function boot(){
     garage=createGarage({
       save,
       getDef:id=>CAR_DEFS.find(d=>d.id===id),
-      onSelectCar:()=>{ stolenCar=null; refreshSceneKeep(); },
+      onSelectCar:()=>{ stolenCar=null; refreshSceneKeep(); if(tuningUI) tuningUI.refresh(); },
       onPaint:()=>refreshSceneKeep(),
       onWheels:()=>refreshSceneKeep(),
       refreshScene:()=>refreshSceneKeep(),
       openEditor:()=>openEditor('garage','car'),
+      onTab:t=>tuningUI && tuningUI.onTab(t),
     });
+    tuningUI=createTuningUI({ save, getDef:id=>CAR_DEFS.find(d=>d.id===id), persist:()=>saveSave(save),
+      onBuild:(live)=>{ if(live) refreshStatsOnly(); else { refreshSceneKeep(); garage.refresh(); } },
+      toast:m=>toast(m,1800), beep:(f,d)=>audio.beep(f,d), syncCash, audio });
     editor=createSkinEditor({
       save, cars:CAR_DEFS, persist:()=>saveSave(save), beep:(f,d)=>audio.beep(f,d),
       onCar:(swapped)=>{
@@ -1364,6 +1405,7 @@ async function boot(){
     dragMode=createDragMode({
       scene, camera, buildCar, CAR_DEFS, effectiveStats,
       getPlayer:()=>{ playerInfo.def=carDef; playerInfo.stats=carStats; playerInfo.group=carGroup; return playerInfo; },
+      predictET,
       controls, audio, addCash, toast, city,
     });
     wireUI();

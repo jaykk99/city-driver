@@ -54,3 +54,39 @@ export function districtOf(cx, cz){
   return 'midtown';
 }
 export const streetName = (axis, i) => axis === 'ns' ? NS_NAMES[i] : EW_NAMES[i];
+
+// ---------- off-road park (west of the city, open prairie) ----------
+export const OFFROAD = { minX:-680, maxX:-390, minZ:-250, maxZ:250 };
+// mud pits [x, z, radius]
+export const MUD_PITS = [[-470, -150, 18], [-560, -40, 24], [-450, 70, 16], [-620, 140, 20], [-520, 200, 14], [-610, -190, 17]];
+// rocks [x, z, size] — solid
+export const ROCKS = [[-430, -210, 3.2], [-505, -95, 4], [-600, -110, 3.5], [-480, 10, 2.8], [-650, 30, 4.5], [-540, 120, 3.4],
+  [-420, 180, 3], [-660, -230, 3.8], [-575, 225, 3.1], [-505, -205, 2.6], [-640, 205, 2.9], [-455, 125, 2.4]];
+
+// surface under a point: 'road' (all paved city), 'grass', 'dirt' (off-road park), 'mud'
+export function surfaceAt(x, z){
+  for(const [mx, mz, r] of MUD_PITS) if((x - mx) * (x - mx) + (z - mz) * (z - mz) < r * r) return 'mud';
+  if(x >= OFFROAD.minX && x <= OFFROAD.maxX && z >= OFFROAD.minZ && z <= OFFROAD.maxZ) return 'dirt';
+  if(Math.abs(x) <= GRID_HALF && Math.abs(z) <= GRID_HALF){
+    // lawns: park / Legislature / mansion grounds (but not their edge roads)
+    const i = Math.round(x / PITCH + (BLOCKS - 1) / 2), j = Math.round(z / PITCH + (BLOCKS - 1) / 2);
+    const k = (i >= 0 && i < BLOCKS && j >= 0 && j < BLOCKS) ? isSpecialBlock(blockCenter(i), blockCenter(j)) : null;
+    if((k === 'park' || k === 'legislature' || k === 'mansion') && Math.abs(x - blockCenter(i)) < BLOCK / 2 - 4 && Math.abs(z - blockCenter(j)) < BLOCK / 2 - 4) return 'grass';
+    return 'road';
+  }
+  // bridge + drag strip + its access road are paved
+  if(Math.abs(z - BRIDGE_Z) <= ROAD_W / 2 + 1 && x > 0 && x < STRIP_X + 10) return 'road';
+  if(Math.abs(x - STRIP_X) <= 8 && Math.abs(z) <= STRIP_HALF + 10) return 'road';
+  return 'grass';
+}
+
+// how a car drives on a surface given its off-road rating (tuning.js buildStats().offroad)
+export function surfaceGrip(surface, offroad = 0.5, snorkel = false){
+  const o = Math.min(1, offroad);
+  switch(surface){
+    case 'grass': return { name:surface, speed:0.55 + 0.45 * o, grip:0.6 + 0.4 * o, drag:0.008 * (1 - o) };
+    case 'dirt':  return { name:surface, speed:0.6 + 0.4 * o, grip:0.55 + 0.45 * o, drag:0.006 * (1 - o) };
+    case 'mud':   return { name:surface, speed:Math.min(1, (0.2 + 0.62 * o) * (snorkel ? 1.15 : 1)), grip:0.42 + 0.45 * o, drag:0.05 * (1.1 - o) };
+    default:      return { name:'road', speed:1, grip:1, drag:0 };
+  }
+}

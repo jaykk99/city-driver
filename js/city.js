@@ -10,7 +10,7 @@ import { mergeGeometries as _merge } from 'three/addons/utils/BufferGeometryUtil
 // merge any mix of indexed / non-indexed geometries
 const mergeGeometries = list => _merge(list.map(g => g.index ? g.toNonIndexed() : g));
 import { BLOCKS, BLOCK, ROAD_W, PITCH, GRID_HALF, LINES, LANE, blockCenter, RED_RIVER, ASSINIBOINE, BRIDGE_Z, BRIDGE_HALF,
-  STRIP_X, STRIP_HALF, SPECIAL, isSpecialBlock, districtOf, MAIN_X, PORTAGE_Z, NS_NAMES, EW_NAMES } from './world.js';
+  STRIP_X, STRIP_HALF, SPECIAL, isSpecialBlock, districtOf, MAIN_X, PORTAGE_Z, NS_NAMES, EW_NAMES, OFFROAD, MUD_PITS, ROCKS } from './world.js';
 
 const SEED = 20481;
 function mulberry32(a){
@@ -423,6 +423,7 @@ export function buildCity(scene, reserved = []){
   const water = buildRivers(LM);
   buildBridge(LM);
   const dragStrip = buildDragStrip(LM);
+  buildOffroadPark(LM);
 
   // ---------- trees (elms along the curbs + parks) ----------
   {
@@ -1003,4 +1004,53 @@ function buildStreetSigns(LM){
     const a = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 0.45), get(NS_NAMES[ix])); a.position.set(x, 3.4, z); a.rotation.y = Math.PI / 2; scene.add(a);
     const b = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 0.45), get(EW_NAMES[iz])); b.position.set(x, 3.0, z); scene.add(b);
   }
+}
+
+// ---------- Prairie Off-Road Park: dirt, mud pits, rocks, trail markers ----------
+function buildOffroadPark(LM){
+  const { scene } = LM;
+  const W = OFFROAD.maxX - OFFROAD.minX, D = OFFROAD.maxZ - OFFROAD.minZ;
+  const cx = (OFFROAD.minX + OFFROAD.maxX) / 2, cz = (OFFROAD.minZ + OFFROAD.maxZ) / 2;
+  const dirtTex = LM.makeCanvas(256, 256, (g, w, h) => {
+    noiseFill(g, w, h, '#7a5b3c', 0.22, 9000, 2);
+    g.strokeStyle = 'rgba(60,40,22,0.35)'; g.lineWidth = 3;
+    for(let i = 0; i < 18; i++){ g.beginPath(); const y = Math.random() * h; g.moveTo(0, y); g.bezierCurveTo(w * 0.3, y + 20, w * 0.6, y - 20, w, y + 6); g.stroke(); }
+  });
+  dirtTex.wrapS = dirtTex.wrapT = THREE.RepeatWrapping; dirtTex.repeat.set(W / 16, D / 16);
+  const dirt = new THREE.Mesh(new THREE.PlaneGeometry(W, D).rotateX(-Math.PI / 2), std(0xffffff, { map:dirtTex, roughness:1 }));
+  dirt.position.set(cx, 0.025, cz); dirt.receiveShadow = true; scene.add(dirt);
+  // mud pits: wet, glossy, dark
+  const mudTex = LM.makeCanvas(128, 128, (g, w, h) => noiseFill(g, w, h, '#3d2a1a', 0.3, 3000, 3));
+  const mudMat = new THREE.MeshStandardMaterial({ map:mudTex, color:0xffffff, roughness:0.25, metalness:0.15, envMapIntensity:0.9 });
+  for(const [x, z, r] of MUD_PITS){
+    const m = new THREE.Mesh(new THREE.CircleGeometry(r, 28).rotateX(-Math.PI / 2), mudMat);
+    m.position.set(x, 0.035, z); m.receiveShadow = true; scene.add(m);
+    const rim = new THREE.Mesh(new THREE.RingGeometry(r, r + 1.6, 28).rotateX(-Math.PI / 2), std(0x5a4128, { roughness:1 }));
+    rim.position.set(x, 0.033, z); scene.add(rim);
+  }
+  // rocks (solid)
+  const rockMat = std(0x8a857c, { roughness:0.95, flatShading:true });
+  for(const [x, z, sz] of ROCKS){
+    const r = new THREE.Mesh(new THREE.DodecahedronGeometry(sz, 0), rockMat);
+    r.scale.set(1, 0.65, 1.1); r.rotation.set(LM.rand() * 3, LM.rand() * 3, LM.rand() * 3);
+    r.position.set(x, sz * 0.35, z); r.castShadow = r.receiveShadow = true; scene.add(r);
+    LM.addCol(x - sz * 0.9, x + sz * 0.9, z - sz * 0.9, z + sz * 0.9);
+  }
+  // trail markers + hay bales around the loop
+  const postMat = std(0xff8c1a), hayMat = std(0xd9b45a, { roughness:1 });
+  for(let i = 0; i < 28; i++){
+    const a = i / 28 * Math.PI * 2;
+    const x = cx + Math.cos(a) * (W * 0.38), z = cz + Math.sin(a) * (D * 0.4);
+    box(scene, 0.15, 1.2, 0.15, postMat, x, 0, z, false);
+    if(i % 4 === 0){
+      const hb = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.75, 1.5, 14).rotateZ(Math.PI / 2), hayMat);
+      hb.position.set(x + 3, 0.75, z); hb.castShadow = true; scene.add(hb);
+      LM.addCol(x + 2.2, x + 3.8, z - 0.75, z + 0.75);
+    }
+  }
+  // entrance sign facing the city
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(14, 3.5),
+    new THREE.MeshStandardMaterial({ map:signTex('PRAIRIE OFF-ROAD PARK', '#2d1d10', '#ffb347', 1024, 256, 'bold 84px sans-serif'), roughness:0.6 }));
+  sign.position.set(OFFROAD.maxX + 4, 5, -37); sign.rotation.y = Math.PI / 2; scene.add(sign);
+  for(const s of [-1, 1]) box(scene, 0.4, 5, 0.4, std(0x4a3a2a), OFFROAD.maxX + 4, 0, -37 + s * 6.6);
 }
