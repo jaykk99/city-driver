@@ -211,6 +211,8 @@ export function surfaceGrip(surface, offroad = 0.5, snorkel = false){
     case 'crop':   return { name:surface, speed:0.45 + 0.45 * o, grip:0.6 + 0.35 * o, drag:0.012 * (1 - o) };
     case 'dirt':   return { name:surface, speed:0.6 + 0.4 * o, grip:0.55 + 0.45 * o, drag:0.006 * (1 - o) };
     case 'mud':    return { name:surface, speed:Math.min(1, (0.2 + 0.62 * o) * (snorkel ? 1.15 : 1)), grip:0.42 + 0.45 * o, drag:0.05 * (1.1 - o) };
+    case 'sand':   return { name:surface, speed:0.62 + 0.38 * o, grip:0.6 + 0.35 * o, drag:0.01 * (1 - o) };
+    case 'snow':   return { name:surface, speed:0.8 + 0.2 * o, grip:0.35 + 0.35 * o, drag:0.004 };
     case 'puddle': return { name:surface, speed:0.97, grip:0.85, drag:0.004 };
     case 'water':  return { name:surface, speed:Math.min(0.85, (0.32 + 0.4 * o) * (snorkel ? 1.2 : 1)), grip:0.55 + 0.3 * o, drag:0.04 };
     case 'deep':   return { name:surface, speed:(0.12 + 0.18 * o) * (snorkel ? 1.6 : 1), grip:0.4 + 0.2 * o, drag:0.09 };

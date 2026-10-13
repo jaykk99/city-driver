@@ -10,6 +10,9 @@ Open-world 3D driving game for mobile browsers. Built with Three.js — no app s
 - **6 driveable cars** — Falcon S (sports), Vortex GT (supercar), Brute 500 (muscle), Ranger XLT (pickup), Titan SUV, Ghost R (track). All procedurally modeled in code, distinct handling/top speed
 - **Arcade physics** — acceleration, braking, speed-sensitive steering, handbrake drifts, nitro boost
 - **Garage** — upgrade engine, turbo, tires, suspension, nitro (5 levels each), paint shop (8 colors), 3 wheel styles. Upgrades change real stats. Progress saved in localStorage
+- **Huge map** — 3.4 km across: downtown Winnipeg in the middle of suburbs, the Perimeter Highway, farmland, lakes, forest, an airport and the off-road park. Tap the radar (or press M) for the full map + GPS waypoint
+- **Water & mud** — drive into rivers, lakes and puddles (cars sink, spray, wakes, splash sounds; wade on foot); mud flies off the wheels and cakes your car until you rinse it in water
+- **Custom maps** — 🗺️ CUSTOM MAPS on the menu: start from a template (blank, mud bog, island, street circuit, drag strip), pick a size and theme (summer / desert / winter / night), paint roads, dirt, mud, sand, snow, water, houses, shops, towers, rocks, trees, cash and a spawn, then test-drive it. Share maps with a copy-paste code
 - **Tuning shop (garage)** — parts-based builds, per car:
   - *Performance:* engine swaps (turbo I4 → V6/V8 → 9.4L big block → V10/V12 → 1,100 hp Pro Mod), small/big/twin turbos (spool lag) or roots/centrifugal blowers, nitrous 50–500 shot + bottle size, ECU/intake/exhaust stages, weight reduction, close-ratio or drag gearboxes, street/sport/drag-slick/all-terrain/mud tires, brakes
   - *Off-road:* lowered → 6" lift, 33"–40" tires (bigger tires need more lift), 4x4, bull bar, winch, snorkel, roof rack, LED light bar, fender flares, skid plates, drag wing, wheelie bars — all shown on the car

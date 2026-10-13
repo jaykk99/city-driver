@@ -30,6 +30,9 @@ import { createPeople } from './npcs.js';
 import { createTraffic } from './traffic.js';
 import { HOSPITAL_SPAWN, GRID_HALF, surfaceAt, surfaceGrip, WATER_DEPTH, isWet } from './world.js';
 import { createWheelFX } from './fx.js';
+import { buildCustomMap } from './mapbuilder.js';
+import { createMapEditor } from './mapeditor.js';
+import { THEMES as MAP_THEMES, spawnOf } from './custommap.js';
 import { buildStats, normalizeBuild, migrateLegacy, timeslip } from './tuning.js';
 import { createTuningUI } from './tuningui.js';
 import { createMissionRunner, generateMission, TOTAL_MISSIONS, EMERALD_FORTUNE } from './missions.js';
@@ -194,7 +197,7 @@ function snapCamera(){
 }
 
 function placeAtSpawn(){
-  const s=city.spawn;
+  const s=customMap ? Object.assign({ heading:0 }, customMap.toWorld(spawnOf(customMap.map))) : city.spawn;
   physics.pos.x=s.x; physics.pos.z=s.z; physics.heading=s.heading||0;
   stunts=newStuntState();   // fresh stunt tracking per run
   snapCamera();
@@ -312,7 +315,7 @@ function nearColliders(cols, x, z, R){
 }
 function collideR(x, z, R){
   let cx=x, cz=z, hitX=false, hitZ=false;
-  const cols=nearColliders(curColliders||city.colliders, x, z, R+2);
+  const cols=nearColliders(curColliders||(customMap?customMap.colliders:city.colliders), x, z, R+2);
   for(let i=0;i<cols.length;i++){
     const c=cols[i];
     if(cx+R<c.minX||cx-R>c.maxX||cz+R<c.minZ||cz-R>c.maxZ) continue;
@@ -461,7 +464,7 @@ function updateFoot(dt){
   foot.update(controls.input, dt, footCollide);
   // wading: slow + sink to the waist/chest in water
   if(!inside){
-    footSurf=surfaceAt(foot.pos.x, foot.pos.z);
+    footSurf=surfAt(foot.pos.x, foot.pos.z);
     const k = footSurf==='deep' ? 0.4 : footSurf==='water' ? 0.62 : footSurf==='mud' ? 0.6 : 1;
     if(k<1){ foot.pos.x=fx0+(foot.pos.x-fx0)*k; foot.pos.z=fz0+(foot.pos.z-fz0)*k; }
     if((footSurf==='deep'||footSurf==='water') && Math.abs(foot.speed)>0.5 && Math.random()<dt*4) wheelFX.splash(foot.pos.x, foot.pos.z, 0.35);
@@ -642,7 +645,38 @@ const tdmLoadout={ weapons:['ak','glock','shotgun','sniper'], ammo:{ak:9999,gloc
 const remoteHits=[];
 function gear(){ return weaponCtx.save || save; }
 function currentOutfit(){ return mode==='tdm' && tdm.team ? Object.assign({}, save.outfit, { shirt:TEAM_COLORS[tdm.team] }) : save.outfit; }
+// ---------------- custom maps ----------------
+let customMap=null, lastCustom=null, mapEditor=null;
+function surfAt(x, z){ return customMap ? customMap.surfaceAt(x, z) : surfaceAt(x, z); }
+function playCustom(map){
+  exitCustom();
+  if(missions && missions.active){ missions.stop(); $('mission-hud').classList.add('hidden'); $('boss-hud').classList.add('hidden'); }
+  if(tutorial && tutorial.active){ tutorial.stop(); $('objective').classList.add('hidden'); }
+  mode='custom'; mp.connect(null);
+  people.clearEnemies(); people.setCount(0); traffic.setCount(0);
+  weaponCtx.save=save; $('tdm-hud').classList.add('hidden');
+  customMap=buildCustomMap(scene, map); lastCustom=map;
+  weaponCtx.colliders=customMap.colliders; weaponCtx.targets=[];
+  minimap.setCustom(customMap.painter); minimap.setWaypoint(null);
+  setTimeOfDay((MAP_THEMES[map.theme]||MAP_THEMES.summer).sky, true);
+  carDirt=0; applyDirt();
+  startFreeroam(true);
+  $('p-editmap').classList.remove('hidden');
+  const n=customMap.cash.length;
+  toast('🗺️ '+map.name+(n?' — find all '+n+' 💵':''), 2800);
+}
+function exitCustom(){
+  if(!customMap) return;
+  customMap.dispose(); customMap=null;
+  weaponCtx.colliders=city.colliders; weaponCtx.targets=shops.targets;
+  minimap.setCustom(null);
+  people.setCount(14); traffic.setCount(12);
+  $('p-editmap').classList.add('hidden');
+  setTimeOfDay('day', true);
+}
+
 function startMode(m){
+  exitCustom();
   mode=m;
   mp.connect(m==='single' ? null : m==='tdm' ? TDM_TOPIC : undefined);
   people.clearEnemies();
@@ -723,6 +757,7 @@ function onPlayerDied(){
 }
 function respawnPoint(){
   if(mode==='tdm') return tdmBase(tdm.team||'red');
+  if(customMap) return Object.assign({ heading:0 }, customMap.toWorld(spawnOf(customMap.map)));
   return { x:HOSPITAL_SPAWN.x, z:HOSPITAL_SPAWN.z, heading:HOSPITAL_SPAWN.heading };
 }
 function updateRemoteHits(){
@@ -929,6 +964,7 @@ function leaveFootMode(){
 }
 
 function showMenu(){
+  exitCustom();
   state='menu'; paused=false; garageOpen=false;
   if(dragMode && dragMode.active) dragMode.exit();
   leaveFootMode();
@@ -949,7 +985,7 @@ function showMenu(){
   audio.engine(0,0); audio.skid(false);
 }
 
-function startFreeroam(){
+function startFreeroam(custom){
   if(dragMode && dragMode.active) dragMode.exit();
   leaveFootMode();
   if(headlight) headlight.intensity=headlightBase;
@@ -961,11 +997,13 @@ function startFreeroam(){
   controls.attach(); controls.setMode('drive');
   placeAtSpawn();
   syncCash();
+  if(custom || customMap) return;
   if(!save.tutorialDone && !save.tutorialSkipped) startTutorial();
   else toast('Free roam — drift for cash, walk into any building!');
 }
 
 function startDrag(){
+  exitCustom();
   leaveFootMode();
   state='drag'; paused=false; garageOpen=false;
   if(headlight) headlight.intensity=0;
@@ -1167,7 +1205,7 @@ async function initScene(){
 
   scene=new THREE.Scene();
   // fog set by city.js; sky dome replaces flat background
-  camera=new THREE.PerspectiveCamera(62, orient.view.w/orient.view.h, 0.1, 3000);
+  camera=new THREE.PerspectiveCamera(62, orient.view.w/orient.view.h, 0.1, 1300);   // fog ends at 950 m; nothing past this is visible
 
   city=buildCity(scene, STORE_LOTS);   // creates sun + hemi + fog + world (store lots kept clear)
   shops=buildStores(scene, city);       // gun store + range, clothing, auto shop
@@ -1184,6 +1222,7 @@ async function initScene(){
   const dome=createSkyDome();
   scene.add(dome.mesh);
   skyMesh=dome.mesh;
+  skyMesh.scale.setScalar(1150/1500);    // dome rides along with the camera; keep it inside the 1300 m far plane
   skyEnv={ uniforms:dome.uniforms, sun:city.sun, hemi:city.hemi, scene, renderer };
   setTimeOfDay('day', true);
 
@@ -1271,7 +1310,7 @@ function frame(now){
     updateAction();
     if(controls.consumeAction()) doAction();
   }else if(playing){
-    physics.surf=surfaceGrip(surfaceAt(physics.pos.x, physics.pos.z), carStats.offroad, carStats.snorkel);
+    physics.surf=surfaceGrip(surfAt(physics.pos.x, physics.pos.z), carStats.offroad, carStats.snorkel);
     tele=physics.update(controls.input, dt, collide);
     updateWater(dt);
     // stunt rewards: drifting pays cash, so free roam has its own economy
@@ -1349,6 +1388,13 @@ function frame(now){
   if(smoke && (state!=='freeroam'||paused||garageOpen||storeOpen)){ smoke.update(dt); exhaust.update(dt); }
   if(skyMesh) skyMesh.position.set(camera.position.x, 0, camera.position.z);
   if(wheelFX) wheelFX.update(dt);
+  if(customMap && state==='freeroam'){
+    customMap.update(dt);
+    if(!paused){
+      const p=onFoot?foot.pos:physics.pos, got=customMap.collect(p.x, p.z);
+      if(got){ addCash(250*got); audio.beep(1250,0.06); const left=customMap.cash.filter(c=>!c.got).length; toast('💵 +$'+(250*got)+(left?' — '+left+' left':' — you found them all!'), 1600); }
+    }
+  }
   if(state==='freeroam' && frameN%10===0) updateWaypointHud();   // sky follows you across the big map
   if(postfx) postfx.render();
   else renderer.render(scene, camera);
@@ -1370,6 +1416,8 @@ function wireUI(){
   $('menu-btn').onclick=openPause;
   $('garage-close').onclick=closeGarage;
   $('drag-exit').onclick=()=>{ if(dragMode.active) dragMode.exit(); startFreeroam(); };
+  $('m-maps').onclick=()=>{ audio.unlock(); audio.beep(600,0.05); $('main-menu').classList.add('hidden'); mapEditor.open(); };
+  $('p-editmap').onclick=()=>{ const m=lastCustom; audio.beep(600,0.05); showMenu(); $('main-menu').classList.add('hidden'); if(m) mapEditor.edit(m); else mapEditor.open(); };
   $('minimap').addEventListener('pointerdown', e=>{ e.preventDefault(); e.stopPropagation(); openBigMap(); });
   $('bigmap-close').onclick=()=>closeBigMap();
   $('bigmap').addEventListener('pointerdown', e=>{
@@ -1469,9 +1517,12 @@ async function boot(){
     storeUI=createStoreUI({ save, persist:()=>saveSave(save), toast:m=>toast(m,1600),
       beep:(f,d)=>audio.beep(f,d), onChange:()=>{ syncCash(); syncPersonGear(); } });
     minimap=createMinimap($('minimap'), shops.stores, $('bigmap'));
+    mapEditor=createMapEditor({ save, persist:()=>saveSave(save), toast:m=>toast(m,2200), beep:(f,d)=>audio.beep(f,d),
+      isRotated:()=>orient.rotated, onClose:()=>showMenu(),
+      play:(m)=>{ audio.unlock(); orient.goLandscape(); playCustom(m); } });
     syncPersonGear(); updateModeHUD();
     // test hook: ?debug exposes a teleport for automated smoke tests
-    if(/[?&]debug\b/.test(location.search)) window.__cd={ tp:(x,z,h)=>{ if(onFoot){ foot.reset(x,z,h||0); snapFootCamera(); } else { physics.pos.x=x; physics.pos.z=z; physics.heading=h||0; syncCarTransform(0); snapCamera(); } }, save:()=>save, stores:()=>shops.stores,
+    if(/[?&]debug\b/.test(location.search)) window.__cd={ frames:()=>frameN, buildMap:m=>{ const t=performance.now(); const c=buildCustomMap(scene,m); const dt=performance.now()-t; c.dispose(); return dt; }, playCustom:m=>{ const t=performance.now(); playCustom(m); return performance.now()-t; }, tp:(x,z,h)=>{ if(onFoot){ foot.reset(x,z,h||0); snapFootCamera(); } else { physics.pos.x=x; physics.pos.z=z; physics.heading=h||0; syncCarTransform(0); snapCamera(); } }, save:()=>save, stores:()=>shops.stores,
       buildings:()=>city.buildings, inside:()=>inside&&{id:inside.b.id, style:inside.room.style}, enter:b=>enterBuilding(b), exit:()=>exitBuilding(),
       getOut:()=>getOut(), tut:()=>tutorial&&{active:tutorial.active, step:tutorial.step}, finishTut:()=>finishTutorial(), pick:id=>pickCar(id),
       mp:()=>mp&&{status:mp.status,count:mp.count}, state:()=>({state,onFoot,editorOpen,pickOpen,cash:save.cash}),

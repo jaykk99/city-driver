@@ -542,7 +542,7 @@ export function buildCity(scene, reserved = []){
     headMat.emissiveIntensity = 0.3 + f * 2.2;
     glowMat.opacity = f * 0.6;
   }
-  let t = 0;
+  let t = 0, cullN = 0;
   function update(dt, playerPos){
     t += dt;
     const sx = Math.round(playerPos.x / SNAP) * SNAP, sz = Math.round(playerPos.z / SNAP) * SNAP;
@@ -550,6 +550,7 @@ export function buildCity(scene, reserved = []){
     sun.position.set(sx + SUN_DX, SUN_DY, sz + SUN_DZ);
     sun.target.updateMatrixWorld();
     if(water) water.update(dt);
+    if((cullN++ & 15) === 0) out.cull(playerPos);
   }
   update(0, spawn);
 

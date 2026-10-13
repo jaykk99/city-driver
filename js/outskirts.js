@@ -40,9 +40,33 @@ function blocked(minX, maxX, minZ, maxZ, pad = 2){
   return false;
 }
 
+// Split one world-wide InstancedMesh into ~300 m chunks so the renderer can
+// frustum-cull them, and we can hide far ones. Shares geometry + material.
+const _m = new THREE.Matrix4(), _p = new THREE.Vector3(), _c = new THREE.Color();
+function chunkify(scene, mesh, size = 300){
+  const groups = new Map();
+  for(let i = 0; i < mesh.count; i++){
+    mesh.getMatrixAt(i, _m); _p.setFromMatrixPosition(_m);
+    const k = Math.floor(_p.x / size) + ',' + Math.floor(_p.z / size);
+    let a = groups.get(k); if(!a) groups.set(k, a = []); a.push(i);
+  }
+  const out = [];
+  for(const idxs of groups.values()){
+    const im = new THREE.InstancedMesh(mesh.geometry, mesh.material, idxs.length);
+    idxs.forEach((src, j) => { mesh.getMatrixAt(src, _m); im.setMatrixAt(j, _m); if(mesh.instanceColor){ mesh.getColorAt(src, _c); im.setColorAt(j, _c); } });
+    im.instanceMatrix.needsUpdate = true; if(im.instanceColor) im.instanceColor.needsUpdate = true;
+    im.castShadow = mesh.castShadow; im.receiveShadow = mesh.receiveShadow; im.renderOrder = mesh.renderOrder;
+    im.computeBoundingSphere();
+    scene.add(im); out.push(im);
+  }
+  scene.remove(mesh); mesh.dispose();
+  return out;
+}
+
 export function buildOutskirts(scene, city, addCol){
   const R = rng(4242);
   const glow = [];
+  const big = [];
 
   // ---------- roads (outside downtown), drawn just above the water so bridges read ----------
   const roadTex = canvasTex(128, 128, (g, w, h) => {
@@ -136,7 +160,7 @@ export function buildOutskirts(scene, city, addCol){
     const pm = new THREE.MeshStandardMaterial({ color:0x3b4b55, roughness:0.02, metalness:0.6, envMapIntensity:1.8, transparent:true, opacity:0.78 });
     const inst = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 20).rotateX(-Math.PI / 2), pm, PUDDLES.length);
     PUDDLES.forEach(([x, z, r], i) => setInst(inst, i, x, 0.115, z, R() * 3, r * (1 + R() * 0.4), 1, r));
-    inst.instanceMatrix.needsUpdate = true; inst.renderOrder = 2; scene.add(inst);
+    inst.instanceMatrix.needsUpdate = true; inst.renderOrder = 2; scene.add(inst); big.push(inst);
   }
   // ---------- farmland ----------
   const cropTex = {
@@ -158,7 +182,7 @@ export function buildOutskirts(scene, city, addCol){
   {
     const bm = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.85, 0.85, 1.4, 14).rotateZ(Math.PI / 2).translate(0, 0.85, 0), std(0xd4b25e, { roughness:1 }), Math.max(1, bales.length));
     bales.forEach(([x, z], i) => { setInst(bm, i, x, 0, z, R() * 3, 1, 1, 1); addCol(x - 0.9, x + 0.9, z - 0.9, z + 0.9); });
-    bm.count = bales.length; bm.instanceMatrix.needsUpdate = true; bm.castShadow = true; scene.add(bm);
+    bm.count = bales.length; bm.instanceMatrix.needsUpdate = true; bm.castShadow = true; scene.add(bm); big.push(bm);
   }
   // mud patches (wet, glossy) on plowed fields + gravel roads
   {
@@ -166,7 +190,7 @@ export function buildOutskirts(scene, city, addCol){
     const mm = new THREE.MeshStandardMaterial({ map:mudTex, roughness:0.22, metalness:0.15, envMapIntensity:0.9 });
     const inst = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 24).rotateX(-Math.PI / 2), mm, MUD_PATCHES.length);
     MUD_PATCHES.forEach(([x, z, r], i) => setInst(inst, i, x, 0.12, z, R() * 3, r, 1, r * (0.8 + R() * 0.3)));
-    inst.instanceMatrix.needsUpdate = true; inst.receiveShadow = true; scene.add(inst);
+    inst.instanceMatrix.needsUpdate = true; inst.receiveShadow = true; scene.add(inst); big.push(inst);
   }
 
   // ---------- suburbs: rows of houses ----------
@@ -221,7 +245,7 @@ export function buildOutskirts(scene, city, addCol){
     city.buildings.push({ id:city.buildings.length, minX:h.x - ex, maxX:h.x + ex, minZ:h.z - ez, maxZ:h.z + ez, h:ht,
       door:{ x:h.x + fx * front - rx * 1.5, z:h.z + fz * front - rz * 1.5, nx:Math.round(fx), nz:Math.round(fz) }, house:true });
   });
-  for(const m of [walls, roofs, doorsM, wins, garages]){ m.instanceMatrix.needsUpdate = true; if(m.instanceColor) m.instanceColor.needsUpdate = true; m.castShadow = m !== wins && m !== doorsM; m.receiveShadow = true; scene.add(m); }
+  for(const m of [walls, roofs, doorsM, wins, garages]){ m.instanceMatrix.needsUpdate = true; if(m.instanceColor) m.instanceColor.needsUpdate = true; m.castShadow = m !== wins && m !== doorsM; m.receiveShadow = true; scene.add(m); big.push(m); }
   glow.push({ mat:winM, base:0, night:1.6 });
 
   function nearestRoad(x, z){
@@ -275,7 +299,7 @@ export function buildOutskirts(scene, city, addCol){
       setInst(trunk, i, x, 0, z, R() * 6, s, s, s); setInst(crown, i, x, 0, z, R() * 6, s, s * (0.9 + R() * 0.4), s);
       col.setHex(greens[(R() * greens.length) | 0]); crown.setColorAt(i, col);
     });
-    for(const m of [trunk, crown]){ m.instanceMatrix.needsUpdate = true; if(m.instanceColor) m.instanceColor.needsUpdate = true; m.castShadow = true; scene.add(m); }
+    for(const m of [trunk, crown]){ m.instanceMatrix.needsUpdate = true; if(m.instanceColor) m.instanceColor.needsUpdate = true; m.castShadow = true; scene.add(m); big.push(m); }
   }
 
   // ---------- farmsteads + grain elevator ----------
@@ -333,5 +357,16 @@ export function buildOutskirts(scene, city, addCol){
     addCol(t.x - 62, t.x - 28, t.z - 29, t.z + 9);
   }
 
-  return { glow, houses:houses.length, trees:treeSpots.length };
+  // chunk the big instanced sets; far chunks are hidden (beyond the fog anyway)
+  const chunks = [];
+  for(const m of big) for(const c of chunkify(scene, m)) chunks.push(c);
+  const VIEW = 820;
+  function cull(pos){
+    for(const c of chunks){
+      const bs = c.boundingSphere; if(!bs) continue;
+      const d = Math.hypot(bs.center.x - pos.x, bs.center.z - pos.z) - bs.radius;
+      c.visible = d < VIEW;
+    }
+  }
+  return { glow, houses:houses.length, trees:treeSpots.length, chunks:chunks.length, cull };
 }

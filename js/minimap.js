@@ -98,10 +98,11 @@ export function createMinimap(canvas, stores, bigCanvas){
   function drawBig(px, pz, heading, extra){
     if(!bigCanvas) return;
     const bg = bigCanvas.getContext('2d'), BW = bigCanvas.width, BH = bigCanvas.height;
-    const half = custom ? custom.half : WORLD_HALF;
+    const half = custom ? custom.half : WORLD_HALF, ox = custom ? custom.cx : 0, oz = custom ? custom.cz : 0;
     const bk = Math.min(BW, BH) / (half * 2 + 40);
-    const W = x => BW / 2 + x * bk, H = z => BH / 2 + z * bk;
+    const W = x => BW / 2 + (x - ox) * bk, H = z => BH / 2 + (z - oz) * bk;
     bg.fillStyle = '#0b1122'; bg.fillRect(0, 0, BW, BH);
+    bg.fillStyle = '#1d2a20'; if(custom) bg.fillRect(W(ox - half), H(oz - half), half * 2 * bk, half * 2 * bk);
     paintWorld(bg, W, H, bk, { x0:-1e9, x1:1e9, z0:-1e9, z1:1e9 }, custom);
     bg.font = 'bold 12px sans-serif'; bg.textAlign = 'center'; bg.fillStyle = '#e2e8f0';
     if(!custom){
@@ -122,7 +123,7 @@ export function createMinimap(canvas, stores, bigCanvas){
   function bigToWorld(cx, cy){
     const BW = bigCanvas.width, BH = bigCanvas.height, half = custom ? custom.half : WORLD_HALF;
     const bk = Math.min(BW, BH) / (half * 2 + 40);
-    return { x:(cx - BW / 2) / bk, z:(cy - BH / 2) / bk };
+    return { x:(cx - BW / 2) / bk + (custom ? custom.cx : 0), z:(cy - BH / 2) / bk + (custom ? custom.cz : 0) };
   }
   return { draw, drawBig, bigToWorld, setCustom(c){ custom = c; }, setWaypoint(p){ wp = p; }, get waypoint(){ return wp; } };
 }

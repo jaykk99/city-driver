@@ -92,6 +92,7 @@
     <button id="m-tutorial" class="mbtn gold">🎓 TUTORIAL · WIN $100K + FREE CAR</button>
     <button id="m-drag" class="mbtn">🏁 DRAG RACE</button>
     <button id="m-garage" class="mbtn">🔧 GARAGE</button>
+    <button id="m-maps" class="mbtn">🗺️ CUSTOM MAPS</button>
     <button id="m-editor" class="mbtn">🎨 SKIN EDITOR · FREE</button>
     <button id="m-trans" class="mbtn">⚙️ GEARBOX: AUTO</button>
   </div>
@@ -107,6 +108,7 @@
     <button id="p-drag" class="mbtn">🏁 DRAG RACE</button>
     <button id="p-garage" class="mbtn">🔧 GARAGE</button>
     <button id="p-editor" class="mbtn">🎨 SKIN EDITOR</button>
+    <button id="p-editmap" class="mbtn hidden">🗺️ EDIT THIS MAP</button>
     <button id="p-trans" class="mbtn">⚙️ GEARBOX: AUTO</button>
     <button id="p-freeroam" class="mbtn">🚗 RESPAWN</button>
     <button id="p-quit" class="mbtn">🏠 MAIN MENU</button>
@@ -202,6 +204,33 @@
 <div id="crosshair" class="hidden"><i></i></div>
 <div id="hurt"></div>
 <div id="wasted" class="hidden"><h1>WASTED</h1><p>respawning…</p></div>
+<!-- Custom maps -->
+<div id="maps-ov" class="overlay hidden">
+  <h2>🗺️ CUSTOM MAPS</h2>
+  <div class="maps-cols">
+    <div class="maps-col"><div class="maps-h"><b>MY MAPS</b><button id="maps-import" class="upg-btn">📥 IMPORT CODE</button></div><div id="maps-list" class="garage-panel"></div></div>
+    <div class="maps-col"><div class="maps-h"><b>NEW MAP</b></div><div id="maps-new" class="garage-panel"></div></div>
+  </div>
+  <button id="maps-back" class="mbtn">BACK</button>
+  <div id="maps-share" class="maps-share hidden">
+    <b id="maps-share-title">Share</b>
+    <textarea id="maps-code" rows="4" spellcheck="false"></textarea>
+    <div class="mb-btns"><button id="maps-share-go" class="mbtn primary">COPY</button><button id="maps-share-close" class="mbtn">CLOSE</button></div>
+  </div>
+</div>
+<div id="mapedit-ov" class="hidden">
+  <div class="me-canvas"><canvas id="mapedit-cv" width="768" height="768"></canvas></div>
+  <div class="me-panel">
+    <input id="me-name" class="se-name" maxlength="24" autocomplete="off" spellcheck="false">
+    <div class="tsec"><div class="tsec-h"><b>Paint</b><small id="me-status">Saved</small></div><div id="me-tiles" class="me-tiles"></div></div>
+    <div class="tsec"><div class="tsec-h"><b>Brush</b></div><div id="me-brush"></div></div>
+    <div class="tsec"><div class="tsec-h"><b>Theme</b></div><div id="me-theme"></div></div>
+    <div class="me-btns"><button id="me-undo" class="mbtn">↶ UNDO</button><button id="me-save" class="mbtn">💾 SAVE</button></div>
+    <button id="me-play" class="mbtn primary">▶ TEST DRIVE</button>
+    <button id="me-back" class="mbtn">◀ MY MAPS</button>
+  </div>
+</div>
+
 <!-- Full map -->
 <div id="bigmap-ov" class="overlay hidden">
   <div class="bigmap-top"><b>🗺️ MAP</b><small>Tap to set a GPS waypoint · tap again on it to clear</small><button id="bigmap-close" class="mbtn">CLOSE</button></div>
