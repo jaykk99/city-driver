@@ -26,7 +26,7 @@ export const SKY_PRESETS = {
     top: 0x050914, horizon: 0x1a2b4a, fog: 0x0d1626,
     sunColor: 0x9db8e8, sunI: 0.55, elev: 38, azim: 210, // moon
     hemiSky: 0x24365a, hemiGround: 0x0c0f14, hemiI: 0.35,
-    exposure: 0.95, lightsOn: true, windowsGlow: 1.6, bloom: 0.65,
+    exposure: 0.95, lightsOn: true, windowsGlow: 1.6, bloom: 0.42,
     stars: 1.0,
   },
 };

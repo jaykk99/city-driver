@@ -7,7 +7,7 @@ import * as THREE from 'three';
 export const STYLES = ['lobby', 'apartment', 'office', 'diner'];
 export const STYLE_NAMES = { lobby:'LOBBY', apartment:'APARTMENT', office:'OFFICE', diner:'DINER' };
 const ROOM_W = 22, ROOM_D = 16, ROOM_H = 4.6, WALL = 0.3;
-const BASE_Z = -1180;
+const BASE_Z = -1750;     // far past the skyline ring, out of sight
 
 export const styleFor = (buildingId) => STYLES[((buildingId * 2654435761) >>> 0) % STYLES.length];
 export function roomOrigin(style){ return { x: (STYLES.indexOf(style) - 1.5) * 90, z: BASE_Z }; }

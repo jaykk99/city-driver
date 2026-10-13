@@ -20,7 +20,7 @@ describe('missions', () => {
       const m = generateMission(n);
       kinds.add(m.type);
       assert.ok(m.reward > 0 && m.points.length > 0, `mission ${n}`);
-      for(const p of m.points) assert.ok(Math.abs(p.x) <= 190 && Math.abs(p.z) <= 190, `mission ${n} point in city`);
+      for(const p of m.points) assert.ok(Math.abs(p.x) <= 340 && Math.abs(p.z) <= 340, `mission ${n} point in city`);
       if(m.type !== 'hit') assert.ok(m.timeLimit > 15, `mission ${n} has a fair timer`);
     }
     assert.deepEqual([...kinds].sort(), ['collect', 'deliver', 'hit', 'race']);

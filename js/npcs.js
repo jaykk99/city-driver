@@ -3,7 +3,7 @@
 import { buildCharacter, setOutfit, setHeldWeapon, animateCharacter, kickRecoil } from './character.js';
 import { PALETTE, SKIN_TONES, HAIR_COLORS } from './skins.js';
 
-const PITCH = 74, BLOCKS = 5;
+import { PITCH, BLOCKS, isSpecialBlock } from './world.js';
 const HALF = 28;                  // sidewalk loop half-size inside each block
 const PERIM = HALF * 8;           // loop length
 const WALK = 1.5, RUN = 5.2;
@@ -40,7 +40,7 @@ export function createPeople(deps){
     const out = [];
     for(let i = 0; i < BLOCKS; i++) for(let j = 0; j < BLOCKS; j++){
       const cx = (i - (BLOCKS - 1) / 2) * PITCH, cz = (j - (BLOCKS - 1) / 2) * PITCH;
-      if(Math.hypot(cx - px, cz - pz) < 170 && !(i === 0 && j === 0)) out.push({ cx, cz });   // parking lot block has no walkers
+      if(Math.hypot(cx - px, cz - pz) < 170 && isSpecialBlock(cx, cz) !== 'parking') out.push({ cx, cz });
     }
     return out;
   }

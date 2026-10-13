@@ -28,6 +28,7 @@ import { createMultiplayer } from './multiplayer.js';
 import { createBlood } from './blood.js';
 import { createPeople } from './npcs.js';
 import { createTraffic } from './traffic.js';
+import { HOSPITAL_SPAWN, GRID_HALF } from './world.js';
 import { createMissionRunner, generateMission, TOTAL_MISSIONS, EMERALD_FORTUNE } from './missions.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin } = Cars;
@@ -626,7 +627,7 @@ function onPlayerDied(){
 }
 function respawnPoint(){
   if(mode==='tdm') return tdmBase(tdm.team||'red');
-  return { x:city.spawn.x, z:city.spawn.z, heading:city.spawn.heading||0 };
+  return { x:HOSPITAL_SPAWN.x, z:HOSPITAL_SPAWN.z, heading:HOSPITAL_SPAWN.heading };
 }
 function updateRemoteHits(){
   remoteHits.length=0;
@@ -1100,7 +1101,7 @@ function setTimeOfDay(name, silent){
   const glowF = key==='day'?0 : key==='sunset'?0.45 : 1;
   if(city) city.setGlow(glowF);
   if(postfx) postfx.setBloomStrength(p.bloom);
-  headlightBase = key==='day' ? 0 : key==='sunset' ? 60 : 160;
+  headlightBase = key==='day' ? 0 : key==='sunset' ? 30 : 70;
   if(headlight && state!=='drag') headlight.intensity=headlightBase;
   const btn=$('tod-btn');
   if(btn) btn.textContent = key==='day' ? '☀️' : key==='sunset' ? '🌇' : '🌙';
@@ -1315,11 +1316,12 @@ async function boot(){
     minimap=createMinimap($('minimap'), shops.stores);
     syncPersonGear(); updateModeHUD();
     // test hook: ?debug exposes a teleport for automated smoke tests
-    if(/[?&]debug\b/.test(location.search)) window.__cd={ tp:(x,z,h)=>{ if(onFoot){ foot.reset(x,z,h||0); } else { physics.pos.x=x; physics.pos.z=z; physics.heading=h||0; } }, save:()=>save, stores:()=>shops.stores,
+    if(/[?&]debug\b/.test(location.search)) window.__cd={ tp:(x,z,h)=>{ if(onFoot){ foot.reset(x,z,h||0); snapFootCamera(); } else { physics.pos.x=x; physics.pos.z=z; physics.heading=h||0; syncCarTransform(0); snapCamera(); } }, save:()=>save, stores:()=>shops.stores,
       buildings:()=>city.buildings, inside:()=>inside&&{id:inside.b.id, style:inside.room.style}, enter:b=>enterBuilding(b), exit:()=>exitBuilding(),
       getOut:()=>getOut(), tut:()=>tutorial&&{active:tutorial.active, step:tutorial.step}, finishTut:()=>finishTutorial(), pick:id=>pickCar(id),
       mp:()=>mp&&{status:mp.status,count:mp.count}, state:()=>({state,onFoot,editorOpen,pickOpen,cash:save.cash}),
       steal:()=>{ const c=traffic.cars[0]; foot.reset(c.x+2,c.z,0); stealCar(c); return carDef.name; }, physics:()=>physics, missions:()=>missions, setDone:n=>{save.missionsDone=n;}, people:()=>people, traffic:()=>traffic, hp:()=>hp, hurt:d=>hurtPlayer(d),
+      car:()=>({vis:carGroup.visible, inScene:!!carGroup.parent, pos:carGroup.position.toArray().map(v=>+v.toFixed(1)), id:carDef.id, phys:[+physics.pos.x.toFixed(1),+physics.pos.z.toFixed(1)], cam:camera.position.toArray().map(v=>+v.toFixed(1))}),
       cam:()=>({c:camera.position.toArray().map(v=>+v.toFixed(2)), p:person.position.toArray().map(v=>+v.toFixed(2)), pv:person.visible, f:[foot.pos.x,foot.pos.z,foot.heading]}) };
     rebuildCar();
     physics=new CarPhysics(carStats);

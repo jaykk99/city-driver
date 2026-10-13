@@ -187,7 +187,9 @@ body.force-landscape #game-container canvas{touch-action:none}
 body.compact #objective{top:calc(6px + env(safe-area-inset-top));padding:6px 12px}
 body.compact .obj-main{font-size:13px}
 /* the objective sits where the compact action button lives — push the button down */
-body.compact #btn-action{top:auto;bottom:calc(120px + env(safe-area-inset-bottom))}
+/* compact landscape: action button on the right edge, clear of the car and the pedals */
+body.compact #btn-action{top:44%;bottom:auto;left:auto;right:12px;transform:none;padding:10px 16px;font-size:14px}
+body.compact #btn-action:active,body.compact #btn-action.pressed{transform:scale(.95)}
 
 /* ---------- skin editor: panel on the right, live 3D preview on the left ---------- */
 #skin-editor{position:fixed;inset:0;z-index:50;pointer-events:none;background:linear-gradient(90deg,rgba(6,10,22,0) 0%,rgba(6,10,22,0) 40%,rgba(6,10,22,.55) 55%)}

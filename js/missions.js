@@ -5,8 +5,8 @@ import * as THREE from 'three';
 
 export const TOTAL_MISSIONS = 500;
 export const EMERALD_FORTUNE = 5000000;
-const PITCH = 74, BLOCKS = 5, LANE = 3.5;
-const LINES = [-185, -111, -37, 37, 111, 185];
+import { PITCH, BLOCKS, LANE, LINES, GRID_HALF, MANSION, isSpecialBlock, blockCenter } from './world.js';
+const EDGE = GRID_HALF - 12;
 
 // Emerald — fictional final boss. Native woman, brown skin, long blackish-brown hair, Glock.
 export const EMERALD = {
@@ -20,12 +20,13 @@ function rng(seed){
   return () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 }
 function roadPoint(r){
-  const axisZ = r() < 0.5, line = LINES[(r() * LINES.length) | 0], s = -175 + r() * 350, side = r() < 0.5 ? 1 : -1;
+  const axisZ = r() < 0.5, line = LINES[(r() * LINES.length) | 0], s = -EDGE + r() * EDGE * 2, side = r() < 0.5 ? 1 : -1;
   return axisZ ? { x:line + side * LANE, z:s } : { x:s, z:line + side * LANE };
 }
 function sidewalkPoint(r){
-  const i = (r() * BLOCKS) | 0, j = (r() * BLOCKS) | 0;
-  const cx = (i - 2) * PITCH, cz = (j - 2) * PITCH;
+  let i = (r() * BLOCKS) | 0, j = (r() * BLOCKS) | 0;
+  if(isSpecialBlock(blockCenter(i), blockCenter(j)) === 'mansion'){ i = (i + 1) % BLOCKS; }
+  const cx = blockCenter(i), cz = blockCenter(j);
   const t = -24 + r() * 48, side = (r() * 4) | 0, h = 28;
   return side === 0 ? { x:cx + t, z:cz - h } : side === 1 ? { x:cx + h, z:cz + t } : side === 2 ? { x:cx - t, z:cz + h } : { x:cx - h, z:cz - t };
 }
@@ -39,7 +40,7 @@ export function generateMission(n){
   if(n === TOTAL_MISSIONS){
     return { n, type:'boss', title:'EMERALD', reward:EMERALD_FORTUNE,
       desc:"Emerald runs the whole city and she's sitting on millions. Fight through her guards at the compound and take her down. Everything she has is yours.",
-      points:[{ x:-148, z:-148 }], guards:10, timeLimit:0 };
+      points:[{ x:MANSION.x, z:MANSION.z }], guards:10, timeLimit:0 };
   }
   const r = rng(n * 7919 + 13);
   const tier = n / TOTAL_MISSIONS;                 // 0..1 difficulty
@@ -49,7 +50,7 @@ export function generateMission(n){
   const gang = GANGS[(r() * GANGS.length) | 0];
   if(type === 'deliver'){
     const a = roadPoint(r); let b = roadPoint(r);
-    for(let k = 0; k < 6 && dist(a, b) < 150; k++) b = roadPoint(r);
+    for(let k = 0; k < 8 && dist(a, b) < 220; k++) b = roadPoint(r);
     const d = dist(a, b);
     return { n, type, title:'Special Delivery', reward:600 + n * 30,
       desc:`Pick up ${CARGO[(r() * CARGO.length) | 0]} and get it across town before the clock runs out.`,
@@ -59,14 +60,14 @@ export function generateMission(n){
     const cps = []; let last = roadPoint(r); cps.push(last);
     const count = 4 + Math.min(4, (n / 80) | 0);
     let total = 0;
-    while(cps.length < count){ let p = roadPoint(r); for(let k = 0; k < 6 && dist(p, last) < 90; k++) p = roadPoint(r); total += dist(p, last); cps.push(p); last = p; }
+    while(cps.length < count){ let p = roadPoint(r); for(let k = 0; k < 8 && (dist(p, last) < 90 || dist(p, last) > 260); k++) p = roadPoint(r); total += dist(p, last); cps.push(p); last = p; }
     return { n, type, title:'Checkpoint Race', reward:800 + n * 35,
       desc:`Hit all ${count} checkpoints in order before time runs out.`, points:cps, timeLimit:Math.round(20 + total / (13 + tier * 8)) };
   }
   if(type === 'collect'){
     const c = sidewalkPoint(r), pts = [];
     const count = 3 + Math.min(5, (n / 70) | 0);
-    for(let k = 0; k < count; k++){ const a = r() * Math.PI * 2, rr = 20 + r() * 60; pts.push({ x:Math.max(-180, Math.min(180, c.x + Math.cos(a) * rr)), z:Math.max(-180, Math.min(180, c.z + Math.sin(a) * rr)) }); }
+    for(let k = 0; k < count; k++){ const a = r() * Math.PI * 2, rr = 20 + r() * 60; pts.push({ x:Math.max(-EDGE, Math.min(EDGE, c.x + Math.cos(a) * rr)), z:Math.max(-EDGE, Math.min(EDGE, c.z + Math.sin(a) * rr)) }); }
     return { n, type, title:'Cash Grab', reward:500 + n * 30,
       desc:`The ${gang} dropped ${count} bags of cash around town. Grab them all before they come back.`, points:pts, timeLimit:Math.round(60 + count * 18 - tier * 30) };
   }
@@ -133,9 +134,9 @@ export function createMissionRunner(deps){
       const g = enemyStats(480, false);
       for(let i = 0; i < m.guards; i++){
         const a = i / m.guards * Math.PI * 2;
-        foes.push(deps.people.spawnEnemy(Object.assign({}, g, { x:c.x + Math.cos(a) * 14, z:c.z + Math.sin(a) * 14, weapon:i % 2 ? 'ak' : 'smg', hp:160 })));
+        foes.push(deps.people.spawnEnemy(Object.assign({}, g, { x:c.x + Math.cos(a) * 18, z:c.z - 8 + Math.sin(a) * 12, weapon:i % 2 ? 'ak' : 'smg', hp:160 })));
       }
-      boss = deps.people.spawnEnemy({ x:c.x, z:c.z, outfit:EMERALD.outfit, weapon:EMERALD.weapon, hp:EMERALD.hp,
+      boss = deps.people.spawnEnemy({ x:c.x, z:c.z - 6, outfit:EMERALD.outfit, weapon:EMERALD.weapon, hp:EMERALD.hp,
         accuracy:0.55, dmg:11, rate:0.32, range:60, boss:true, name:EMERALD.name });
       foes.push(boss);
       deps.toast("👑 EMERALD: \"You came all this way to die?\"", 3500);
