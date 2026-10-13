@@ -163,6 +163,18 @@ export function createAudio(){
       o.connect(og); og.connect(master); o.start(t); o.stop(t+0.16);
     },
     click(){ this.beep(1800, 0.03); },
+    // water splash: a filtered noise "whoosh" + low thump, scaled by how hard you hit
+    splash(power = 0.5){
+      if(!ctx || !started || !noiseBuf) return;
+      const t = ctx.currentTime, p = Math.max(0.1, Math.min(1, power));
+      const src = ctx.createBufferSource(); src.buffer = noiseBuf;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.setValueAtTime(2600, t); lp.frequency.exponentialRampToValueAtTime(500, t + 0.7);
+      const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.32 * p, t + 0.03); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.4 + p * 0.6);
+      src.connect(lp); lp.connect(g); g.connect(master); src.start(t, Math.random() * 0.4); src.stop(t + 1.1);
+      const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.25);
+      const og = ctx.createGain(); og.gain.setValueAtTime(0.25 * p, t); og.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+      o.connect(og); og.connect(master); o.start(t); o.stop(t + 0.32);
+    },
     // forced induction: turbo whistle / blower whine rises with boost; blow-off "pssh" when you lift
     turbo(boost01, kind, lifted){
       if(!ctx || !started) return;

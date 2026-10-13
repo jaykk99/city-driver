@@ -28,7 +28,8 @@ import { createMultiplayer } from './multiplayer.js';
 import { createBlood } from './blood.js';
 import { createPeople } from './npcs.js';
 import { createTraffic } from './traffic.js';
-import { HOSPITAL_SPAWN, GRID_HALF, surfaceAt, surfaceGrip } from './world.js';
+import { HOSPITAL_SPAWN, GRID_HALF, surfaceAt, surfaceGrip, WATER_DEPTH, isWet } from './world.js';
+import { createWheelFX } from './fx.js';
 import { buildStats, normalizeBuild, migrateLegacy, timeslip } from './tuning.js';
 import { createTuningUI } from './tuningui.js';
 import { createMissionRunner, generateMission, TOTAL_MISSIONS, EMERALD_FORTUNE } from './missions.js';
@@ -48,7 +49,40 @@ let tele={speed:0,drifting:false,nitro:false,nitroFrac:1,steer:0};
 // --- buildings / editor / tutorial / car pick ---
 let interiors=null, inside=null, curColliders=null;
 let editor=null, editorOpen=false, editorReturn='menu', editorAngle=0.6;
-let tutorial=null, pickOpen=false, tuningUI=null;
+let tutorial=null, pickOpen=false, tuningUI=null, skyMesh=null;
+// --- water + mud ---
+let wheelFX=null, carSink=0, carDirt=0, lastSurf='road', footSurf='road', splashCool=0;
+const wheelPos=[{x:0,y:0,z:0},{x:0,y:0,z:0},{x:0,y:0,z:0},{x:0,y:0,z:0}];
+const _wv=new THREE.Vector3(), _dirtCol=new THREE.Color(), MUD_COL=new THREE.Color(0x4a3420);
+// mud builds up on the paint + rims; water washes it off
+function applyDirt(){
+  const u=carGroup && carGroup.userData; if(!u || !u.paint) return;
+  _dirtCol.setHex(u.bodyColor).lerp(MUD_COL, carDirt*0.72);
+  u.paint.color.copy(_dirtCol);
+  u.paint.clearcoat = 1 - carDirt*0.85; u.paint.roughness = 0.32 + carDirt*0.55;
+  if(u.rim){ if(u.rimBase===undefined) u.rimBase=u.rim.color.getHex(); _dirtCol.setHex(u.rimBase).lerp(MUD_COL, carDirt*0.8); u.rim.color.copy(_dirtCol); }
+}
+function updateWater(dt){
+  const surf=tele.surface||'road', sp=Math.abs(tele.speed);
+  // sink into deep water (smoothly), bob a little
+  const want=(WATER_DEPTH[surf]||0);
+  carSink += (want-carSink)*Math.min(1, dt*(want>carSink?3:5));
+  // big splash when you hit water fast
+  splashCool=Math.max(0, splashCool-dt);
+  if((surf==='deep'||surf==='water') && !(lastSurf==='deep'||lastSurf==='water') && sp>4 && splashCool<=0){
+    wheelFX.splash(physics.pos.x, physics.pos.z, Math.min(2.2, 0.6+sp/12)); if(audio.splash) audio.splash(Math.min(1, sp/20)); splashCool=0.8;
+  }else if(surf==='puddle' && lastSurf!=='puddle' && sp>6 && audio.splash){ audio.splash(0.25); }
+  lastSurf=surf;
+  // wheel spray / mud / dust
+  carGroup.updateMatrixWorld();
+  for(let i=0;i<4 && i<allWheels.length;i++){ allWheels[i].getWorldPosition(_wv); wheelPos[i].x=_wv.x; wheelPos[i].y=Math.max(0.2,_wv.y); wheelPos[i].z=_wv.z; }
+  wheelFX.emitWheels(dt, wheelPos, tele.speed, physics.heading, surf, carSink);
+  // dirt level
+  const before=carDirt;
+  if((surf==='mud' && sp>1) || ((surf==='dirt'||surf==='crop') && sp>8)) carDirt=Math.min(1, carDirt+dt*(surf==='mud'?0.12+sp*0.006:0.02));
+  else if(surf==='deep'||surf==='water') carDirt=Math.max(0, carDirt-dt*(sp>2?0.35:0.12));
+  if(Math.abs(carDirt-before)>0.0001 && frameN%6===0) applyDirt();
+}
 // --- world life: pedestrians, traffic, blood; player health ---
 let blood=null, people=null, traffic=null, trafficHits=null;
 let hp=100, dead=false, deadT=0, hurtFlash=0;
@@ -124,6 +158,7 @@ function rebuildCar(){
   applyBuildVisual(carGroup, { rideHeight:carStats.rideHeight, tireScale:carStats.tireScale, offset:carStats.offset,
     slicks:bld.tires==='slicks', adder:bld.adder, body:bld.body });
   etCache=null;
+  if(carDirt>0) applyDirt();
   if(audio && audio.setEngine) audio.setEngine(carStats.engine || ENGINES[carDef.id] || {cyl:6});
   allWheels=(carGroup.userData.wheels||[]).slice();
   frontWheels=allWheels.filter(w=>w.position.z<0);
@@ -177,7 +212,7 @@ function refreshSceneKeep(){
 
 const _hw=new THREE.Vector3();
 function syncCarTransform(dt){
-  carGroup.position.set(physics.pos.x, 0, physics.pos.z);
+  carGroup.position.set(physics.pos.x, -carSink + (carSink>0.3 ? Math.sin(performance.now()/420)*0.03 : 0), physics.pos.z);
   carGroup.rotation.y=physics.heading;
   const fl=carGroup.userData.flashers;
   if(fl){ const on=((performance.now()/170)|0)%2; fl[0].emissiveIntensity=on?4:0.25; fl[1].emissiveIntensity=on?0.25:4; }
@@ -249,9 +284,35 @@ function collide(x, z){
   }
   return r;
 }
+// spatial hash over colliders (the big map has thousands): 40 m cells, rebuilt when the list grows
+const COL_CELL=40;
+const colGrids=new WeakMap();
+function gridFor(cols){
+  let g=colGrids.get(cols);
+  if(g && g.n===cols.length) return g;
+  g={ n:cols.length, cells:new Map() };
+  for(const c of cols){
+    const x0=Math.floor(c.minX/COL_CELL), x1=Math.floor(c.maxX/COL_CELL), z0=Math.floor(c.minZ/COL_CELL), z1=Math.floor(c.maxZ/COL_CELL);
+    for(let i=x0;i<=x1;i++) for(let j=z0;j<=z1;j++){ const k=i*100003+j; let a=g.cells.get(k); if(!a) g.cells.set(k, a=[]); a.push(c); }
+  }
+  colGrids.set(cols, g);
+  return g;
+}
+const _near=[]; let _stamp=0;
+function nearColliders(cols, x, z, R){
+  _near.length=0;
+  if(cols.length<64){ for(const c of cols) _near.push(c); return _near; }
+  const g=gridFor(cols); _stamp++;
+  const x0=Math.floor((x-R)/COL_CELL), x1=Math.floor((x+R)/COL_CELL), z0=Math.floor((z-R)/COL_CELL), z1=Math.floor((z+R)/COL_CELL);
+  for(let i=x0;i<=x1;i++) for(let j=z0;j<=z1;j++){
+    const a=g.cells.get(i*100003+j); if(!a) continue;
+    for(const c of a){ if(c._st!==_stamp){ c._st=_stamp; _near.push(c); } }
+  }
+  return _near;
+}
 function collideR(x, z, R){
   let cx=x, cz=z, hitX=false, hitZ=false;
-  const cols=curColliders||city.colliders;
+  const cols=nearColliders(curColliders||city.colliders, x, z, R+2);
   for(let i=0;i<cols.length;i++){
     const c=cols[i];
     if(cx+R<c.minX||cx-R>c.maxX||cz+R<c.minZ||cz-R>c.maxZ) continue;
@@ -396,7 +457,15 @@ function updateAim(dt){
   aimHold=Math.max(aimHold, 0.25);
 }
 function updateFoot(dt){
+  const fx0=foot.pos.x, fz0=foot.pos.z;
   foot.update(controls.input, dt, footCollide);
+  // wading: slow + sink to the waist/chest in water
+  if(!inside){
+    footSurf=surfaceAt(foot.pos.x, foot.pos.z);
+    const k = footSurf==='deep' ? 0.4 : footSurf==='water' ? 0.62 : footSurf==='mud' ? 0.6 : 1;
+    if(k<1){ foot.pos.x=fx0+(foot.pos.x-fx0)*k; foot.pos.z=fz0+(foot.pos.z-fz0)*k; }
+    if((footSurf==='deep'||footSurf==='water') && Math.abs(foot.speed)>0.5 && Math.random()<dt*4) wheelFX.splash(foot.pos.x, foot.pos.z, 0.35);
+  }else footSurf='road';
   person.position.x=foot.pos.x; person.position.z=foot.pos.z;
   person.rotation.y=foot.heading;
   if(controls.consumeCycle()){
@@ -418,6 +487,7 @@ function updateFoot(dt){
   if(controls.input.fire && gear().equipped) aimHold=Math.max(aimHold,0.3);
   aimHold=Math.max(0, aimHold-dt);
   animateCharacter(person, foot.phase, foot.speed, aimHold>0 && !!gear().equipped, dt);
+  person.position.y -= footSurf==='deep' ? 0.95 : footSurf==='water' ? 0.45 : footSurf==='mud' ? 0.12 : 0;   // wading
   updateFootCamera(dt);
   if(ammoDirty && frameN%120===0){ saveSave(save); ammoDirty=0; }
 }
@@ -734,6 +804,31 @@ function updateMissionHud(){
   else $('boss-hud').classList.add('hidden');
 }
 
+// ---------------- full map + GPS waypoint ----------------
+let bigMapOpen=false;
+function playerXZ(){ return onFoot ? { x:inside?inside.back.x:foot.pos.x, z:inside?inside.back.z:foot.pos.z, h:foot.heading } : { x:physics.pos.x, z:physics.pos.z, h:physics.heading }; }
+function openBigMap(){
+  if(state!=='freeroam' || garageOpen || storeOpen || editorOpen || pickOpen) return;
+  bigMapOpen=true; paused=true;
+  $('bigmap-ov').classList.remove('hidden');
+  redrawBigMap();
+}
+function redrawBigMap(){
+  const p=playerXZ();
+  minimap.drawBig(p.x, p.z, p.h);
+  const wp=minimap.waypoint;
+  $('bigmap-wp').textContent = wp ? '📍 Waypoint set — '+Math.round(Math.hypot(wp.x-p.x, wp.z-p.z))+' m away' : '';
+}
+function closeBigMap(){ bigMapOpen=false; paused=false; $('bigmap-ov').classList.add('hidden'); }
+function updateWaypointHud(){
+  const wp=minimap.waypoint, el=$('wp-hud');
+  if(!wp){ el.classList.add('hidden'); return; }
+  const p=playerXZ(), d=Math.hypot(wp.x-p.x, wp.z-p.z);
+  if(d<15){ minimap.setWaypoint(null); toast('📍 You have arrived', 1500); el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  el.textContent='📍 '+(d>999?(d/1000).toFixed(1)+' km':Math.round(d)+' m');
+}
+
 // ---------------- health / wasted ----------------
 function syncHP(){
   const f=$('hp-fill'); if(!f) return;
@@ -814,7 +909,12 @@ function updateHUD(){
     if(on){ $('boost-val').textContent=(tele.psi||0).toFixed(1); $('boost-fill').style.width=(Math.min(1,tele.boost||0)*100).toFixed(0)+'%'; }
   }
   const sh=$('surface-hud');
-  if(sh){ const sf=tele.surface||'road'; sh.textContent = sf==='road' ? '' : (sf==='mud'?'🟤 MUD':sf==='dirt'?'🟫 DIRT':'🟩 GRASS')+(tele.spinning?' · WHEELSPIN':''); sh.classList.toggle('hidden', sf==='road' && !tele.spinning); if(sf==='road' && tele.spinning) sh.textContent='💨 WHEELSPIN'; }
+  if(sh){
+    const sf=tele.surface||'road';
+    const L={ mud:'🟤 MUD', dirt:'🟫 DIRT', gravel:'🪨 GRAVEL', grass:'🟩 GRASS', crop:'🌾 FIELD', puddle:'💧 PUDDLE', water:'🌊 WATER', deep:'🌊 DEEP WATER' };
+    const txt=(L[sf]||'')+(tele.spinning?(L[sf]?' · ':'')+'💨 WHEELSPIN':'')+(carDirt>0.5?' · 🟤 MUDDY':'');
+    sh.textContent=txt; sh.classList.toggle('hidden', !txt);
+  }
 }
 
 // ---------------- state transitions ----------------
@@ -1083,6 +1183,7 @@ async function initScene(){
   // gradient sky dome + sun rig
   const dome=createSkyDome();
   scene.add(dome.mesh);
+  skyMesh=dome.mesh;
   skyEnv={ uniforms:dome.uniforms, sun:city.sun, hemi:city.hemi, scene, renderer };
   setTimeOfDay('day', true);
 
@@ -1100,6 +1201,7 @@ async function initScene(){
 
   // particles
   smoke=new PuffPool(scene, 70, { color:0xd8d8d8, opacity:0.42 });
+  wheelFX=createWheelFX(scene);
   exhaust=new PuffPool(scene, 40, { color:0x777777, opacity:0.30, size:0.9 });
   skids=new SkidMarks(scene, 500);
 
@@ -1171,6 +1273,7 @@ function frame(now){
   }else if(playing){
     physics.surf=surfaceGrip(surfaceAt(physics.pos.x, physics.pos.z), carStats.offroad, carStats.snorkel);
     tele=physics.update(controls.input, dt, collide);
+    updateWater(dt);
     // stunt rewards: drifting pays cash, so free roam has its own economy
     const award=stuntUpdate(stunts, tele.drifting, tele.speed, dt);
     if(award>0){ addCash(award); toast('DRIFT +$'+award.toLocaleString()); }
@@ -1244,6 +1347,9 @@ function frame(now){
     mp.update(dt, state==='freeroam' ? buildLocalPacket() : null, now);
   }
   if(smoke && (state!=='freeroam'||paused||garageOpen||storeOpen)){ smoke.update(dt); exhaust.update(dt); }
+  if(skyMesh) skyMesh.position.set(camera.position.x, 0, camera.position.z);
+  if(wheelFX) wheelFX.update(dt);
+  if(state==='freeroam' && frameN%10===0) updateWaypointHud();   // sky follows you across the big map
   if(postfx) postfx.render();
   else renderer.render(scene, camera);
 }
@@ -1264,6 +1370,18 @@ function wireUI(){
   $('menu-btn').onclick=openPause;
   $('garage-close').onclick=closeGarage;
   $('drag-exit').onclick=()=>{ if(dragMode.active) dragMode.exit(); startFreeroam(); };
+  $('minimap').addEventListener('pointerdown', e=>{ e.preventDefault(); e.stopPropagation(); openBigMap(); });
+  $('bigmap-close').onclick=()=>closeBigMap();
+  $('bigmap').addEventListener('pointerdown', e=>{
+    const cv=$('bigmap'), r=cv.getBoundingClientRect();
+    // the page may be CSS-rotated into landscape: map the tap back into canvas space
+    let u=(e.clientX-r.left)/r.width, v=(e.clientY-r.top)/r.height;
+    if(orient.rotated){ const t=u; u=v; v=1-t; }
+    const w=minimap.bigToWorld(u*cv.width, v*cv.height), cur=minimap.waypoint;
+    if(cur && Math.hypot(cur.x-w.x, cur.z-w.z)<40) minimap.setWaypoint(null); else minimap.setWaypoint(w);
+    audio.beep(760,0.04); redrawBigMap();
+  });
+  window.addEventListener('keydown', e=>{ if(e.key==='m'||e.key==='M'){ if(bigMapOpen) closeBigMap(); else openBigMap(); } });
   // skin editor / tutorial / car pick
   $('m-editor').onclick=()=>{ audio.unlock(); audio.beep(600,0.05); openEditor('menu','car'); };
   $('p-editor').onclick=()=>{ audio.beep(600,0.05); openEditor('pause', onFoot?'driver':'car'); };
@@ -1350,7 +1468,7 @@ async function boot(){
     tutorial=createTutorial(scene, city);
     storeUI=createStoreUI({ save, persist:()=>saveSave(save), toast:m=>toast(m,1600),
       beep:(f,d)=>audio.beep(f,d), onChange:()=>{ syncCash(); syncPersonGear(); } });
-    minimap=createMinimap($('minimap'), shops.stores);
+    minimap=createMinimap($('minimap'), shops.stores, $('bigmap'));
     syncPersonGear(); updateModeHUD();
     // test hook: ?debug exposes a teleport for automated smoke tests
     if(/[?&]debug\b/.test(location.search)) window.__cd={ tp:(x,z,h)=>{ if(onFoot){ foot.reset(x,z,h||0); snapFootCamera(); } else { physics.pos.x=x; physics.pos.z=z; physics.heading=h||0; syncCarTransform(0); snapCamera(); } }, save:()=>save, stores:()=>shops.stores,

@@ -324,3 +324,14 @@ body.compact #tach{margin:3px auto 0}
 #surface-hud{position:absolute;left:50%;transform:translateX(-50%);top:calc(64px + env(safe-area-inset-top));font-size:12px;font-weight:900;letter-spacing:1px;background:rgba(10,14,30,.75);padding:4px 10px;border-radius:999px;color:#fbbf24}
 body.compact #boost-hud{left:auto;right:14px;bottom:calc(178px + env(safe-area-inset-bottom));text-align:right}
 body.compact #boost-hud .boost-bar{margin-left:auto}
+
+/* ---------- full map ---------- */
+#minimap{pointer-events:auto;cursor:pointer}
+#bigmap-ov{padding:10px;justify-content:flex-start}
+.bigmap-top{display:flex;align-items:center;gap:12px;width:min(900px,96%);margin-bottom:8px}
+.bigmap-top b{font-size:18px}.bigmap-top small{flex:1;color:#8fa3c8;font-size:12px}
+.bigmap-top .mbtn{padding:9px 18px;font-size:14px}
+#bigmap{width:auto;height:calc(var(--app-h,100vh) - 90px);max-width:96%;aspect-ratio:1/1;border-radius:14px;border:2px solid #243055;touch-action:none}
+#bigmap-wp{color:#ffd23f;font-weight:800;font-size:13px;margin-top:6px;min-height:16px}
+#wp-hud{position:absolute;right:16px;top:calc(176px + env(safe-area-inset-top));font-size:12px;font-weight:900;color:#ffd23f;text-shadow:0 2px 6px #000}
+body.compact #wp-hud{top:calc(152px + env(safe-area-inset-top))}

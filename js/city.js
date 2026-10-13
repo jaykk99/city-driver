@@ -6,11 +6,12 @@
 //
 // Export: buildCity(scene, reservedLots) -> { colliders, buildings, spawn, dragStrip, update, setGlow, sun, hemi, roadLines }
 import * as THREE from 'three';
+import { buildOutskirts } from './outskirts.js';
 import { mergeGeometries as _merge } from 'three/addons/utils/BufferGeometryUtils.js';
 // merge any mix of indexed / non-indexed geometries
 const mergeGeometries = list => _merge(list.map(g => g.index ? g.toNonIndexed() : g));
 import { BLOCKS, BLOCK, ROAD_W, PITCH, GRID_HALF, LINES, LANE, blockCenter, RED_RIVER, ASSINIBOINE, BRIDGE_Z, BRIDGE_HALF,
-  STRIP_X, STRIP_HALF, SPECIAL, isSpecialBlock, districtOf, MAIN_X, PORTAGE_Z, NS_NAMES, EW_NAMES, OFFROAD, MUD_PITS, ROCKS } from './world.js';
+  STRIP_X, STRIP_HALF, SPECIAL, isSpecialBlock, districtOf, MAIN_X, PORTAGE_Z, NS_NAMES, EW_NAMES, OFFROAD, MUD_PITS, ROCKS, WORLD_HALF, RIVER_ZN, RIVER_ZS, ASSINI_XW } from './world.js';
 
 const SEED = 20481;
 function mulberry32(a){
@@ -182,8 +183,8 @@ export function buildCity(scene, reserved = []){
   const SUN_DX = 80, SUN_DY = 140, SUN_DZ = 55, SNAP = 16;
 
   // ---------- ground ----------
-  const grassTex = grassTexture(); grassTex.wrapS = grassTex.wrapT = THREE.RepeatWrapping; grassTex.repeat.set(140, 140);
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(2600, 2600).rotateX(-Math.PI / 2),
+  const grassTex = grassTexture(); grassTex.wrapS = grassTex.wrapT = THREE.RepeatWrapping; grassTex.repeat.set(220, 220);
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(WORLD_HALF * 2 + 600, WORLD_HALF * 2 + 600).rotateX(-Math.PI / 2),
     new THREE.MeshStandardMaterial({ map:grassTex, roughness:0.95, envMapIntensity:0.2 }));
   ground.receiveShadow = true;
   scene.add(ground);
@@ -526,19 +527,9 @@ export function buildCity(scene, reserved = []){
   // ---------- street-name signs at intersections along Portage and Main ----------
   buildStreetSigns(LM);
 
-  // ---------- distant prairie skyline (St. Boniface + suburbs) ----------
-  {
-    const geo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
-    const mat = new THREE.MeshStandardMaterial({ color:0x8592a3, roughness:1, fog:true });
-    const N = 70;
-    const sk = new THREE.InstancedMesh(geo, mat, N);
-    for(let i = 0; i < N; i++){
-      const a = (i / N) * Math.PI * 2, r = 900 + rand() * 260;
-      setInst(sk, i, Math.cos(a) * r, 0, Math.sin(a) * r, rand(), 30 + rand() * 50, 12 + rand() * 45, 30 + rand() * 50);
-    }
-    sk.instanceMatrix.needsUpdate = true;
-    scene.add(sk);
-  }
+  // ---------- the rest of the world: suburbs, Perimeter, farms, lakes, airport ----------
+  const out = buildOutskirts(scene, { buildings:buildingInfo }, addCol);
+  for(const g of out.glow) glowMats.push(g);
 
   const spawn = { x:LINES[5] + LANE, z:120, heading:0 };
 
@@ -810,7 +801,7 @@ function buildRivers(LM){
   const mat = new THREE.MeshStandardMaterial({ color:0x35585a, roughness:0.12, metalness:0.35, normalMap:nTex, normalScale:new THREE.Vector2(0.7, 0.7), envMapIntensity:1.4 });
   const bankM = std(0x6b5a44, { roughness:1 });
   const stoneM = std(0x9a958c, { roughness:0.9 });
-  const ZN = -1400, ZS = ASSINIBOINE.maxZ, XW = -1400;
+  const ZN = RIVER_ZN, ZS = RIVER_ZS, XW = ASSINI_XW;
   // Red River (north-south)
   const redLen = ZS - ZN;
   const red = new THREE.Mesh(new THREE.PlaneGeometry(RED_RIVER.maxX - RED_RIVER.minX, redLen).rotateX(-Math.PI / 2), mat);
@@ -824,12 +815,7 @@ function buildRivers(LM){
   bank(6, redLen, RED_RIVER.minX - 1, (ZN + ZS) / 2); bank(6, redLen, RED_RIVER.maxX + 1, (ZN + ZS) / 2);
   bank(assLen, 6, (XW + RED_RIVER.minX) / 2, ASSINIBOINE.minZ - 1); bank(assLen + 80, 6, (XW + RED_RIVER.maxX) / 2, ASSINIBOINE.maxZ + 1);
   const walkW = new THREE.Mesh(new THREE.BoxGeometry(3, 0.5, redLen), stoneM); walkW.position.set(RED_RIVER.minX - 4.5, 0.25, (ZN + ZS) / 2); walkW.receiveShadow = true; scene.add(walkW);
-  // colliders: you can't drive into the rivers except over the bridge
-  const g0 = BRIDGE_Z - BRIDGE_HALF, g1 = BRIDGE_Z + BRIDGE_HALF;
-  LM.addCol(RED_RIVER.minX - 1, RED_RIVER.minX, ZN, g0); LM.addCol(RED_RIVER.minX - 1, RED_RIVER.minX, g1, ASSINIBOINE.minZ);
-  LM.addCol(RED_RIVER.maxX, RED_RIVER.maxX + 1, ZN, g0); LM.addCol(RED_RIVER.maxX, RED_RIVER.maxX + 1, g1, ZS + 40);
-  LM.addCol(XW, RED_RIVER.minX, ASSINIBOINE.minZ - 1, ASSINIBOINE.minZ);
-  LM.addCol(XW, RED_RIVER.maxX + 1, ASSINIBOINE.maxZ, ASSINIBOINE.maxZ + 1);
+  // rivers are open: drive (or wade) in if you dare — deep water slows you to a crawl
   let t = 0;
   return { update(dt){ t += dt; nTex.offset.set(t * 0.004, -t * 0.012); } };
 }
@@ -1051,6 +1037,7 @@ function buildOffroadPark(LM){
   // entrance sign facing the city
   const sign = new THREE.Mesh(new THREE.PlaneGeometry(14, 3.5),
     new THREE.MeshStandardMaterial({ map:signTex('PRAIRIE OFF-ROAD PARK', '#2d1d10', '#ffb347', 1024, 256, 'bold 84px sans-serif'), roughness:0.6 }));
-  sign.position.set(OFFROAD.maxX + 4, 5, -37); sign.rotation.y = Math.PI / 2; scene.add(sign);
-  for(const s of [-1, 1]) box(scene, 0.4, 5, 0.4, std(0x4a3a2a), OFFROAD.maxX + 4, 0, -37 + s * 6.6);
+  const sz = OFFROAD.minZ + 6;
+  sign.position.set((OFFROAD.minX + OFFROAD.maxX) / 2, 5, sz - 2); scene.add(sign);
+  for(const s of [-1, 1]) box(scene, 0.4, 5, 0.4, std(0x4a3a2a), (OFFROAD.minX + OFFROAD.maxX) / 2 + s * 6.6, 0, sz - 2);
 }
