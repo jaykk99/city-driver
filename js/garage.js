@@ -53,15 +53,33 @@ function normalize(s){
   return out;
 }
 
+// Name code: a driver named "jk09" (any case) gets unlimited cash. Their real
+// balance is parked in cashBeforeCheat and restored if they change name.
+export const UNLIMITED_CASH = 999999999;
+export function hasUnlimitedCash(s){ return String((s && s.name) || '').trim().toLowerCase() === 'jk09'; }
+export function applyCashCode(s){
+  if(!s) return s;
+  if(hasUnlimitedCash(s)){
+    if(typeof s.cashBeforeCheat !== 'number') s.cashBeforeCheat = s.cash;
+    s.cash = UNLIMITED_CASH;
+  }else if(typeof s.cashBeforeCheat === 'number'){
+    s.cash = Math.max(0, Math.floor(s.cashBeforeCheat));
+    delete s.cashBeforeCheat;
+  }
+  return s;
+}
+export function cashLabel(s){ return hasUnlimitedCash(s) ? '\u221E' : s.cash.toLocaleString(); }
+
 export function loadSave(){
   try{
     const raw = localStorage.getItem(SAVE_KEY);
     if(!raw) return defaultSave();
-    return normalize(JSON.parse(raw));
+    return applyCashCode(normalize(JSON.parse(raw)));
   }catch(e){ return defaultSave(); }
 }
 
 export function saveSave(s){
+  applyCashCode(s);
   try{ localStorage.setItem(SAVE_KEY, JSON.stringify(s)); }catch(e){}
 }
 
@@ -82,7 +100,7 @@ export function createGarage(api){
   const maxStat={topSpeed:1,accel:1,handling:1,grip:1};
   for(const d of CAR_DEFS) for(const k in maxStat) maxStat[k]=Math.max(maxStat[k], d[k]);
 
-  function syncCash(){ $('garage-cash').textContent = save.cash.toLocaleString(); }
+  function syncCash(){ $('garage-cash').textContent = cashLabel(save); }
 
   const bar=(label,val,max)=>{
     const p=Math.max(5,Math.round(val/max*100));

@@ -7,7 +7,7 @@ import { CarPhysics } from './physics.js';
 import { createControls } from './controls.js';
 import { createDragMode } from './drag.js';
 import { createAudio } from './audio.js';
-import { loadSave, saveSave, createGarage } from './garage.js';
+import { loadSave, saveSave, createGarage, cashLabel, applyCashCode } from './garage.js';
 import { QualityManager, qualitySettings, QUALITY_LEVELS } from './quality.js';
 import { createSkyDome, applySkyPreset, PRESET_ORDER, SKY_PRESETS } from './sky.js';
 import { PuffPool, SkidMarks } from './particles.js';
@@ -138,7 +138,8 @@ function toast(msg, ms=2200){
 
 // ---------------- cash ----------------
 function syncCash(){
-  const v=save.cash.toLocaleString();
+  applyCashCode(save);
+  const v=cashLabel(save);
   $('cash-val').textContent=v;
   $('garage-cash').textContent=v;
 }
@@ -1554,7 +1555,7 @@ async function boot(){
         lookCache=null;
       },
       onOutfit:()=>{ setOutfit(person, save.outfit); lookCache=null; },
-      onName:()=>{ lookCache=null; },
+      onName:()=>{ lookCache=null; syncCash(); },
       onTab:t=>editorTab(t),
     });
     mp=createMultiplayer({

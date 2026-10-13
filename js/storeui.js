@@ -1,4 +1,5 @@
 // CITY DRIVER — store overlay (gun store + clothing store).
+import { cashLabel } from './garage.js';
 import { WEAPONS, SHIRTS, SHIRT_COST, HATS, buyWeapon, buyAmmo, equipWeapon, buyShirt, buyHat } from './shop.js';
 
 const hex = h => '#' + h.toString(16).padStart(6, '0');
@@ -89,7 +90,7 @@ export function createStoreUI(api){
   }
 
   function render(){
-    $('store-cash').textContent = api.save.cash.toLocaleString();
+    $('store-cash').textContent = cashLabel(api.save);
     if(type === 'guns') renderGuns(); else renderClothes();
   }
 
