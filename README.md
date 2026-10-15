@@ -2,7 +2,8 @@
 
 Open-world 3D driving game for mobile browsers. Built with Three.js — no app store, just open the URL and drive.
 
-**Play:** https://jaykk99.github.io/city-driver/
+**Play:** https://city-driver-3ms.pages.dev
+**Backup:** https://jaykk99.github.io/city-driver/
 
 ## What's in the game
 
