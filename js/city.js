@@ -17,6 +17,32 @@ const SEED = 20481;
 function mulberry32(a){
   return function(){ a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 }
+
+// ---- wind sway (v4): shared time uniform patched into canopy material ----
+const windUniforms = { uTime: { value: 0 } };
+export function updateWindTime(t) { windUniforms.uTime.value = t; }
+function addWind(material, strength) {
+  const key = 'citywind' + strength.toFixed(3);
+  material.onBeforeCompile = (sh) => {
+    sh.uniforms.uTime = windUniforms.uTime;
+    sh.vertexShader = 'uniform float uTime;\n' + sh.vertexShader.replace(
+      '#include <begin_vertex>',
+      `#include <begin_vertex>
+      {
+        #ifdef USE_INSTANCING
+          vec3 wAnchor = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
+        #else
+          vec3 wAnchor = vec3(modelMatrix[3][0], modelMatrix[3][1], modelMatrix[3][2]);
+        #endif
+        float wph = uTime * 2.1 + wAnchor.x * 0.45 + wAnchor.z * 0.38;
+        float wamt = smoothstep(0.05, 0.8, position.y) * ${strength.toFixed(3)};
+        transformed.x += (sin(wph) * 0.65 + sin(wph * 2.33 + 1.7) * 0.35) * wamt;
+        transformed.z += cos(wph * 0.77 + 0.6) * 0.5 * wamt;
+      }`
+    );
+  };
+  material.customProgramCacheKey = () => key;
+}
 function makeCanvas(w, h, draw, srgb = true){
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   draw(c.getContext('2d'), w, h);
@@ -460,6 +486,7 @@ export function buildCity(scene, reserved = []){
     ]);
     const trunks = new THREE.InstancedMesh(trunkGeo, new THREE.MeshStandardMaterial({ color:0x5b4331, roughness:0.95 }), spots.length);
     const cMat = new THREE.MeshStandardMaterial({ color:0xffffff, roughness:0.9, flatShading:true });
+    addWind(cMat, 0.06); // v4: canopies sway in the wind
     const canopies = new THREE.InstancedMesh(canopyGeo, cMat, spots.length);
     const leaf = new THREE.Color();
     spots.forEach(([x, z, s], i) => {

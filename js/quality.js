@@ -4,9 +4,9 @@ export const QUALITY_LEVELS = ['low', 'medium', 'high'];
 
 export function qualitySettings(level) {
   switch (level) {
-    case 2: return { pixelRatioCap: 2.0, bloom: true,  shadows: true,  shadowSize: 1024, particles: 1.0 };
-    case 1: return { pixelRatioCap: 1.25, bloom: true,  shadows: true,  shadowSize: 512,  particles: 0.7 };
-    default: return { pixelRatioCap: 1.0, bloom: false, shadows: false, shadowSize: 512,  particles: 0.4 };
+    case 2: return { pixelRatioCap: 2.0, bloom: true,  shadows: true,  shadowSize: 1024, particles: 1.0, ssao: true };
+    case 1: return { pixelRatioCap: 1.25, bloom: true,  shadows: true,  shadowSize: 512,  particles: 0.7, ssao: false };
+    default: return { pixelRatioCap: 1.0, bloom: false, shadows: false, shadowSize: 512,  particles: 0.4, ssao: false };
   }
 }
 

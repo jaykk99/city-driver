@@ -52,6 +52,9 @@ void main(){
   // sun disc + halo
   float s = max(dot(normalize(vDir), normalize(uSunDir)), 0.0);
   col += uSunColor * (pow(s, 900.0) * 1.4 * uSunI + pow(s, 18.0) * 0.28 * uSunI);
+  // v4: horizon haze band — warm atmospheric wash hugging the horizon line
+  float hz = pow(1.0 - clamp(abs(vDir.y), 0.0, 1.0), 5.0);
+  col = mix(col, uHorizon * 1.04 + vec3(0.05, 0.025, 0.0), hz * 0.35);
   // stars (only above horizon, twinkle-free)
   if (uStars > 0.001 && vDir.y > 0.02) {
     vec3 sp = floor(vDir * 220.0);

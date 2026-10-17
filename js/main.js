@@ -2,7 +2,7 @@
 // States: menu -> freeroam <-> garage overlay, menu -> drag -> freeroam.
 import * as THREE from 'three';
 import * as Cars from './cars.js';
-import { buildCity } from './city.js';
+import { buildCity, updateWindTime } from './city.js';
 import { CarPhysics } from './physics.js';
 import { createControls } from './controls.js';
 import { createDragMode } from './drag.js';
@@ -1193,6 +1193,42 @@ function buildLocalPacket(){
 }
 
 // ---------------- scene ----------------
+// v4 IBL: bake the actual sky + ground into PMREM — outdoor-appropriate
+// reflections for paint/glass/chrome instead of a neutral studio room.
+// Re-baked on time-of-day change (user-initiated, ~50ms).
+let envRT = null;
+function bakeEnvironment(topHex, horizonHex) {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const envScene = new THREE.Scene();
+  const skyGeo = new THREE.SphereGeometry(100, 16, 12);
+  const skyMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    uniforms: {
+      uTop: { value: new THREE.Color(topHex) },
+      uHorizon: { value: new THREE.Color(horizonHex) },
+    },
+    vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `uniform vec3 uTop; uniform vec3 uHorizon; varying vec3 vP;
+      void main(){
+        vec3 d = normalize(vP);
+        vec3 col = mix(uHorizon, uTop, pow(clamp(d.y, 0.0, 1.0), 0.6));
+        col = mix(col, uHorizon * 0.6, smoothstep(0.0, -0.2, d.y));
+        gl_FragColor = vec4(col, 1.0);
+      }`,
+  });
+  envScene.add(new THREE.Mesh(skyGeo, skyMat));
+  const gnd = new THREE.Mesh(
+    new THREE.CircleGeometry(60, 24),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color('#3d4149') }) // urban asphalt bounce
+  );
+  gnd.rotation.x = -Math.PI / 2;
+  gnd.position.y = -1;
+  envScene.add(gnd);
+  const rt = pmrem.fromScene(envScene, 0.04);
+  pmrem.dispose();
+  skyGeo.dispose(); skyMat.dispose();
+  return rt;
+}
 async function initScene(){
   renderer=new THREE.WebGLRenderer({antialias:false, powerPreference:'high-performance'});
   renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
@@ -1211,13 +1247,12 @@ async function initScene(){
   city=buildCity(scene, STORE_LOTS);   // creates sun + hemi + fog + world (store lots kept clear)
   shops=buildStores(scene, city);       // gun store + range, clothing, auto shop
 
-  // image-based lighting: PMREM from a neutral room so paint/glass/chrome reflect
-  try{
-    const { RoomEnvironment } = await import('three/addons/environments/RoomEnvironment.js');
-    const pmrem=new THREE.PMREMGenerator(renderer);
-    scene.environment=pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    pmrem.dispose();
-  }catch(e){ console.warn('env map off', e); }
+  // v4 image-based lighting: PMREM baked from the sky preset + asphalt ground
+  // bounce, so paint/glass/chrome get outdoor-appropriate reflections.
+  try {
+    envRT = bakeEnvironment(SKY_PRESETS.day.top, SKY_PRESETS.day.horizon);
+    scene.environment = envRT.texture;
+  } catch (e) { console.warn('env map off', e); }
 
   // gradient sky dome + sun rig
   const dome=createSkyDome();
@@ -1256,7 +1291,7 @@ async function initScene(){
 function applyQuality(level, s){
   const pr=Math.min(window.devicePixelRatio||1, s.pixelRatioCap);
   renderer.setPixelRatio(pr);
-  if(postfx){ postfx.setPixelRatio(Math.min(pr,1)); postfx.setSize(orient.view.w, orient.view.h); postfx.setBloomEnabled(s.bloom); }
+  if(postfx){ postfx.setPixelRatio(Math.min(pr,1)); postfx.setSize(orient.view.w, orient.view.h); postfx.setBloomEnabled(s.bloom); postfx.setSSAOEnabled(s.ssao); }
   const wantShadows=s.shadows;
   if(renderer.shadowMap.enabled!==wantShadows || (city&&city.sun.castShadow!==wantShadows)){
     renderer.shadowMap.enabled=wantShadows;
@@ -1276,6 +1311,13 @@ function setTimeOfDay(name, silent){
   const p=applySkyPreset(skyEnv, key);
   const glowF = key==='day'?0 : key==='sunset'?0.45 : 1;
   if(city) city.setGlow(glowF);
+  // v4: re-bake IBL for the new sky so reflections match the time of day
+  try{
+    const old=envRT;
+    envRT=bakeEnvironment(p.top, p.horizon);
+    scene.environment=envRT.texture;
+    if(old) old.dispose();
+  }catch(e){ console.warn('env rebake off', e); }
   if(postfx) postfx.setBloomStrength(p.bloom);
   headlightBase = key==='day' ? 0 : key==='sunset' ? 30 : 70;
   if(headlight && state!=='drag') headlight.intensity=headlightBase;
@@ -1293,6 +1335,7 @@ function frame(now){
   if(!(dt>0)) dt=0.016;
   if(dt>0.1) dt=0.1;                       // clamp
   frameN++;
+  updateWindTime(now/1000);               // v4: tree canopy sway
 
   const playing = state==='freeroam' && !paused && !garageOpen && !storeOpen && !editorOpen && !pickOpen && !dead && !boardOpen;
   if(editorOpen){
