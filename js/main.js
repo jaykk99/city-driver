@@ -276,14 +276,48 @@ function updateEffects(dt){
 }
 
 // ---------------- collision: circle (car) vs AABB (city colliders) ----------------
+let _carHitCooldown = 0;
 function collide(x, z){
   const r=collideR(x, z, 1.15);
+  if(_carHitCooldown > 0) _carHitCooldown -= 1;
   if(traffic && !inside){
     const hit=traffic.collide(r, 1.15);
-    if(hit && physics){
-      const sp=Math.hypot(physics.vel.x, physics.vel.z);
-      physics.vel.x*=0.55; physics.vel.z*=0.55;
-      if(sp>8 && audio) audio.beep(90, 0.08);
+    if(hit && physics && _carHitCooldown <= 0){
+      _carHitCooldown = 12; // ~200ms at 60fps: one bounce per impact, no multi-frame drain
+      // collision normal: from traffic car center to player
+      let nx = r.x - hit.x, nz = r.z - hit.z;
+      const nl = Math.hypot(nx, nz) || 1;
+      nx /= nl; nz /= nl;
+      // split velocity into normal + tangential components
+      const vx = physics.vel.x, vz = physics.vel.z;
+      const vn = vx * nx + vz * nz;           // into the other car (negative when approaching)
+      const tx = -nz, tz = nx;               // tangent
+      const vt = vx * tx + vz * tz;
+      const impact = Math.abs(vn);
+      if(vn < 0){
+        // restitution: harder hits bounce more, soft taps just nudge
+        const rest = impact > 15 ? 0.45 : impact > 8 ? 0.3 : 0.15;
+        const newVn = -vn * rest;
+        // friction on the tangential slide
+        const newVt = vt * 0.82;
+        physics.vel.x = nx * newVn + tx * newVt;
+        physics.vel.z = nz * newVn + tz * newVt;
+        // shove the traffic car too (momentum transfer)
+        const push = impact * 0.35;
+        hit.x += nx * push * 0.06;
+        hit.z += nz * push * 0.06;
+        if(hit.speed !== undefined) hit.speed = Math.max(0, hit.speed - impact * 0.15);
+        // spin kick: hitting off-center rotates you a bit
+        if(physics.angVel !== undefined){
+          const side = (vx * nz - vz * nx) / (nl || 1);
+          physics.angVel += side * 0.02;
+        }
+        if(impact > 6 && audio) audio.beep(90, 0.08);
+        // spark/damage feedback
+        if(typeof spawnSparks === 'function' && impact > 10){
+          try{ spawnSparks(r.x, r.z, Math.min(12, impact | 0)); }catch(e){}
+        }
+      }
     }
   }
   return r;
