@@ -2,8 +2,7 @@
 
 Open-world 3D driving game for mobile browsers. Built with Three.js — no app store, just open the URL and drive.
 
-**Play:** https://city-driver-3ms.pages.dev
-**Backup:** https://jaykk99.github.io/city-driver/
+**Play:** https://jaykk99.github.io/city-driver/
 
 ## What's in the game
 
@@ -54,7 +53,7 @@ Set `MP_URL = ''` to make the game fully solo.
 
 ## Deploy
 
-- **Game client:** Vercel → Import `jaykk99/city-driver` → Deploy (pure static, zero config)
+- **Game client:** GitHub Pages workflow (`.github/`, deploys `master` automatically)
 
 ## Tech
 
