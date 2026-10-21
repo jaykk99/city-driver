@@ -38,6 +38,7 @@ export const SPECIAL = {
   mansion:     [blockCenter(0), blockCenter(8)],      // Emerald's compound (Wellington Cres-style riverside)
   hospital:    [blockCenter(0), blockCenter(2)],      // hospital (respawn point)
   park:        [blockCenter(2), blockCenter(6)],      // city park
+  station:     [blockCenter(2), blockCenter(4)],      // police HQ (busted respawn)
 };
 export const HOSPITAL_SPAWN = { x:LINES[1] - LANE, z:blockCenter(2), heading:Math.PI };   // on Arlington beside the hospital
 export const MANSION = { x:SPECIAL.mansion[0], z:SPECIAL.mansion[1] };

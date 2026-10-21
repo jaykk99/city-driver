@@ -218,6 +218,17 @@ body.compact .se-panel h2{font-size:16px;margin-bottom:4px}
 
 /* ---------- health / damage ---------- */
 #health-hud{position:absolute;left:14px;top:calc(204px + env(safe-area-inset-top));display:flex;align-items:center;gap:6px;color:#ef4444;font-size:14px;text-shadow:0 2px 6px #000}
+#wanted-hud{position:absolute;right:16px;top:calc(70px + env(safe-area-inset-top));font-size:22px;letter-spacing:3px;text-shadow:0 2px 8px #000;user-select:none}
+#wanted-hud span{color:#3a3f47;margin-left:2px}
+#wanted-hud span.lit{color:#ffd23f;text-shadow:0 0 10px rgba(255,180,40,.9),0 2px 6px #000}
+#wanted-hud.pop{animation:wantedpop .35s ease-out}
+@keyframes wantedpop{0%{transform:scale(1.35)}100%{transform:scale(1)}}
+body.compact #wanted-hud{top:auto;bottom:calc(210px + env(safe-area-inset-bottom))}
+#busted{position:fixed;inset:0;z-index:46;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(8,10,26,.62);cursor:pointer}
+#busted h1{font-size:72px;font-weight:900;letter-spacing:8px;color:#3b82f6;text-shadow:0 4px 0 #000,0 0 34px rgba(59,130,246,.5);font-family:Georgia,serif}
+#busted #busted-fine{color:#fbbf24;font-size:26px;font-weight:800;margin-top:10px;letter-spacing:2px}
+#busted p{color:#cbd5e1;margin-top:6px;letter-spacing:2px}
+#busted .dim{opacity:.65;font-size:13px}
 .hp-bar{width:96px;height:9px;border-radius:6px;background:rgba(255,255,255,.18);overflow:hidden}
 #hp-fill{height:100%;width:100%;background:#4ade80;transition:width .15s}
 body.compact #health-hud{top:auto;left:auto;right:14px;bottom:calc(150px + env(safe-area-inset-bottom))}

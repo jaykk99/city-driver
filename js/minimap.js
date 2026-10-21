@@ -53,7 +53,7 @@ export function createMinimap(canvas, stores, bigCanvas){
   const k = (S / 2) / R;
   let frame = 0, custom = null, wp = null;
 
-  function draw(px, pz, heading, car, mp){
+  function draw(px, pz, heading, car, mp, blips){
     if((frame++ & 3) !== 0) return;
     const W = x => S / 2 + (x - px) * k;
     const H = z => S / 2 + (z - pz) * k;
@@ -82,6 +82,13 @@ export function createMinimap(canvas, stores, bigCanvas){
       g.strokeStyle = '#0b0f1a'; g.lineWidth = 1.5;
       g.beginPath(); g.arc(W(r.x), H(r.z), 4, 0, Math.PI * 2); g.fill(); g.stroke();
     });
+    if(blips) for(const b of blips){
+      const bx = W(b.x), bz = H(b.z);
+      if(bx < -8 || bz < -8 || bx > S + 8 || bz > S + 8) continue;   // off the radar
+      g.fillStyle = (frame >> 3) & 1 ? '#ff3b4e' : '#3b8bff';       // flashing cop lights
+      g.strokeStyle = '#0b0f1a'; g.lineWidth = 1.5;
+      g.beginPath(); g.arc(bx, bz, 4.5, 0, Math.PI * 2); g.fill(); g.stroke();
+    }
     g.restore();
     g.save();
     g.translate(S / 2, S / 2); g.rotate(-heading);

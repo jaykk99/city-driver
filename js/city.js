@@ -7,6 +7,7 @@
 // Export: buildCity(scene, reservedLots) -> { colliders, buildings, spawn, dragStrip, update, setGlow, sun, hemi, roadLines }
 import * as THREE from 'three';
 import { buildOutskirts } from './outskirts.js';
+import { buildCar } from './cars.js';
 import { mergeGeometries as _merge } from 'three/addons/utils/BufferGeometryUtils.js';
 // merge any mix of indexed / non-indexed geometries
 const mergeGeometries = list => _merge(list.map(g => g.index ? g.toNonIndexed() : g));
@@ -444,6 +445,7 @@ export function buildCity(scene, reserved = []){
   landmarkMansion(LM, ...SPECIAL.mansion);
   landmarkHospital(LM, ...SPECIAL.hospital);
   landmarkPark(LM, ...SPECIAL.park);
+  landmarkStation(LM, ...SPECIAL.station);
   parkingLot(LM, ...SPECIAL.parking);
 
   // ---------- rivers, bridge, drag strip ----------
@@ -790,6 +792,51 @@ function landmarkHospital(LM, cx, cz){
   LM.addCol(cx - 20, cx + 20, cz - 13, cz + 13);
   LM.addCol(cx - 17, cx + 1, cz + 13, cz + 23);
   enterable(LM, cx - 20, cx + 20, cz - 13, cz + 13, 26, { x:cx + 20, z:cz, nx:1, nz:0 });
+}
+
+// Police HQ: concrete block with a blue stripe, lit POLICE signs, a flag,
+// and a side lot with three parked cruisers. Busted players respawn curbside.
+function landmarkStation(LM, cx, cz){
+  const { scene } = LM;
+  const concrete = std(0x9aa3ad, { roughness:0.7 });
+  const dark = std(0x2b3440, { roughness:0.6 });
+  const glass = std(0x1d3a55, { metalness:0.7, roughness:0.15 });
+  const plaza = new THREE.Mesh(new THREE.PlaneGeometry(56, 56).rotateX(-Math.PI / 2), std(0x6b7076, { roughness:1 }));
+  plaza.position.set(cx, 0.12, cz); plaza.receiveShadow = true; scene.add(plaza);
+  // HQ block
+  box(scene, 34, 13, 20, concrete, cx - 6, 0.12, cz - 8);
+  box(scene, 34.2, 1.6, 20.2, std(0x1d4fd8, { roughness:0.5, emissive:0x1d4fd8, emissiveIntensity:0.25 }), cx - 6, 8.2, cz - 8, false);
+  // glass entrance (faces +x, toward the road) + canopy
+  box(scene, 0.6, 6, 10, glass, cx + 11.2, 0.12, cz - 8, false);
+  box(scene, 6, 0.5, 12, dark, cx + 13.5, 5.6, cz - 8);
+  for(const col of [-4, 4]){ const c = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.3, 5.6, 10), dark); c.position.set(cx + 15.5, 2.9, cz - 8 + col); c.castShadow = true; scene.add(c); }
+  // lit POLICE signs, front and back
+  const sign = signTex('POLICE', '#0b1e3a', '#ffffff');
+  for(const [x, ry] of [[cx + 11.35, Math.PI / 2], [cx - 23.35, -Math.PI / 2]]){
+    const s = new THREE.Mesh(new THREE.PlaneGeometry(14, 2.6),
+      new THREE.MeshStandardMaterial({ map:sign, emissive:0xffffff, emissiveMap:sign, emissiveIntensity:0.55 }));
+    s.position.set(x, 10.6, cz - 8); s.rotation.y = ry; scene.add(s);
+  }
+  // flag pole
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, 9, 8), dark);
+  pole.position.set(cx + 8, 4.6, cz + 14); pole.castShadow = true; scene.add(pole);
+  const flag = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 1.6), std(0x1d4fd8, { side:THREE.DoubleSide, roughness:0.9 }));
+  flag.position.set(cx + 9.4, 8.2, cz + 14); scene.add(flag);
+  // cruiser lot
+  const lot = new THREE.Mesh(new THREE.PlaneGeometry(24, 18).rotateX(-Math.PI / 2), std(0x3c4046, { roughness:1 }));
+  lot.position.set(cx - 14, 0.13, cz + 16); lot.receiveShadow = true; scene.add(lot);
+  const stripeM = std(0xd8d8d8, { roughness:1 });
+  for(let i = 0; i < 3; i++){
+    const st = new THREE.Mesh(new THREE.PlaneGeometry(0.35, 7).rotateX(-Math.PI / 2), stripeM);
+    st.position.set(cx - 22 + i * 8, 0.14, cz + 16); scene.add(st);
+    const cruiser = buildCar('police', [0x14161c, 0xf2f2f2, 0x1a3a6b][i]);
+    cruiser.position.set(cx - 22 + i * 8, 0, cz + 16); cruiser.rotation.y = Math.PI / 2;
+    scene.add(cruiser);
+  }
+  LM.addCol(cx - 23, cx + 11, cz - 18, cz + 2);        // HQ block
+  LM.addCol(cx - 26, cx - 2, cz + 7, cz + 25);         // cruiser lot
+  LM.addCol(cx + 7.6, cx + 8.4, cz + 13.6, cz + 14.4); // flag pole
+  LM.addCol(cx + 15.2, cx + 15.8, cz - 12.4, cz - 3.6); // canopy columns
 }
 
 function landmarkPark(LM, cx, cz){

@@ -7,6 +7,7 @@ export function createAudio(){
   let lastLoad=0, lastRpm=0, popCool=0, cyl=8, idleRpm=850, redRpm=7000;
   let skidGain=null, noiseBuf=null;
   let turboOsc=null, turboOsc2=null, turboGain=null, turboBP=null, lastBoost=0;
+  let sirenOsc=null, sirenOsc2=null, sirenLFO=null, sirenLFOGain=null, sirenGain=null, sirenLevel=0;
   let started=false, gestured=false; // never create AudioContext before a user gesture (autoplay policy)
 
   function ensure(){
@@ -210,11 +211,73 @@ export function createAudio(){
       }
       if(!lifted) lastBoost = b;
     },
+    // police siren: classic wail — two detuned triangles swept 650..1350 Hz
+    // by a slow LFO. level 0..1 sets loudness; call every frame, it smooths.
+    siren(level){
+      level = Math.max(0, Math.min(1, level || 0));
+      if(!ctx || !started){
+        if(level <= 0 || !gestured || !ensure()) { sirenLevel = 0; return; }
+      }
+      const t = ctx.currentTime;
+      if(!sirenOsc){
+        sirenOsc = ctx.createOscillator(); sirenOsc.type = 'triangle'; sirenOsc.frequency.value = 900;
+        sirenOsc2 = ctx.createOscillator(); sirenOsc2.type = 'triangle'; sirenOsc2.frequency.value = 906;
+        sirenLFO = ctx.createOscillator(); sirenLFO.type = 'sine'; sirenLFO.frequency.value = 0.55;
+        sirenLFOGain = ctx.createGain(); sirenLFOGain.gain.value = 340;
+        sirenLFO.connect(sirenLFOGain);
+        sirenLFOGain.connect(sirenOsc.frequency); sirenLFOGain.connect(sirenOsc2.frequency);
+        const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 2.2; bp.frequency.value = 1000;
+        sirenGain = ctx.createGain(); sirenGain.gain.value = 0;
+        sirenOsc.connect(bp); sirenOsc2.connect(bp); bp.connect(sirenGain); sirenGain.connect(master);
+        sirenOsc.start(); sirenOsc2.start(); sirenLFO.start();
+      }
+      sirenLevel += (level - sirenLevel) * 0.08;
+      sirenGain.gain.setTargetAtTime(sirenLevel * 0.11, t, 0.1);
+    },
+    // BUSTED sting: three descending brass-ish hits
+    bustedSting(){
+      if(!gestured || !ensure()) return;
+      if(ctx.state === 'suspended') ctx.resume();
+      const t = ctx.currentTime;
+      [392, 311, 233].forEach((f, i) => {
+        const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f;
+        const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1400;
+        const g = ctx.createGain(); const s = t + i * 0.22;
+        g.gain.setValueAtTime(0.0001, s);
+        g.gain.exponentialRampToValueAtTime(0.22, s + 0.03);
+        g.gain.exponentialRampToValueAtTime(0.0001, s + 0.3);
+        o.connect(lp); lp.connect(g); g.connect(master);
+        o.start(s); o.stop(s + 0.34);
+      });
+    },
+    // police dispatch: radio squelch + two-tone attention blip
+    dispatch(){
+      if(!gestured || !ensure()) return;
+      if(ctx.state === 'suspended') ctx.resume();
+      const t = ctx.currentTime;
+      // squelch burst: short noise click
+      const src = ctx.createBufferSource(); src.buffer = noiseBuf;
+      const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 1800;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.14, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+      src.connect(hp); hp.connect(g); g.connect(master);
+      src.start(t, Math.random() * 0.5); src.stop(t + 0.1);
+      // two-tone blip
+      [880, 660].forEach((f, i) => {
+        const o = ctx.createOscillator(); o.type = 'square'; o.frequency.value = f;
+        const og = ctx.createGain(); const s = t + 0.1 + i * 0.16;
+        og.gain.setValueAtTime(0.0001, s);
+        og.gain.exponentialRampToValueAtTime(0.07, s + 0.015);
+        og.gain.exponentialRampToValueAtTime(0.0001, s + 0.13);
+        o.connect(og); og.connect(master); o.start(s); o.stop(s + 0.15);
+      });
+    },
     shutdown(){
       if(ctx){ try{ ctx.close(); }catch(e){} }
       ctx=null; master=null; started=false;
       engOsc=engOsc2=engOsc3=engFilter=engGain=skidGain=noiseBuf=null;
       turboOsc=turboOsc2=turboGain=turboBP=null;
+      sirenOsc=sirenOsc2=sirenLFO=sirenLFOGain=sirenGain=null; sirenLevel=0;
     }
   };
 }

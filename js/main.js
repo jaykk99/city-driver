@@ -28,6 +28,7 @@ import { createMultiplayer } from './multiplayer.js';
 import { createBlood } from './blood.js';
 import { createPeople } from './npcs.js';
 import { createTraffic } from './traffic.js';
+import { createPolice, POLICE_STATION } from './police.js';
 import { HOSPITAL_SPAWN, GRID_HALF, surfaceAt, surfaceGrip, WATER_DEPTH, isWet } from './world.js';
 import { createWheelFX } from './fx.js';
 import { buildCustomMap } from './mapbuilder.js';
@@ -112,6 +113,7 @@ let smoke=null, exhaust=null, skids=null, headlight=null, headlightTarget=null, 
 let particleScale=1;
 // --- on foot / stores / guns ---
 let orient=null, onFoot=false, foot=null, person=null, weapons=null, shops=null, storeUI=null, minimap=null;
+let police=null, bustedOpen=false, policeRes=null;
 let storeOpen=false, aimHold=0, ammoDirty=0, actionKind=null, actionTarget=null, actionText='';
 const weaponCtx={ save:null, pos:{x:0,z:0}, heading:0, colliders:null, targets:null, audio:null, toast:null, onTargetHit:null };
 const parkedCar={x:0,z:0};
@@ -295,6 +297,7 @@ function collide(x, z){
       const vt = vx * tx + vz * tz;
       const impact = Math.abs(vn);
       if(vn < 0){
+        if(impact > 12 && police) police.crime('ramTraffic', r.x, r.z, true);
         // restitution: harder hits bounce more, soft taps just nudge
         const rest = impact > 15 ? 0.45 : impact > 8 ? 0.3 : 0.15;
         const newVn = -vn * rest;
@@ -566,7 +569,7 @@ function snapFootCamera(){
 function stealCar(tc){
   const info=traffic.remove(tc);
   if(!info) return;
-  if(info.alive){ people.eject(info.x-Math.cos(info.h)*1.8, info.z+Math.sin(info.h)*1.8, foot.pos.x, foot.pos.z); people.scare(info.x, info.z, 25); }
+  if(info.alive){ people.eject(info.x-Math.cos(info.h)*1.8, info.z+Math.sin(info.h)*1.8, foot.pos.x, foot.pos.z); people.scare(info.x, info.z, 25); if(police) police.crime('stolenCar', info.x, info.z, true); }
   stolenCar={ def:info.def, color:info.color };
   rebuildCar();
   physics.reset(carStats);
@@ -987,6 +990,51 @@ function updateHUD(){
   }
 }
 
+// ---------------- wanted level ----------------
+let lastWantedStars=-1;
+function copBlips(){ return police && police.units.length ? police.units : null; }
+function updateWantedHUD(stars){
+  if(stars===lastWantedStars) return;
+  lastWantedStars=stars;
+  const el=$('wanted-hud');
+  if(!el) return;
+  el.classList.toggle('hidden', stars<=0);
+  el.innerHTML='';
+  for(let i=0;i<6;i++){
+    const s=document.createElement('span');
+    s.textContent='★';
+    s.className=i<stars?'lit':'';
+    el.appendChild(s);
+  }
+  if(stars>0){ el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); }
+}
+
+// BUSTED: fine scaled by stars, heat wiped, dropped at the station.
+function busted(stars){
+  if(bustedOpen) return;
+  bustedOpen=true;
+  const fine=Math.min(save.cash, 100 + stars*150);
+  save.cash-=fine; saveSave(save); syncCash();
+  if(audio && audio.bustedSting) audio.bustedSting();
+  const b=$('busted');
+  $('busted-fine').textContent='-$'+fine.toLocaleString();
+  $('busted-sub').textContent='The LSPD thanks you for your donation.';
+  b.classList.remove('hidden');
+  const go=()=>{
+    b.classList.add('hidden');
+    bustedOpen=false;
+    // walk out of the station
+    if(onFoot){ foot.reset(POLICE_STATION.x, POLICE_STATION.z, POLICE_STATION.heading); snapFootCamera(); }
+    else{
+      physics.pos.x=POLICE_STATION.x; physics.pos.z=POLICE_STATION.z; physics.heading=POLICE_STATION.heading;
+      physics.vel.x=0; physics.vel.z=0; physics.speed=0; syncCarTransform(0); snapCamera();
+    }
+    toast('Released — stay out of trouble', 2200);
+    b.removeEventListener('click', go);
+  };
+  b.addEventListener('click', go);
+}
+
 // ---------------- state transitions ----------------
 function hideOverlays(){ for(const o of ['main-menu','pause-menu','garage']) $(o).classList.add('hidden'); }
 // ESC / pause shouldn't fight the editor or car picker
@@ -1383,8 +1431,9 @@ function frame(now){
     if(qm) qm.update(dt);
     audio.engine(0,0); audio.skid(false);
     parkedCar.x=physics.pos.x; parkedCar.z=physics.pos.z;
-    if(inside) minimap.draw(inside.back.x, inside.back.z, foot.heading, parkedCar, mp);
-    else minimap.draw(foot.pos.x, foot.pos.z, foot.heading, parkedCar, mp);
+    const cb=copBlips();
+    if(inside) minimap.draw(inside.back.x, inside.back.z, foot.heading, parkedCar, mp, cb);
+    else minimap.draw(foot.pos.x, foot.pos.z, foot.heading, parkedCar, mp, cb);
     updateAction();
     if(controls.consumeAction()) doAction();
   }else if(playing){
@@ -1402,7 +1451,7 @@ function frame(now){
     updateEffects(dt);
     shops.update(dt);
     weapons.update(dt, weaponCtx, false, false);   // let bullets finish flying
-    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null, mp);
+    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null, mp, copBlips());
     updateAction();
     if(controls.consumeAction()) doAction();
     if(qm) qm.update(dt);
@@ -1431,11 +1480,17 @@ function frame(now){
       traffic.hitList();
       if(!onFoot && !dead){
         const n=people.carHits(physics.pos.x, physics.pos.z, physics.heading, tele.speed);
-        if(n){ audio.beep(70,0.12); physics.vel.x*=0.85; physics.vel.z*=0.85; }
+        if(n){ audio.beep(70,0.12); physics.vel.x*=0.85; physics.vel.z*=0.85; if(police) police.crime('pedKill', physics.pos.x, physics.pos.z, true); }
       }
     }
     blood.update(dt);
-    if(hurtFlash>0){ hurtFlash-=dt; $('hurt').style.opacity=String(Math.max(0,hurtFlash/0.35)*0.75); }
+    policeRes = police ? police.update(dt, now/1000) : null;
+    // bust pressure: the hurt vignette pulses as the arrest closes in
+    if(hurtFlash>0) hurtFlash-=dt;
+    {
+      const bv = policeRes && policeRes.bustFrac > 0.02 ? policeRes.bustFrac * 0.5 : 0;
+      $('hurt').style.opacity=String(Math.max(bv, Math.max(0,hurtFlash/0.35)*0.75));
+    }
     if(dead){ deadT+=dt; if(deadT>3.2) respawn(); }
   }
   // missions
@@ -1572,7 +1627,7 @@ async function boot(){
     weapons=createWeapons(scene);
     Object.assign(weaponCtx, { save, colliders:city.colliders, targets:shops.targets, audio, toast,
       onTargetHit:()=>{ addCash(TARGET_PAY); toast('TARGET +$'+TARGET_PAY, 900); },
-      onShot:shots=>{ if(mp) mp.sendShots(shots); } });
+      onShot:shots=>{ if(mp) mp.sendShots(shots); if(police && shots.length) police.crime('gunshot', weaponCtx.pos.x, weaponCtx.pos.z, true); } });
     interiors=createInteriors(scene);
     blood=createBlood(scene);
     people=createPeople({ scene, blood, audio, count:14,
@@ -1581,10 +1636,32 @@ async function boot(){
       onPlayerHit:(d)=>hurtPlayer(d) });
     traffic=createTraffic({ scene, lines:city.roadLines, buildCar, applyCarSkin, CAR_DEFS });
     trafficHits=traffic.hitList();
+    police=createPolice({
+      scene, buildCar,
+      collide:(x,z,r)=>{ const res=collideR(x,z,r); if(traffic) traffic.collide(res, r); return res; },
+      getPlayer:()=>({
+        x:onFoot?foot.pos.x:physics.pos.x, z:onFoot?foot.pos.z:physics.pos.z,
+        heading:onFoot?foot.heading:physics.heading,
+        speed:onFoot?Math.abs(foot.speed||0):Math.abs((typeof tele!=='undefined'&&tele.speed)||0),
+        vx:onFoot?0:physics.vel.x, vz:onFoot?0:physics.vel.z,
+        onFoot, alive:!dead && state==='freeroam' && !bustedOpen,
+      }),
+      audio, highQuality:()=>!!(qm && qm.level>=2),
+      damagePlayer:(n)=>hurtPlayer(n),
+      onBusted:(stars)=>busted(stars),
+      onEvaded:()=>toast('😮‍💨 EVADED — heat\'s off', 2200),
+      setStars:(n)=>updateWantedHUD(n),
+      toast,
+      spark:(x,z)=>{ if(smoke) smoke.emit(x, 1.1, z, { vx:(Math.random()-0.5)*5, vy:2.5, vz:(Math.random()-0.5)*5, life:0.5, size:0.6 }); },
+      buildCharacter, animateCharacter,
+    });
     missions=createMissionRunner({ scene, people, toast, beep:(f,d)=>audio.beep(f,d) });
     weaponCtx.hitables=[people.hitList, trafficHits, remoteHits];
     weaponCtx.onPersonHit=(ref, dmg, dx, dz)=>{
-      if(ref.kind==='ped' || ref.kind==='enemy') people.damage(ref, dmg, dx, dz);
+      if(ref.kind==='ped' || ref.kind==='enemy'){
+        const killed=people.damage(ref, dmg, dx, dz);
+        if(killed && ref.kind==='ped' && police) police.crime('pedKill', ref.x, ref.z, true);
+      }
       else if(ref.kind==='car'){
         const r=traffic.hitCar(ref.car, dmg, dx, dz);
         if(r){ blood.hit(r.x, r.y, r.z, dx, dz, r.kind==='killed'?1.6:0.7); if(r.kind==='killed'){ blood.pool(r.x+dx, r.z+dz, 1.4); people.scare(r.x, r.z, 30); } }
@@ -1605,6 +1682,7 @@ async function boot(){
       getOut:()=>getOut(), tut:()=>tutorial&&{active:tutorial.active, step:tutorial.step}, finishTut:()=>finishTutorial(), pick:id=>pickCar(id),
       mp:()=>mp&&{status:mp.status,count:mp.count}, state:()=>({state,onFoot,editorOpen,pickOpen,cash:save.cash}),
       steal:()=>{ const c=traffic.cars[0]; foot.reset(c.x+2,c.z,0); stealCar(c); return carDef.name; }, physics:()=>physics, missions:()=>missions, setDone:n=>{save.missionsDone=n;}, people:()=>people, traffic:()=>traffic, hp:()=>hp, hurt:d=>hurtPlayer(d),
+      police:()=>police, wanted:n=>{ if(police) police.debugWanted(n); return police&&police.stars; },
       car:()=>({vis:carGroup.visible, inScene:!!carGroup.parent, pos:carGroup.position.toArray().map(v=>+v.toFixed(1)), id:carDef.id, phys:[+physics.pos.x.toFixed(1),+physics.pos.z.toFixed(1)], cam:camera.position.toArray().map(v=>+v.toFixed(1))}),
       cam:()=>({c:camera.position.toArray().map(v=>+v.toFixed(2)), p:person.position.toArray().map(v=>+v.toFixed(2)), pv:person.visible, f:[foot.pos.x,foot.pos.z,foot.heading]}) };
     rebuildCar();
