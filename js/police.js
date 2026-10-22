@@ -24,7 +24,8 @@ export const CRIME_HEAT = {
   ramTraffic:0.45,  // slamming a traffic car at speed
   reckless:  0.25,  // near-miss / sideswipe at speed near a cop
   copRam:    0.8,   // ramming a cop car
-  copKill:   2.5,   // (reserved) destroying a cop unit
+  copShot:   1.2,   // wounding a cop (foot or car) with gunfire
+  copKill:   2.5,   // shooting a cop dead or disabling a cop car
   stolenCar: 0.4,   // jacking a car with the driver watching
 };
 const CRIME_COOLDOWN = 1.2;      // s between heat gains of the same kind
@@ -153,6 +154,10 @@ export const POLICE_STATION = { x:LINES[3] - 3.5, z:blockCenter(4), heading:0 };
 export const FOOT_COP_SPEED = 6.4;    // m/s — you can outrun one, barely
 export const FOOT_GRAB_DIST = 1.7;    // m — inside this they grab you
 export const FOOT_GRAB_TIME = 1.2;    // s of being held before BUSTED
+export const FOOT_COP_HP = 2;       // bullet hits a foot cop can take
+export const COP_CAR_HP = 3;       // bullet hits a cop car can take
+export const COPCAR_R = 1.6;       // bullet-target radius of a cop car
+export const COP_DISABLED_SMOKE = 6; // s a disabled cop car burns before despawn
 
 // Seek steering for one foot cop. f: { x, z, heading, speed, phase }.
 // Turns toward the target, sprints when far, stops on top of them.
@@ -232,7 +237,8 @@ export function createPolice(deps){
     }
     const cop = { group, flashers, glow, x:p.x, z:p.z, heading:spot.heading,
       speed:0, mode:'respond', modeT:0, searchT:0, block:false,
-      lastSeenX:p.x, lastSeenZ:p.z, ramT:0, wheelSpin:0 };
+      lastSeenX:p.x, lastSeenZ:p.z, ramT:0, wheelSpin:0,
+      hp:COP_CAR_HP, disabled:false, disableT:0, smokeT:0 };
     cops.push(cop);
     return cop;
   }
@@ -258,7 +264,8 @@ export function createPolice(deps){
     person.position.set(x, 0, z);
     person.rotation.y = Math.atan2(-(px - x), -(pz - z));
     deps.scene.add(person);
-    footCops.push({ person, x, z, heading:person.rotation.y, speed:0, phase:Math.random() * 6, grabT:0 });
+    footCops.push({ person, x, z, heading:person.rotation.y, speed:0, phase:Math.random() * 6, grabT:0,
+      hp:FOOT_COP_HP, dead:false, deadT:0 });
   }
   function removeFootCop(i){
     deps.scene.remove(footCops[i].person);
@@ -270,16 +277,21 @@ export function createPolice(deps){
   function doBusted(st){
     heat.clear(); lastStars = 0; clearCops(); clearFootCops(); bust.reset();
     deps.setStars && deps.setStars(0);
-    deps.audio && deps.audio.siren(0);
+    if(deps.audio && deps.audio.siren) deps.audio.siren(0);
     deps.onBusted && deps.onBusted(st);
   }
 
-  // returns the grab progress 0..1 (for the bust vignette)
+  // returns the grab progress 0..1 (for the bust vignette), or -1 on BUSTED
   function updateFootCops(dt, p, stars){
     if(p.onFoot && stars > 0 && footCops.length < Math.min(2, stars)) spawnFootCop(p.x, p.z);
     let grabFrac = 0;
     for(let i = footCops.length - 1; i >= 0; i--){
       const f = footCops[i];
+      if(f.dead){                       // slumped body lingers, then fades away
+        f.deadT -= dt;
+        if(f.deadT <= 0) removeFootCop(i);
+        continue;
+      }
       const d = Math.hypot(f.x - p.x, f.z - p.z);
       if(stars === 0 || !p.onFoot || !p.alive || d > 130){ removeFootCop(i); continue; }
       footCopSteer(f, p.x, p.z, dt);
@@ -292,6 +304,49 @@ export function createPolice(deps){
       if(f.grabT >= FOOT_GRAB_TIME){ doBusted(stars); return -1; }
     }
     return grabFrac;
+  }
+
+  // -- taking fire ----------------------------------------------------------
+  // A bullet hit a foot cop. Returns 'killed' | 'hit' | null.
+  // Shooting one that's grabbing you interrupts the grab.
+  function damageFootCop(f, dmg){
+    if(f.dead) return null;
+    f.hp -= dmg;
+    if(deps.blood) deps.blood(f.x, 1.2, f.z, 0, 0, 1.1);
+    f.grabT = 0;
+    if(f.hp > 0){ crime('copShot', f.x, f.z, true); return 'hit'; }
+    f.dead = true; f.deadT = 2.5;
+    f.person.rotation.x = -Math.PI / 2;             // slumped on the pavement
+    if(f.person.position) f.person.position.y = 0.25;
+    crime('copKill', f.x, f.z, true);
+    return 'killed';
+  }
+
+  // A bullet hit a cop car. Returns 'disabled' | 'hit' | null.
+  // A disabled unit smokes where it died, then despawns; it counts in the
+  // roster until it does, so knocking one out genuinely thins the pursuit.
+  function damageCopCar(c, dmg){
+    if(c.disabled) return null;
+    c.hp -= dmg;
+    if(deps.spark) deps.spark(c.x, 1.1, c.z);
+    crime('copShot', c.x, c.z, true);
+    if(c.hp <= 0){
+      c.disabled = true; c.disableT = COP_DISABLED_SMOKE; c.speed = 0;
+      if(c.glow) c.glow.intensity = 0;              // sirens die with the car
+      crime('copKill', c.x, c.z, true);
+      if(deps.toast) deps.toast('🚔 Cop car disabled', 1400);
+      return 'disabled';
+    }
+    return 'hit';
+  }
+
+  // bullet blockers for the weapons module: foot cops + live cop cars
+  const copBlockers = [];
+  function copHitList(){
+    copBlockers.length = 0;
+    for(const f of footCops) if(!f.dead) copBlockers.push({ x:f.x, z:f.z, r:0.5, ref:{ kind:'footcop', cop:f } });
+    for(const c of cops) if(!c.disabled) copBlockers.push({ x:c.x, z:c.z, r:COPCAR_R, ref:{ kind:'copcar', cop:c } });
+    return copBlockers;
   }
 
   // A crime was committed at (x,z). witnessed=false still adds a little heat
@@ -457,6 +512,15 @@ export function createPolice(deps){
       const c = cops[i];
       const d = alive ? Math.hypot(c.x - p.x, c.z - p.z) : Infinity;
       if(d < nearest) nearest = d;
+      if(c.disabled){                            // shot-up wreck: smokes in place, then despawns
+        c.disableT -= dt;
+        c.smokeT -= dt;
+        if(c.smokeT <= 0){ c.smokeT = 0.35; if(deps.spark) deps.spark(c.x, 1.2, c.z); }
+        syncMesh(c, dt);
+        strobe(c, phase); phase += 2.1;
+        if(c.disableT <= 0) removeCop(i);
+        continue;
+      }
       if(alive && s2 > 0) brain(c, p, dt, s2, cops.length - 1 - i);
       else if(c.mode === 'leave') driveTo(c, c.x + (c.x - (p ? p.x : 0)), c.z + (c.z - (p ? p.z : 0)), dt, 24);
       // separation: don't pile onto the car next to you
@@ -536,6 +600,7 @@ export function createPolice(deps){
 
   return {
     update, crime, debugWanted,
+    damageFootCop, damageCopCar, copHitList,
     get stars(){ return heat.stars; },
     get heat(){ return heat.heat; },
     get units(){ return cops; },

@@ -9,7 +9,8 @@ import {
   starsFor, WantedHeat, interceptPoint, pursuitSteer, pickSpawnRing, stepKin,
   BustMeter, POLICE_STATION,
   FOOT_COP_SPEED, FOOT_GRAB_DIST, FOOT_GRAB_TIME, footCopSteer,
-  chaseLaneOffset,
+  chaseLaneOffset, FOOT_COP_HP, COP_CAR_HP, COP_DISABLED_SMOKE,
+  createPolice,
 } from '../js/police.js';
 
 const DT = 1 / 60;
@@ -281,5 +282,93 @@ describe('footCopSteer', () => {
     assert.ok(FOOT_GRAB_DIST > 1 && FOOT_GRAB_DIST < 3);
     assert.ok(FOOT_GRAB_TIME >= 0.8 && FOOT_GRAB_TIME <= 2);
     assert.ok(FOOT_COP_SPEED > 4 && FOOT_COP_SPEED < 8);
+  });
+});
+
+describe('cop combat (createPolice, mocked three.js deps)', () => {
+  function makePolice(){
+    const player = { x:0, z:0, heading:0, speed:0, vx:0, vz:0, onFoot:true, alive:true };
+    const scene = { add(){}, remove(){} };
+    const mkGroup = () => ({ position:{ set(){} }, rotation:{ y:0 }, userData:{}, traverse(){}, add(){} });
+    const police = createPolice({
+      scene,
+      buildCar: () => mkGroup(),
+      buildCharacter: () => ({ position:{ set(){}, x:0, y:0, z:0 }, rotation:{ y:0, x:0 } }),
+      getPlayer: () => player,
+      setStars(){}, toast(){}, spark(){}, blood(){},
+      audio: {},
+      highQuality: () => false,
+    });
+    return { police, player };
+  }
+  // heat up and tick long enough to spawn the roster
+  function hot(police, stars = 1){
+    police.debugWanted(stars);
+    for(let t = 0; t <= 8; t++) police.update(DT, t);
+  }
+  function blockerOf(police, kind){
+    return police.copHitList().find(t => t.ref.kind === kind);
+  }
+
+  it('foot cops and cop cars are bullet blockers once spawned', () => {
+    const { police } = makePolice();
+    hot(police);
+    assert.ok(blockerOf(police, 'footcop'), 'expected a foot cop blocker');
+    assert.ok(blockerOf(police, 'copcar'), 'expected a cop car blocker');
+  });
+
+  it('shooting a foot cop adds copShot heat; killing adds copKill and removes it from blockers', () => {
+    const { police } = makePolice();
+    hot(police);
+    const f = blockerOf(police, 'footcop').ref.cop;
+    const heat0 = police.heat;
+    assert.equal(police.damageFootCop(f, 1), 'hit');
+    assert.ok(Math.abs(police.heat - (heat0 + CRIME_HEAT.copShot)) < 1e-9,
+      `heat ${police.heat} should be heat0 + copShot`);
+    police.update(DT, 10);   // advance past the per-kind cooldown
+    const heat1 = police.heat;
+    assert.equal(police.damageFootCop(f, FOOT_COP_HP), 'killed');
+    assert.ok(f.dead, 'foot cop should be dead');
+    assert.ok(police.heat >= heat1 + CRIME_HEAT.copKill - 0.02,
+      `heat ${police.heat} should include copKill on top of ${heat1}`);
+    assert.equal(police.damageFootCop(f, 1), null, 'dead cops take no more damage');
+    assert.ok(!police.copHitList().some(t => t.ref.kind === 'footcop' && t.ref.cop === f),
+      'dead cop must leave the blocker list');
+  });
+
+  it('shooting a foot cop interrupts an active grab', () => {
+    const { police } = makePolice();
+    hot(police);
+    const f = blockerOf(police, 'footcop').ref.cop;
+    f.grabT = 0.9;
+    police.damageFootCop(f, 1);
+    assert.equal(f.grabT, 0, 'grab progress should reset when the cop is shot');
+  });
+
+  it('shooting a cop car to zero disables it: it smokes, then despawns', () => {
+    const { police, player } = makePolice();
+    hot(police);
+    const c = blockerOf(police, 'copcar').ref.cop;
+    assert.equal(c.hp, COP_CAR_HP);
+    assert.equal(police.damageCopCar(c, COP_CAR_HP - 1), 'hit');
+    assert.ok(!c.disabled, 'one hit left: still rolling');
+    police.update(DT, 10);
+    const heat1 = police.heat;
+    assert.equal(police.damageCopCar(c, 1), 'disabled');
+    assert.ok(c.disabled);
+    assert.ok(police.heat >= heat1 + CRIME_HEAT.copKill - 0.02,
+      `heat ${police.heat} should include copKill on top of ${heat1}`);
+    assert.equal(police.damageCopCar(c, 1), null, 'disabled cars take no more damage');
+    assert.ok(!police.copHitList().some(t => t.ref.kind === 'copcar' && t.ref.cop === c),
+      'disabled car must leave the blocker list');
+    // a disabled unit does not chase anymore
+    const x0 = c.x, z0 = c.z;
+    police.update(DT, 11);
+    assert.equal(c.x, x0); assert.equal(c.z, z0);
+    // after the smoke-out it is gone from the roster (player "dead" so no
+    // foot cop grabs and busts the player out from under the test)
+    player.alive = false;
+    for(let i = 0; i < COP_DISABLED_SMOKE * 60 + 60; i++) police.update(DT, 12 + i * DT);
+    assert.ok(!police.units.includes(c), 'burned-out cop car should despawn');
   });
 });

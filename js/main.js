@@ -1485,6 +1485,7 @@ function frame(now){
     }
     blood.update(dt);
     policeRes = police ? police.update(dt, now/1000) : null;
+    if(police) police.copHitList();   // refresh bullet blockers after cops move
     // bust pressure: the hurt vignette pulses as the arrest closes in
     if(hurtFlash>0) hurtFlash-=dt;
     {
@@ -1653,14 +1654,22 @@ async function boot(){
       setStars:(n)=>updateWantedHUD(n),
       toast,
       spark:(x,z)=>{ if(smoke) smoke.emit(x, 1.1, z, { vx:(Math.random()-0.5)*5, vy:2.5, vz:(Math.random()-0.5)*5, life:0.5, size:0.6 }); },
+      blood:(x,y,z,dx,dz,amt)=>{ blood.hit(x, y, z, dx, dz, amt); },
       buildCharacter, animateCharacter,
     });
     missions=createMissionRunner({ scene, people, toast, beep:(f,d)=>audio.beep(f,d) });
-    weaponCtx.hitables=[people.hitList, trafficHits, remoteHits];
+    weaponCtx.hitables=[people.hitList, trafficHits, remoteHits, police.copHitList()];
     weaponCtx.onPersonHit=(ref, dmg, dx, dz)=>{
       if(ref.kind==='ped' || ref.kind==='enemy'){
         const killed=people.damage(ref, dmg, dx, dz);
         if(killed && ref.kind==='ped' && police) police.crime('pedKill', ref.x, ref.z, true);
+      }
+      else if(ref.kind==='footcop'){
+        const r=police.damageFootCop(ref.cop, dmg);
+        if(r==='killed'){ people.scare(ref.cop.x, ref.cop.z, 30); toast('🚨 Cop down', 1400); }
+      }
+      else if(ref.kind==='copcar'){
+        police.damageCopCar(ref.cop, dmg);
       }
       else if(ref.kind==='car'){
         const r=traffic.hitCar(ref.car, dmg, dx, dz);
