@@ -28,7 +28,7 @@ import { createMultiplayer } from './multiplayer.js';
 import { createBlood } from './blood.js';
 import { createPeople } from './npcs.js';
 import { createTraffic } from './traffic.js';
-import { createPolice, POLICE_STATION } from './police.js';
+import { createPolice, POLICE_STATION, WITNESS_RADIUS, WITNESS_LOUD_RADIUS } from './police.js';
 import { HOSPITAL_SPAWN, GRID_HALF, surfaceAt, surfaceGrip, WATER_DEPTH, isWet } from './world.js';
 import { createWheelFX } from './fx.js';
 import { buildCustomMap } from './mapbuilder.js';
@@ -277,6 +277,27 @@ function updateEffects(dt){
   smoke.update(dt); exhaust.update(dt);
 }
 
+// ---------------- crime witnesses: heat sticks when someone saw it ------------
+let lastWitnessToast = 0;
+// true when a living ped or an occupied traffic car is close enough to the
+// crime scene to see (or hear) it.
+function sawCrime(x, z, r){
+  if(!people || !traffic) return true;   // systems not up yet: old behavior
+  return people.witnesses(x, z, r) + traffic.witnesses(x, z, r) > 0;
+}
+// Report a crime at (x,z). Witnessed crimes add full heat; unwitnessed ones
+// add a little (cities talk) via the wanted model. Shows a witness callout
+// (throttled) only when the heat actually rose.
+function commitCrime(kind, x, z, r = WITNESS_RADIUS){
+  if(!police) return 0;
+  const seen = sawCrime(x, z, r);
+  const gained = police.crime(kind, x, z, seen) || 0;
+  if(seen && gained > 0){
+    const nowS = performance.now() / 1000;
+    if(nowS - lastWitnessToast > 5){ lastWitnessToast = nowS; toast('📞 A witness called the cops!', 1800); }
+  }
+  return gained;
+}
 // ---------------- collision: circle (car) vs AABB (city colliders) ----------------
 let _carHitCooldown = 0;
 function collide(x, z){
@@ -297,7 +318,7 @@ function collide(x, z){
       const vt = vx * tx + vz * tz;
       const impact = Math.abs(vn);
       if(vn < 0){
-        if(impact > 12 && police) police.crime('ramTraffic', r.x, r.z, true);
+        if(impact > 12) commitCrime('ramTraffic', r.x, r.z, 40);
         // restitution: harder hits bounce more, soft taps just nudge
         const rest = impact > 15 ? 0.45 : impact > 8 ? 0.3 : 0.15;
         const newVn = -vn * rest;
@@ -569,7 +590,7 @@ function snapFootCamera(){
 function stealCar(tc){
   const info=traffic.remove(tc);
   if(!info) return;
-  if(info.alive){ people.eject(info.x-Math.cos(info.h)*1.8, info.z+Math.sin(info.h)*1.8, foot.pos.x, foot.pos.z); people.scare(info.x, info.z, 25); if(police) police.crime('stolenCar', info.x, info.z, true); }
+  if(info.alive){ people.eject(info.x-Math.cos(info.h)*1.8, info.z+Math.sin(info.h)*1.8, foot.pos.x, foot.pos.z); people.scare(info.x, info.z, 25); commitCrime('stolenCar', info.x, info.z, 40); }
   stolenCar={ def:info.def, color:info.color };
   rebuildCar();
   physics.reset(carStats);
@@ -1480,7 +1501,7 @@ function frame(now){
       traffic.hitList();
       if(!onFoot && !dead){
         const n=people.carHits(physics.pos.x, physics.pos.z, physics.heading, tele.speed);
-        if(n){ audio.beep(70,0.12); physics.vel.x*=0.85; physics.vel.z*=0.85; if(police) police.crime('pedKill', physics.pos.x, physics.pos.z, true); }
+        if(n){ audio.beep(70,0.12); physics.vel.x*=0.85; physics.vel.z*=0.85; commitCrime('pedKill', physics.pos.x, physics.pos.z); }
       }
     }
     blood.update(dt);
@@ -1628,7 +1649,7 @@ async function boot(){
     weapons=createWeapons(scene);
     Object.assign(weaponCtx, { save, colliders:city.colliders, targets:shops.targets, audio, toast,
       onTargetHit:()=>{ addCash(TARGET_PAY); toast('TARGET +$'+TARGET_PAY, 900); },
-      onShot:shots=>{ if(mp) mp.sendShots(shots); if(police && shots.length) police.crime('gunshot', weaponCtx.pos.x, weaponCtx.pos.z, true); } });
+      onShot:shots=>{ if(mp) mp.sendShots(shots); if(shots.length) commitCrime('gunshot', weaponCtx.pos.x, weaponCtx.pos.z, WITNESS_LOUD_RADIUS); } });
     interiors=createInteriors(scene);
     blood=createBlood(scene);
     people=createPeople({ scene, blood, audio, count:14,
@@ -1662,7 +1683,7 @@ async function boot(){
     weaponCtx.onPersonHit=(ref, dmg, dx, dz)=>{
       if(ref.kind==='ped' || ref.kind==='enemy'){
         const killed=people.damage(ref, dmg, dx, dz);
-        if(killed && ref.kind==='ped' && police) police.crime('pedKill', ref.x, ref.z, true);
+        if(killed && ref.kind==='ped') commitCrime('pedKill', ref.x, ref.z);
       }
       else if(ref.kind==='footcop'){
         const r=police.damageFootCop(ref.cop, dmg);

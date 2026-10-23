@@ -31,6 +31,24 @@ export const CRIME_HEAT = {
 const CRIME_COOLDOWN = 1.2;      // s between heat gains of the same kind
 const UNWITNESSED_SCALE = 0.35;  // crime nobody saw still adds a little
 
+// --- witnesses ------------------------------------------------------------
+// A crime only summons the city when someone sees (or hears) it. The wanted
+// system asks the crowd (peds, traffic drivers) who is close enough to the
+// crime to count as a witness; unwitnessed crimes still add a little heat
+// (cities talk) but don't snowball the way witnessed ones do.
+export const WITNESS_RADIUS = 45;        // m — a bystander sees a crime this far
+export const WITNESS_LOUD_RADIUS = 65;   // m — gunshots carry further
+// Pure: how many of the given {x,z} units are within r of the crime scene.
+export function countWitnesses(units, x, z, r){
+  let n = 0;
+  const r2 = r * r;
+  for(const u of units){
+    const dx = u.x - x, dz = u.z - z;
+    if(dx * dx + dz * dz <= r2) n++;
+  }
+  return n;
+}
+
 export const HEAT_DECAY_UNSEEN = 0.10;  // heat/s lost when no cop in range
 export const HEAT_DECAY_SEEN   = 0.012; // heat/s lost while being chased
 export const BUST_TIME = 2.2;           // s pinned by a cop before BUSTED
@@ -350,10 +368,11 @@ export function createPolice(deps){
   }
 
   // A crime was committed at (x,z). witnessed=false still adds a little heat
-  // (cities talk) but won't summon units on its own.
+  // (cities talk) but won't summon units on its own. Returns the heat gained
+  // so callers can react (e.g. witness feedback) only when it actually rose.
   function crime(kind, x, z, witnessed = true){
     const p = deps.getPlayer();
-    if(!p || !p.alive) return;
+    if(!p || !p.alive) return 0;
     const gained = heat.crime(kind, witnessed, clock);
     if(gained > 0 && heat.stars !== lastStars){
       if(heat.stars > lastStars){
@@ -363,6 +382,7 @@ export function createPolice(deps){
       lastStars = heat.stars;
       deps.setStars && deps.setStars(heat.stars);
     }
+    return gained;
   }
 
   // -- per-cop brains -------------------------------------------------------

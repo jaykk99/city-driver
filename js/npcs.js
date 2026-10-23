@@ -2,6 +2,7 @@
 // with blood) and hostile gunmen used by missions and the final boss.
 import { buildCharacter, setOutfit, setHeldWeapon, animateCharacter, kickRecoil } from './character.js';
 import { PALETTE, SKIN_TONES, HAIR_COLORS } from './skins.js';
+import { countWitnesses } from './police.js';
 
 import { PITCH, BLOCKS, isSpecialBlock } from './world.js';
 const HALF = 28;                  // sidewalk loop half-size inside each block
@@ -257,6 +258,14 @@ export function createPeople(deps){
   }
   function setVisible(v){ for(const p of peds) p.person.visible = v; for(const e of enemies) e.person.visible = v; }
 
-  return { update, damage, scare, spawnEnemy, clearEnemies, carHits, setCount, setVisible, eject,
+  // pedestrians who saw a crime at (x,z): living peds within r. The dead tell
+  // no tales; gang gunmen don't call the cops, so only civilians count.
+  function witnesses(x, z, r){
+    const living = [];
+    for(const p of peds) if(p.state !== 'dead') living.push(p);
+    return countWitnesses(living, x, z, r);
+  }
+
+  return { update, damage, scare, spawnEnemy, clearEnemies, carHits, setCount, setVisible, eject, witnesses,
     get hitList(){ return hitList; }, get enemies(){ return enemies; }, get peds(){ return peds; } };
 }

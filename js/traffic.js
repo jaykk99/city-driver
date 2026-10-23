@@ -2,6 +2,7 @@
 // that drives in its lane (right-hand traffic), stops on red/yellow, keeps a
 // gap to the car ahead, brakes for you, and turns at intersections.
 import * as THREE from 'three';
+import { countWitnesses } from './police.js';
 
 const ROAD_W = 14, LANE = 3.5, STOP = ROAD_W / 2 + 2.2;
 export const CYCLE = 16;              // seconds for a full light cycle
@@ -285,5 +286,13 @@ export function createTraffic(deps){
   }
   function setVisible(v){ for(const c of cars) c.group.visible = v; }
 
-  return { update, collide, hitList, setCount, setVisible, stateAt, hitCar, nearestCar, remove, get cars(){ return cars; } };
+  // drivers who saw a crime at (x,z): occupied cars within r. An empty car
+  // (dead/stolen driver) has nobody in it to witness anything.
+  function witnesses(x, z, r){
+    const drivers = [];
+    for(const c of cars) if(!c.empty) drivers.push(c);
+    return countWitnesses(drivers, x, z, r);
+  }
+
+  return { update, collide, hitList, setCount, setVisible, stateAt, hitCar, nearestCar, remove, witnesses, get cars(){ return cars; } };
 }
