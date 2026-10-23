@@ -6,6 +6,12 @@ Open-world 3D driving game for mobile browsers. Built with Three.js — no app s
 
 ## What's in the game
 
+- **Forge 3D models** — every car (yours, traffic, police, drag rivals, other players) is built by the
+  [Forge 3D](https://github.com/jaykk99/forge3d) car designer: lofted clearcoat bodies with real wheel arches,
+  glass, hinged hood, interior, lights and Forge rims/tires, generated from a written description per car
+  (`js/forgecars.js`, Forge code vendored in `js/forge/`). Parked cars use the same Forge silhouettes,
+  and the street/park trees are Forge's elm, birch and pine kit. Add `?classic` to the URL for the old models.
+
 - **Free roam** — drive a full 3D city: 5×5 blocks, 82 buildings, streetlights, trees, day lighting with follow-shadows
 - **6 driveable cars** — Falcon S (sports), Vortex GT (supercar), Brute 500 (muscle), Ranger XLT (pickup), Titan SUV, Ghost R (track). All procedurally modeled in code, distinct handling/top speed
 - **Arcade physics** — acceleration, braking, speed-sensitive steering, handbrake drifts, nitro boost
@@ -42,6 +48,7 @@ npx serve .
 npm install   # once (esbuild, dev only)
 npm run build # → js/bundle.js (three.js + game, zero CDN requests)
 ```
+> Vercel and the Pages workflow run `npm run build` on every deploy, so `js/bundle.js` is always fresh.
 > `index.html` loads only `js/bundle.js` — the game makes **no CDN requests**,
 > so a slow/down CDN can never hang the loading screen.
 

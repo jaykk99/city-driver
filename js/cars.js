@@ -3,6 +3,10 @@
 // arches), glasshouse + painted roof, detailed 5-spoke rims, surface-mounted
 // lights. Convention: car faces -Z (matches physics heading 0 = -Z).
 import * as THREE from 'three';
+import { buildForgeCar } from './forgecars.js';
+
+// Forge 3D bodies are on by default; add ?classic to the URL to drive the old procedural cars.
+export const USE_FORGE = !(typeof location !== 'undefined' && /[?&]classic\b/.test(location.search));
 
 export const CAR_DEFS = [
   { id:'sport',  name:'Apex S',      desc:'Balanced coupe. Great all-rounder.', price:0,     colors:[0xc01818,0x1a5fd0,0xf2f2f2,0x14161c,0xff8c1a],
@@ -185,6 +189,10 @@ export function buildCar(idOrDef, colorHex, wheelStyle='stock'){
   const def = typeof idOrDef === 'string' ? carDef(idOrDef) : (idOrDef || CAR_DEFS[0]);
   const id = def.id || 'sport';
   if (typeof colorHex !== 'number') colorHex = (typeof def.color === 'number') ? def.color : def.colors[0];
+  if(USE_FORGE){
+    const fg = buildForgeCar(def, colorHex);
+    if(fg){ addRoofExtras(fg, def, fg.userData.profile); return fg; }
+  }
   const P = PROFILES[id] || PROFILES[PROFILE_ALIAS[id]] || PROFILES.sport;
   const group = new THREE.Group();
   const paint = paintMat(colorHex);
@@ -333,8 +341,22 @@ export function buildCar(idOrDef, colorHex, wheelStyle='stock'){
     }
   }
 
-  // ---- taxi sign / police light bar ----
+  const flashers = addRoofExtras(group, def, P);
+
+  group.userData = {
+    flashers,
+    defId:id, bodyColor:colorHex, wheels,
+    frontWheels: wheels.filter(w=>w.position.z<0),
+    rim, glass, paint, setBrake:(on)=>{},
+    profile:P, frontZ, rearZ,
+  };
+  return group;
+}
+
+// ---- taxi sign / police light bar (shared by classic and Forge bodies) ----
+function addRoofExtras(group, def, P){
   let flashers = null;
+  const trim = new THREE.MeshStandardMaterial({ color:0x14161a, metalness:0.4, roughness:0.6 });
   if(def.extra === 'taxi' || def.extra === 'police'){
     const roofY = Math.max(...(P.roof || P.glass).map(p => p[1])) + 0.02;
     const roofX = (P.roof || P.glass).reduce((a, p) => a + p[0], 0) / (P.roof || P.glass).length;
@@ -358,17 +380,12 @@ export function buildCar(idOrDef, colorHex, wheelStyle='stock'){
     }
   }
 
-  group.userData = {
-    flashers,
-    defId:id, bodyColor:colorHex, wheels,
-    frontWheels: wheels.filter(w=>w.position.z<0),
-    rim, glass, paint, setBrake:(on)=>{},
-    profile:P, frontZ, rearZ,
-  };
-  return group;
+  if(flashers) group.userData.flashers = flashers;
+  return flashers;
 }
 
 export function paintCar(group, hex){
+  if(group.userData.forge && group.userData.paint){ group.userData.paint.color.setHex(hex); group.userData.bodyColor = hex; return; }
   const target = new THREE.Color(hex);
   group.traverse(o=>{
     if(o.isMesh && o.material && o.material.isMeshPhysicalMaterial &&
