@@ -6,6 +6,8 @@ import { countWitnesses } from './police.js';
 
 const ROAD_W = 14, LANE = 3.5, STOP = ROAD_W / 2 + 2.2;
 export const CYCLE = 16;              // seconds for a full light cycle
+export const PANIC_RADIUS = 45;       // m — gunfire this close panics drivers
+export const PANIC_TIME = 6;          // s a panicked driver keeps fleeing
 
 // Light state for one direction of an intersection at time t.
 // axis 'z' = north/south traffic, 'x' = east/west traffic.
@@ -190,7 +192,10 @@ export function createTraffic(deps){
         const toStop = toCenter - STOP;
         const ix = c.axis === 'z' ? c.li : k, iz = c.axis === 'z' ? k : c.li;
         const st = stateAt(ix, iz, c.axis);
-        if(toStop > -0.5 && (st === 'red' || (st === 'yellow' && toStop > 5))) want = Math.min(want, Math.max(0, toStop - 0.3) * 1.1);
+        // a fleeing driver runs the light — stopping at red while gunfire
+        // echoes behind you is not what a panicked driver does. The gap to
+        // the car ahead and to the player still clamps speed below.
+        if(c.panic <= 0 && toStop > -0.5 && (st === 'red' || (st === 'yellow' && toStop > 5))) want = Math.min(want, Math.max(0, toStop - 0.3) * 1.1);
         if(toCenter <= 0.05){ c.s = cross; turn(c, k); }
       }else{
         // end of the road: U-turn
@@ -254,7 +259,7 @@ export function createTraffic(deps){
   // a bullet hit a car: maybe the driver. returns 'killed' | 'hit' | null and the driver's world position
   function hitCar(car, dmg, dx, dz){
     if(car.empty) return null;
-    car.panic = 6;
+    car.panic = PANIC_TIME;
     car.driverHp -= dmg;
     const d = car.group.userData.driver;
     const wp = new THREE.Vector3(); if(d) d.getWorldPosition(wp);
@@ -294,5 +299,20 @@ export function createTraffic(deps){
     return countWitnesses(drivers, x, z, r);
   }
 
-  return { update, collide, hitList, setCount, setVisible, stateAt, hitCar, nearestCar, remove, witnesses, get cars(){ return cars; } };
+  // Gunfire (or any scare) at (x,z): every occupied car within radius
+  // panics — it floors it (see update) and runs red lights until the
+  // panic timer burns out. Empty cars have no driver to scare. Returns
+  // how many drivers panicked. Never shortens a panic already running.
+  function panicAt(x, z, radius = PANIC_RADIUS){
+    let n = 0;
+    const r2 = radius * radius;
+    for(const c of cars){
+      if(c.empty) continue;
+      const dx = c.x - x, dz = c.z - z;
+      if(dx * dx + dz * dz <= r2){ c.panic = Math.max(c.panic || 0, PANIC_TIME); n++; }
+    }
+    return n;
+  }
+
+  return { update, collide, hitList, setCount, setVisible, stateAt, hitCar, nearestCar, remove, witnesses, panicAt, get cars(){ return cars; } };
 }
