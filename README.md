@@ -13,6 +13,7 @@ Open-world 3D driving game for mobile browsers. Built with Three.js — no app s
   and the street/park trees are Forge's elm, birch and pine kit. Add `?classic` to the URL for the old models.
 
 - **Free roam** — drive a full 3D city: 5×5 blocks, 82 buildings, streetlights, trees, day lighting with follow-shadows
+- **Traffic that panics** — working traffic lights and AI drivers that stop, keep gaps and brake for you — until gunfire goes off nearby, when every driver in earshot floors it and runs the red lights to get away
 - **6 driveable cars** — Falcon S (sports), Vortex GT (supercar), Brute 500 (muscle), Ranger XLT (pickup), Titan SUV, Ghost R (track). All procedurally modeled in code, distinct handling/top speed
 - **Arcade physics** — acceleration, braking, speed-sensitive steering, handbrake drifts, nitro boost
 - **Garage** — upgrade engine, turbo, tires, suspension, nitro (5 levels each), paint shop (8 colors), 3 wheel styles. Upgrades change real stats. Progress saved in localStorage
