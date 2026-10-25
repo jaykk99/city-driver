@@ -37,6 +37,7 @@ import { THEMES as MAP_THEMES, spawnOf } from './custommap.js';
 import { buildStats, normalizeBuild, migrateLegacy, timeslip } from './tuning.js';
 import { createTuningUI } from './tuningui.js';
 import { createMissionRunner, generateMission, TOTAL_MISSIONS, EMERALD_FORTUNE } from './missions.js';
+import { CarDamage } from './cardamage.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
 
@@ -90,6 +91,7 @@ function updateWater(dt){
 // --- world life: pedestrians, traffic, blood; player health ---
 let blood=null, people=null, traffic=null, trafficHits=null;
 let hp=100, dead=false, deadT=0, hurtFlash=0;
+let carDamage=new CarDamage(), lastDmgCarId=null, prevDriveSpeed=null, crashCool=0, wreckT=0;
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true};
 let missions=null, boardOpen=false, lastGear=0;
 // engine character per car: cylinders, idle, redline
@@ -161,6 +163,9 @@ function rebuildCar(){
   lookCache=null;
   const bld = stolenCar ? normalizeBuild({}) : buildFor(carDef.id);
   carStats=buildStats(carDef, bld);
+  // a different car means fresh bodywork; tuning the car you own never
+  // repairs it (refreshSceneKeep rebuilds the same car id)
+  if(carDef.id!==lastDmgCarId){ carDamage=new CarDamage(); lastDmgCarId=carDef.id; prevDriveSpeed=null; syncCarHP(); }
   applyBuildVisual(carGroup, { rideHeight:carStats.rideHeight, tireScale:carStats.tireScale, offset:carStats.offset,
     slicks:bld.tires==='slicks', adder:bld.adder, body:bld.body });
   etCache=null;
@@ -202,6 +207,7 @@ function snapCamera(){
 function placeAtSpawn(){
   const s=customMap ? Object.assign({ heading:0 }, customMap.toWorld(spawnOf(customMap.map))) : city.spawn;
   physics.pos.x=s.x; physics.pos.z=s.z; physics.heading=s.heading||0;
+  prevDriveSpeed=null;   // fresh run: no stale speed for the crash detector
   stunts=newStuntState();   // fresh stunt tracking per run
   snapCamera();
   syncCarTransform(0);
@@ -273,6 +279,16 @@ function updateEffects(dt){
       const pz=physics.pos.z-_hw.z*2.2+rz*s;
       exhaust.emit(px, 0.32, pz, { vx:-_hw.x*2, vy:0.8, vz:-_hw.z*2, life:0.5, size:0.55, grow:1.6 });
     }
+  }
+  // damage smoke pours from the hood: light at 60 hp, heavy at 30
+  const sl=carDamage?carDamage.smokeLevel():0;
+  if(sl>0 && particleScale>0.3){
+    const h=physics.heading;
+    _hw.set(-Math.sin(h),0,-Math.cos(h));
+    const hx=physics.pos.x+_hw.x*1.6, hz=physics.pos.z+_hw.z*1.6;
+    if(Math.random()<(sl===2?0.9:0.4)*particleScale)
+      smoke.emit(hx+(Math.random()-0.5)*0.5, 1.0, hz+(Math.random()-0.5)*0.5,
+        { vx:(Math.random()-0.5)*0.6, vy:1.4+Math.random(), vz:(Math.random()-0.5)*0.6, life:0.8+Math.random()*0.5, size:sl===2?1.4:0.9, grow:3.0 });
   }
   smoke.update(dt); exhaust.update(dt);
 }
@@ -937,6 +953,27 @@ function hurtPlayer(dmg){
   if(audio) audio.beep(160, 0.05);
   if(hp<=0) die();
 }
+// ---------------- car damage ----------------
+// `impact` is m/s of closing speed (crash detector, cop rams). Toasts only
+// on smoke-level crossings so a long scrape doesn't spam the screen.
+function syncCarHP(){
+  const f=$('car-fill'); if(!f) return;
+  const h=carDamage?carDamage.hp:100;
+  f.style.width=Math.max(0,h)+'%';
+  f.style.background = h>60 ? '#4ade80' : h>30 ? '#fbbf24' : '#ef4444';
+  $('car-hud').classList.toggle('hidden', !!onFoot);
+}
+function damageCar(impact){
+  if(!carDamage || onFoot || dead || state!=='freeroam') return 0;
+  const before=carDamage.hp;
+  const d=carDamage.hit(impact);
+  if(d<=0) return 0;
+  syncCarHP();
+  if(carDamage.wrecked) toast('🚛 WRECKED — tow truck incoming…', 2600);
+  else if(before>60 && carDamage.hp<=60) toast('🔧 Car damaged — smoking', 1800);
+  else if(before>30 && carDamage.hp<=30) toast('🔧 Car heavily damaged — losing power', 2000);
+  return d;
+}
 function die(){
   dead=true; deadT=0; hp=0; syncHP();
   setAction(null,null,'');
@@ -1457,9 +1494,34 @@ function frame(now){
     else minimap.draw(foot.pos.x, foot.pos.z, foot.heading, parkedCar, mp, cb);
     updateAction();
     if(controls.consumeAction()) doAction();
+    syncCarHP();   // hides the car bar while on foot
   }else if(playing){
     physics.surf=surfaceGrip(surfAt(physics.pos.x, physics.pos.z), carStats.offroad, carStats.snorkel);
-    tele=physics.update(controls.input, dt, collide);
+    // battered cars lose pace; a wrecked car stalls until the tow arrives
+    const dmgF=carDamage?carDamage.perfFactor():1;
+    const driveInput=dmgF>=1 ? controls.input
+      : { ...controls.input, throttle: dmgF<=0 ? 0 : (controls.input.throttle||0)*dmgF };
+    tele=physics.update(driveInput, dt, collide);
+    // crash detector: a one-frame speed collapse only comes from a shunt
+    // (braking and drag bleed speed slowly). tele.speed lags collisions by
+    // a frame, so this catches walls and traffic alike.
+    if(crashCool>0) crashCool-=dt;
+    if(prevDriveSpeed!==null){
+      const drop=prevDriveSpeed-Math.abs(tele.speed);
+      if(drop>8 && crashCool<=0){ crashCool=0.3; damageCar(drop); }
+    }
+    prevDriveSpeed=Math.abs(tele.speed);
+    if(carDamage && carDamage.wrecked){
+      wreckT+=dt;
+      if(wreckT>2.5){ // tow truck: bill the repair, hand back a fresh car
+        const cost=carDamage.repair();
+        const paid=Math.min(save.cash, cost);
+        if(paid>0) addCash(-paid);
+        syncCarHP();
+        toast(paid>0 ? '🚛 Towed + repaired — $'+paid.toLocaleString() : '🚛 Towed + repaired', 2400);
+        wreckT=0;
+      }
+    }else wreckT=0;
     updateWater(dt);
     // stunt rewards: drifting pays cash, so free roam has its own economy
     const award=stuntUpdate(stunts, tele.drifting, tele.speed, dt);
@@ -1670,6 +1732,7 @@ async function boot(){
       }),
       audio, highQuality:()=>!!(qm && qm.level>=2),
       damagePlayer:(n)=>hurtPlayer(n),
+      damageCar:(impact)=>damageCar(impact),
       onBusted:(stars)=>busted(stars),
       onEvaded:()=>toast('😮‍💨 EVADED — heat\'s off', 2200),
       setStars:(n)=>updateWantedHUD(n),

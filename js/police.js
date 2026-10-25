@@ -563,6 +563,7 @@ export function createPolice(deps){
         if(closing > 7){
           ramCool = 0.8;
           deps.damagePlayer && deps.damagePlayer(Math.min(24, 6 + closing * 0.7), c.x, c.z);
+          if(deps.damageCar) deps.damageCar(closing);   // the ram dents your car too
           deps.spark && deps.spark((c.x + p.x) / 2, (c.z + p.z) / 2);
           heat.crime('copRam', true, clock);
           c.speed *= 0.35; c.ramT = 0.5;
