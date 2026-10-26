@@ -35,6 +35,7 @@ body.force-landscape #app{width:var(--app-w);height:var(--app-h);transform-origi
 
 /* ---------- touch controls ---------- */
 #touch-controls{position:fixed;inset:0;z-index:30;pointer-events:none}
+#look-zone{position:absolute;left:70px;right:0;top:calc(175px + env(safe-area-inset-top));bottom:0;pointer-events:auto;touch-action:none}
 #steer-zone{position:absolute;left:10px;bottom:calc(16px + env(safe-area-inset-bottom));display:flex;gap:10px;pointer-events:auto}
 #pedal-zone{position:absolute;right:10px;bottom:calc(16px + env(safe-area-inset-bottom));display:flex;gap:10px;align-items:flex-end;pointer-events:auto}
 .tbtn{border:none;border-radius:50%;background:rgba(25,35,65,.55);border:2px solid rgba(255,255,255,.25);color:#fff;font-size:26px;font-weight:900;cursor:pointer;backdrop-filter:blur(4px)}
@@ -282,10 +283,12 @@ body.compact #mission-btn{top:calc(204px + env(safe-area-inset-top))}
 /* ---------- aim ---------- */
 .tbtn.aim{font-size:12px;line-height:1.1}
 .tbtn.aim.on{background:rgba(255,94,58,.75);border-color:#fff}
-#crosshair{position:fixed;left:50%;top:45%;width:38px;height:38px;margin:-19px 0 0 -19px;z-index:26;pointer-events:none;border:2px solid rgba(255,255,255,.85);border-radius:50%;box-shadow:0 0 6px rgba(0,0,0,.6);transition:border-color .1s}
+#crosshair{position:fixed;left:50%;top:50%;width:38px;height:38px;margin:-19px 0 0 -19px;z-index:26;pointer-events:none;border:2px solid rgba(255,255,255,.85);border-radius:50%;box-shadow:0 0 6px rgba(0,0,0,.6);transition:border-color .1s}
 #crosshair i{position:absolute;left:50%;top:50%;width:4px;height:4px;margin:-2px 0 0 -2px;border-radius:50%;background:#fff}
 #crosshair.lock{border-color:#ff3b4e;width:44px;height:44px;margin:-22px 0 0 -22px}
 #crosshair.lock i{background:#ff3b4e}
+#crosshair.dim{opacity:.55;width:26px;height:26px;margin:-13px 0 0 -13px}
+#crosshair.dim.lock{opacity:.8}
 #gear-btns{display:flex;flex-direction:column;gap:8px}
 
 /* ---------- tachometer ---------- */

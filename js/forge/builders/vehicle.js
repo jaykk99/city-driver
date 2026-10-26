@@ -19,7 +19,7 @@ const NSTATION = () => (hq() ? 160 : 96);
 // ---------------------------------------------------------------- body shell
 // Each station's half-section is sampled with a FIXED number of points per feature, so every ring
 // index is the same feature along the car (belt line, roof edge...). Feature lines come out straight.
-const SEGS = () => (hq() ? { nB: 5, nC: 5, nS: 12, nU: 12, nT: 8, nR: 6 } : { nB: 3, nC: 4, nS: 7, nU: 8, nT: 5, nR: 4 });
+const SEGS = () => (hq() ? { nB: 4, nC: 5, nS: 10, nU: 20, nT: 8, nR: 5 } : { nB: 3, nC: 4, nS: 7, nU: 12, nT: 5, nR: 4 });
 function bodyShell(P, d, prof, arches) {
   const L = d.L, W = d.W, H = d.H;
   const top0 = monotone(prof.top.map(([u, f]) => [u, f * H]));
@@ -223,7 +223,8 @@ export function buildVehicle(o, P, ctx) {
     const round = P.headlights === 'round';
     for (const s of [-1, 1]) {
       const xH = s * d.W / 2 * 0.66; const zH = endZ(shell, 0.72, true) - 0.01;
-      if (round) {
+      if (P.hd) { /* high-detail lights come from cardetail.js */ }
+      else if (round) {
         extra.push([place(cylZ(0.09, 0.05, 32), [xH, yLight, zH]), preset('chrome')]);
         extra.push([place(sph(0.085, 24, 12), [xH, yLight, zH + 0.005], 0, [1, 1, 0.35]), lens('#fffaf0', 0.6)]);
       } else {
@@ -233,7 +234,7 @@ export function buildVehicle(o, P, ctx) {
       }
       // tail lights
       const xT = s * d.W / 2 * 0.7; const zT = endZ(shell, 0.78, false) + 0.012;
-      const tl = rbox(round ? 0.42 : 0.36, 0.09, 0.05, 0.025); tl.rotateY(s * 0.28); tl.translate(xT, yTail, zT); extra.push([tl, lens('#c80a0a', 0.6)]);
+      if (!P.hd) { const tl = rbox(round ? 0.42 : 0.36, 0.09, 0.05, 0.025); tl.rotateY(s * 0.28); tl.translate(xT, yTail, zT); extra.push([tl, lens('#c80a0a', 0.6)]); }
       // mirrors
       const uC = prof.cab[3] - 0.02; const my = shell.belt(uC) + 0.08, mx = s * (shell.halfW(uC) + 0.08), mz = shell.zOf(uC);
       extra.push([place(rbox(0.13, 0.08, 0.12, 0.035), [mx, my, mz]), paint]);
@@ -247,18 +248,20 @@ export function buildVehicle(o, P, ctx) {
         const uN = (prof.cab[1] + prof.cab[2]) / 2 - 0.02; pl.position.set(s * (shell.halfW(uN) + 0.028), lerp(shell.bottom(uN), shell.belt(uN), 0.55), shell.zOf(uN)); pl.rotation.y = s * Math.PI / 2; body.add(pl);
       }
     }
-    // grille + bumpers + plates
+    // grille + bumpers + plates (P.hd: cardetail.js builds the full fascias instead)
     const yG = lerp(shell.bottom(1), yLight, 0.55);
+    const utility = !!prof.bed || d.clear >= 0.2;
+    const yBF = shell.bottom(1) + 0.08, yBR = shell.bottom(0) + 0.09;
+    if (!P.hd) {
     extra.push([place(rbox(d.W * 0.5, 0.16, 0.05, 0.03), [0, yG, zF - 0.04]), preset('black', { rough: 0.45 })]);
     if (P.trim === 'chrome') extra.push([place(rbox(d.W * 0.52, 0.02, 0.055, 0.01), [0, yG + 0.08, zF - 0.035]), preset('chrome')]);
-    const utility = !!prof.bed || d.clear >= 0.2;
     const bumperChrome = P.trim === 'chrome' && (round || prof.box > 0.6 || utility);
-    const yBF = shell.bottom(1) + 0.08, yBR = shell.bottom(0) + 0.09;
     extra.push([place(rbox(d.W * 0.86, 0.1, 0.1, 0.045), [0, yBF, endZ(shell, 0.5, true) - 0.02]), bumperChrome ? preset('chrome') : (utility ? blackPlastic : paint)]);
     extra.push([place(rbox(d.W * 0.86, 0.1, 0.1, 0.045), [0, yBR, endZ(shell, 0.5, false) + 0.02]), bumperChrome ? preset('chrome') : (utility ? blackPlastic : paint)]);
     if (d.H < 1.5 && d.clear < 0.16) extra.push([place(rbox(d.W * 0.8, 0.02, 0.18, 0.01), [0, shell.bottom(1) - 0.005, zF - 0.12]), preset('carbon')]);
     const plate = new THREE.MeshStandardMaterial({ map: textTexture('FORGE 3D', { round: false, w: 512, h: 160, font: 'bold 92px Arial', fg: '#1a2a6c', bg: '#f4f4f0' }), roughness: 0.4, metalness: 0.2 });
     extra.push([place(new THREE.PlaneGeometry(0.52, 0.12), [0, yBR + 0.12, endZ(shell, 0.2, false) - 0.005], [0, Math.PI, 0]), plate]);
+    }
     // wheel well liners (hide the hollow body)
     for (const a of arches) for (const s of [-1, 1]) {
       const g = new THREE.CylinderGeometry(a.r + 0.005, a.r + 0.005, 0.42, 32, 1, true, 0, Math.PI); g.rotateZ(Math.PI / 2); g.translate(s * (d.W / 2 - 0.23), a.y, a.z);
@@ -394,7 +397,7 @@ export function buildVehicle(o, P, ctx) {
     parts.push([strut([0, axles[1].t.R + 0.05, axles[1].z], [0, axles[0].t.R + 0.05, axles[0].z - 0.4], 0.04), sm]);
     const sus = meshFrom(parts); sus.name = 'suspension'; root.add(sus);
   }
-  root.userData.vehicle = { wheels, spec, body, hood: hoodMesh, bodyLift, dims: d, axleF, axleR, frame };
+  root.userData.vehicle = { wheels, spec, body, hood: hoodMesh, bodyLift, dims: d, axleF, axleR, frame, shell, prof, P };
   root.userData.lights = collectLights(root);
   return root;
 }

@@ -174,8 +174,11 @@ export function createMultiplayer(deps){
         r.person.position.x = r.x; r.person.position.z = r.z; r.person.rotation.y = r.h;
         r.phase += r.speed * dt * 2.1;
         r.recoil = Math.max(0, (r.recoil || 0) - dt);
-        if(r.dead){ r.person.rotation.x = -Math.PI / 2 + 0.05; r.person.position.y = 0.12; }
-        else { r.person.rotation.x = 0; deps.animateCharacter(r.person, r.phase, r.speed, !!r.weapon && r.recoil > 0, dt); }
+        if(r.dead){
+          if(deps.animateDeath){ if(!r.deadAnim){ r.deadAnim = 0.001; deps.startDeath(r.person, Math.sin(r.h), Math.cos(r.h)); } r.deadAnim += dt; deps.animateDeath(r.person, r.deadAnim); }
+          else { r.person.rotation.x = -Math.PI / 2 + 0.05; r.person.position.y = 0.12; }
+        }
+        else { if(r.deadAnim){ r.deadAnim = 0; if(deps.resetPose) deps.resetPose(r.person); } r.person.rotation.x = 0; deps.animateCharacter(r.person, r.phase, r.speed, !!r.weapon && r.recoil > 0, dt, { pitch:r.pitch || 0 }); }
       }else if(r.person){ r.person.visible = false; }
       // name tag rides on whatever represents them
       if(r.tag){

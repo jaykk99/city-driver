@@ -14,8 +14,8 @@ import { PuffPool, SkidMarks } from './particles.js';
 import { newStuntState, stuntUpdate } from './stunts.js';
 import { initOrientation } from './orientation.js';
 import { ensureArsenal, cycleWeapon, weaponDef, TARGET_PAY } from './shop.js';
-import { FootPhysics, dist2D, exitSpot } from './onfoot.js';
-import { buildCharacter, setOutfit, setHeldWeapon, animateCharacter, kickRecoil } from './character.js';
+import { FootPhysics, dist2D, exitSpot, rayAABB, rayCircle } from './onfoot.js';
+import { buildCharacter, setOutfit, setHeldWeapon, animateCharacter, kickRecoil, kickHit, startDeath, animateDeath, resetPose } from './character.js';
 import { buildStores, STORE_LOTS } from './stores.js';
 import { createWeapons } from './weapons.js';
 import { createStoreUI } from './storeui.js';
@@ -92,19 +92,20 @@ function updateWater(dt){
 let blood=null, people=null, traffic=null, trafficHits=null;
 let hp=100, dead=false, deadT=0, hurtFlash=0;
 let carDamage=new CarDamage(), lastDmgCarId=null, prevDriveSpeed=null, crashCool=0, wreckT=0;
-const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true};
+const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
 let missions=null, boardOpen=false, lastGear=0;
 // engine character per car: cylinders, idle, redline
 const ENGINES={ sport:{cyl:6,red:7200}, muscle:{cyl:8,red:6200,idle:750}, super:{cyl:10,red:8500}, suv:{cyl:6,red:6000},
   truck:{cyl:8,red:5600,idle:700}, track:{cyl:4,red:8800,idle:1100}, sedan:{cyl:4,red:6500}, taxi:{cyl:4,red:6200},
-  van:{cyl:6,red:5500,idle:700}, police:{cyl:8,red:6600,idle:800}, hyper:{cyl:12,red:9000,idle:1000} };
+  van:{cyl:6,red:5500,idle:700}, police:{cyl:8,red:6600,idle:800}, hyper:{cyl:12,red:9000,idle:1000},
+  brawler:{cyl:8,red:7000,idle:750,voice:'v8x'}, kaze:{cyl:6,red:7600,idle:850,voice:'i6'}, vanta:{cyl:10,red:8700,idle:1000,voice:'v10'}, rally:{cyl:4,red:7800,idle:950,voice:'i4r'}, baja:{cyl:8,red:6000,idle:700,voice:'v8'} };
 function applyGearbox(){
   if(physics && physics.box) physics.box.mode = save.manual ? 'manual' : 'auto';
   const t=save.manual?'⚙️ GEARBOX: MANUAL':'⚙️ GEARBOX: AUTO';
   for(const id of ['m-trans','p-trans']){ const b=$(id); if(b) b.textContent=t; }
   const gb=$('gear-btns'); if(gb) gb.classList.toggle('hidden', !save.manual);
 }
-let stolenCar=null, lockTarget=null;
+let stolenCar=null;
 const lootedAt=new Map();     // building id -> time it was emptied (loot comes back after 8 min)
 const _proj=new THREE.Vector3();
 // --- stunt rewards (free-roam cash loop) ---
@@ -117,6 +118,10 @@ let particleScale=1;
 let orient=null, onFoot=false, foot=null, person=null, weapons=null, shops=null, storeUI=null, minimap=null;
 let police=null, bustedOpen=false, policeRes=null;
 let storeOpen=false, aimHold=0, ammoDirty=0, actionKind=null, actionTarget=null, actionText='';
+// free-look camera on foot: yaw (0 = looking down -Z, same as headings) and pitch (+ = looking up)
+let camYaw=0, camPitch=0.1, lookIdle=0, lastStep=0;
+const TOUCH_UI = typeof window!=='undefined' && ('ontouchstart' in window);
+const _aimO=new THREE.Vector3(), _aimD=new THREE.Vector3(), _aimP=new THREE.Vector3();
 const weaponCtx={ save:null, pos:{x:0,z:0}, heading:0, colliders:null, targets:null, audio:null, toast:null, onTargetHit:null };
 const parkedCar={x:0,z:0};
 
@@ -452,6 +457,7 @@ function getOut(){
   const sp=exitSpot(physics.pos.x, physics.pos.z, physics.heading);
   const r=footCollide(sp.x, sp.z, 0.45);
   foot.reset(r.x, r.z, physics.heading);
+  camYaw=physics.heading; camPitch=0.1; lookIdle=0;
   physics.vel.x=0; physics.vel.z=0; physics.speed=0;
   tele.speed=0; tele.drifting=false; tele.nitro=false; tele.steer=0;
   stunts=newStuntState();
@@ -475,12 +481,13 @@ function getIn(){
   if(ammoDirty){ saveSave(save); ammoDirty=0; }
 }
 function updateFootCamera(dt){
-  const h=foot.heading, px=foot.pos.x, pz=foot.pos.z;
-  fwdV.set(-Math.sin(h),0,-Math.cos(h));
-  const aiming=aimHold>0;
-  const dist=aiming?3.6:4.6, height=aiming?2.2:2.6;
-  const rx=Math.cos(h), rz=-Math.sin(h), side=aiming?0.7:0.35;   // over-the-shoulder
-  camGoal.set(px-fwdV.x*dist+rx*side, height, pz-fwdV.z*dist+rz*side);
+  const px=foot.pos.x, pz=foot.pos.z;
+  const aiming=aimHold>0 && !!gear().equipped;
+  const cp=Math.cos(camPitch), sp=Math.sin(camPitch);
+  fwdV.set(-Math.sin(camYaw)*cp, sp, -Math.cos(camYaw)*cp);           // where the camera looks
+  const rx=Math.cos(camYaw), rz=-Math.sin(camYaw);                       // camera right
+  const dist=aiming?2.7:4.3, side=aiming?0.72:0.42, pivotY=aiming?1.62:1.55;
+  camGoal.set(px-fwdV.x*dist+rx*side, Math.max(0.6, pivotY-fwdV.y*dist+0.25), pz-fwdV.z*dist+rz*side);
   if(inside){
     // keep the camera inside the room so walls never block the view
     const bd=inside.room.bounds, m=0.45;
@@ -488,55 +495,81 @@ function updateFootCamera(dt){
     camGoal.z=Math.max(bd.minZ+m, Math.min(bd.maxZ-m, camGoal.z));
     camGoal.y=Math.min(camGoal.y, 3.9);
   }
-  const k=1-Math.exp(-dt*7);
+  const k=1-Math.exp(-dt*16);
   camPos.x+=(camGoal.x-camPos.x)*k;
   camPos.y+=(camGoal.y-camPos.y)*k;
   camPos.z+=(camGoal.z-camPos.z)*k;
   camera.position.copy(camPos);
-  camera.lookAt(px+fwdV.x*5+rx*side, 1.45, pz+fwdV.z*5+rz*side);
-  if(Math.abs(60-lastFov)>0.25){
-    lastFov+=(60-lastFov)*Math.min(1,dt*4);
+  // look straight along the view direction, so the screen centre (crosshair) is exactly where you aim
+  camera.lookAt(camPos.x+fwdV.x*20, camPos.y+fwdV.y*20, camPos.z+fwdV.z*20);
+  const fov=aiming?48:60;
+  if(Math.abs(fov-lastFov)>0.25){
+    lastFov+=(fov-lastFov)*Math.min(1,dt*8);
     camera.fov=lastFov; camera.updateProjectionMatrix();
   }
 }
-// AIM: lock onto the best target in front of you (gunmen, players, drivers, people)
+// Free aim: cast the crosshair ray (screen centre) into the world — people, cars, players, buildings, ground —
+// and return the point it lands on. No snapping: what's under the crosshair is what you shoot.
+function aimPoint(range){
+  camera.getWorldDirection(_aimD); _aimO.copy(camera.position);
+  const hd=Math.hypot(_aimD.x,_aimD.z)||1e-6, dxn=_aimD.x/hd, dzn=_aimD.z/hd;
+  let tBest=range+6, who=null;
+  if(_aimD.y<-1e-3) tBest=Math.min(tBest, -_aimO.y/_aimD.y);
+  const yAt=t=>_aimO.y+_aimD.y*t;
+  if(weaponCtx.colliders) for(const c of weaponCtx.colliders){ const s=rayAABB(_aimO.x,_aimO.z,dxn,dzn,c,tBest*hd); if(s<tBest*hd) tBest=s/hd; }
+  const lists=weaponCtx.hitables||[];
+  for(const lst of lists) for(const t of lst){
+    const s=rayCircle(_aimO.x,_aimO.z,dxn,dzn,t.x,t.z,t.r+0.05,tBest*hd);
+    if(s>=tBest*hd) continue;
+    // skip anything between the camera and you (over-the-shoulder camera)
+    if(Math.hypot(t.x-foot.pos.x,t.z-foot.pos.z)<0.7) continue;
+    const y=yAt(s/hd); if(y<0.05||y>1.95) continue;
+    tBest=s/hd; who=t;
+  }
+  if(weaponCtx.targets) for(const t of weaponCtx.targets){ if(!t.up) continue; const s=rayCircle(_aimO.x,_aimO.z,dxn,dzn,t.x,t.z,t.r,tBest*hd); if(s<tBest*hd){ tBest=s/hd; who=t; } }
+  _aimP.copy(_aimD).multiplyScalar(tBest).add(_aimO);
+  return who;
+}
+// AIM: crosshair in the middle of the screen whenever a gun is out; the body turns to the camera and the
+// gun points exactly at whatever is under the crosshair (heading + up/down pitch). No auto-aim.
 function updateAim(dt){
   const ch=$('crosshair');
-  const aiming=controls.input.aim && !!gear().equipped && !dead;
-  if(!aiming){ lockTarget=null; weaponCtx.lock=null; ch.classList.add('hidden'); return; }
-  const w=weaponDef(gear().equipped), range=w?w.range:60;
-  let best=null, bs=Infinity;
-  const consider=(t, bonus)=>{
-    const dx=t.x-foot.pos.x, dz=t.z-foot.pos.z, d=Math.hypot(dx,dz);
-    if(d>range || d<0.8) return;
-    const a=Math.atan2(-dx,-dz), diff=Math.abs(Math.atan2(Math.sin(a-foot.heading), Math.cos(a-foot.heading)));
-    if(diff>0.75) return;
-    const score=diff*2+d/80-bonus;
-    if(score<bs){ bs=score; best=t; }
-  };
-  for(const t of people.hitList) consider(t, t.ref.kind==='enemy'?0.6:0);
-  for(const t of remoteHits) consider(t, 0.5);
-  if(!inside) for(const t of trafficHits){ if(!t.ref.car.empty) consider(t, -0.1); }
-  lockTarget=best;
+  const armed=!!gear().equipped && !dead && !storeOpen;
+  if(!armed){ ch.classList.add('hidden'); weaponCtx.aimH=null; weaponCtx.aimPitch=0; person.userData.aimPitch=0; return; }
   ch.classList.remove('hidden');
-  if(best){
-    const a=Math.atan2(-(best.x-foot.pos.x), -(best.z-foot.pos.z));
-    foot.heading+=Math.atan2(Math.sin(a-foot.heading), Math.cos(a-foot.heading))*Math.min(1, dt*12);
-    weaponCtx.lock={x:best.x, z:best.z};
-    _proj.set(best.x, 1.3, best.z).project(camera);
-    ch.style.left=((_proj.x+1)/2*100).toFixed(2)+'%';
-    ch.style.top=((1-_proj.y)/2*100).toFixed(2)+'%';
-    ch.classList.add('lock');
-  }else{
-    weaponCtx.lock=null;
-    ch.style.left='50%'; ch.style.top='45%';
-    ch.classList.remove('lock');
-  }
-  aimHold=Math.max(aimHold, 0.25);
+  if(controls.input.aim) aimHold=Math.max(aimHold, 0.25);
+  const w=weaponDef(gear().equipped), range=w?w.range:60;
+  const who=aimPoint(range);
+  ch.classList.toggle('lock', !!who && !!who.ref);
+  ch.classList.toggle('dim', aimHold<=0);
+  // muzzle (matches weapons.js) -> aim point
+  const h=foot.heading, mx=foot.pos.x-Math.sin(h)*0.95+Math.cos(h)*0.3, mz=foot.pos.z-Math.cos(h)*0.95-Math.sin(h)*0.3;
+  const dx=_aimP.x-mx, dz=_aimP.z-mz, hdist=Math.hypot(dx,dz);
+  if(hdist>1.2){ weaponCtx.aimH=Math.atan2(-dx,-dz); weaponCtx.aimPitch=Math.atan2(_aimP.y-1.45, hdist); }
+  else { weaponCtx.aimH=camYaw; weaponCtx.aimPitch=camPitch; }
+  person.userData.aimPitch=Math.max(-0.9, Math.min(0.9, weaponCtx.aimPitch));
+  npcPlayer.aiming=aimHold>0; npcPlayer.aimH=weaponCtx.aimH;
 }
 function updateFoot(dt){
   const fx0=foot.pos.x, fz0=foot.pos.z;
-  foot.update(controls.input, dt, footCollide);
+  // camera: drag (touch) / mouse swings it any way you like
+  const lk=controls.consumeLook();
+  const zoomK=aimHold>0 && gear().equipped ? 0.6 : 1;
+  const sens=(TOUCH_UI ? 0.0058 : 0.0026)*zoomK*(save.lookSens||1);
+  if(lk.dx||lk.dy){ camYaw-=lk.dx*sens; camPitch=Math.max(-0.75, Math.min(0.72, camPitch-lk.dy*sens*0.85)); lookIdle=0; }
+  else lookIdle+=dt;
+  // walk relative to the camera; aim/fire = face the camera and strafe
+  const inp=controls.input, mxs=inp.moveX||0, mys=inp.moveY||0, mag=Math.min(1, Math.hypot(mxs, mys));
+  const armedAim=(inp.aim||aimHold>0) && !!gear().equipped;
+  const moveYaw=mag>0.01 ? camYaw-Math.atan2(mxs, mys) : foot.heading;
+  const faceYaw=armedAim ? camYaw : moveYaw;
+  foot.updateFree(moveYaw, mag, faceYaw, !armedAim && inp.run, dt, footCollide, armedAim ? 18 : 9);
+  // gently swing the camera back behind you while walking and not touching it
+  if(!armedAim && mag>0.3 && lookIdle>1.4 && !lk.active){
+    const d=Math.atan2(Math.sin(foot.heading-camYaw), Math.cos(foot.heading-camYaw));
+    camYaw+=d*Math.min(1, dt*0.9*mag);
+    camPitch+=(0.1-camPitch)*Math.min(1, dt*0.6);
+  }
   // wading: slow + sink to the waist/chest in water
   if(!inside){
     footSurf=surfAt(foot.pos.x, foot.pos.z);
@@ -546,6 +579,7 @@ function updateFoot(dt){
   }else footSurf='road';
   person.position.x=foot.pos.x; person.position.z=foot.pos.z;
   person.rotation.y=foot.heading;
+  { const st=Math.floor(foot.phase/Math.PI); if(st!==lastStep){ lastStep=st; if(foot.speed>0.6) audio.step(foot.speed>5, footSurf); } }
   if(controls.consumeCycle()){
     const id=cycleWeapon(gear());
     saveSave(save); syncPersonGear();
@@ -564,7 +598,7 @@ function updateFoot(dt){
   }
   if(controls.input.fire && gear().equipped) aimHold=Math.max(aimHold,0.3);
   aimHold=Math.max(0, aimHold-dt);
-  animateCharacter(person, foot.phase, foot.speed, aimHold>0 && !!gear().equipped, dt);
+  animateCharacter(person, foot.phase, foot.animSpeed ?? foot.speed, aimHold>0 && !!gear().equipped, dt);
   person.position.y -= footSurf==='deep' ? 0.95 : footSurf==='water' ? 0.45 : footSurf==='mud' ? 0.12 : 0;   // wading
   updateFootCamera(dt);
   if(ammoDirty && frameN%120===0){ saveSave(save); ammoDirty=0; }
@@ -593,9 +627,10 @@ function nearBuilding(x, z){
   return best;
 }
 function snapFootCamera(){
-  const h=foot.heading;
-  fwdV.set(-Math.sin(h),0,-Math.cos(h));
-  camPos.set(foot.pos.x-fwdV.x*4.6, 2.6, foot.pos.z-fwdV.z*4.6);
+  camYaw=foot.heading; camPitch=0.1; lookIdle=0;
+  const cp=Math.cos(camPitch);
+  fwdV.set(-Math.sin(camYaw)*cp, Math.sin(camPitch), -Math.cos(camYaw)*cp);
+  camPos.set(foot.pos.x-fwdV.x*4.3+Math.cos(camYaw)*0.42, 1.55-fwdV.y*4.3+0.25, foot.pos.z-fwdV.z*4.3-Math.sin(camYaw)*0.42);
   if(inside){
     const bd=inside.room.bounds, m=0.45;
     camPos.x=Math.max(bd.minX+m, Math.min(bd.maxX-m, camPos.x));
@@ -968,6 +1003,7 @@ function damageCar(impact){
   const before=carDamage.hp;
   const d=carDamage.hit(impact);
   if(d<=0) return 0;
+  if(audio.crash) audio.crash(Math.min(1, 0.25 + d / 30));
   syncCarHP();
   if(carDamage.wrecked) toast('🚛 WRECKED — tow truck incoming…', 2600);
   else if(before>60 && carDamage.hp<=60) toast('🔧 Car damaged — smoking', 1800);
@@ -978,14 +1014,14 @@ function die(){
   dead=true; deadT=0; hp=0; syncHP();
   setAction(null,null,'');
   $('wasted').classList.remove('hidden');
-  if(onFoot && person){ person.rotation.x=-Math.PI/2+0.05; person.position.y=0.12; }
+  if(onFoot && person){ startDeath(person, Math.sin(foot.heading), Math.cos(foot.heading)); }
   if(blood){ const px=onFoot?foot.pos.x:physics.pos.x, pz=onFoot?foot.pos.z:physics.pos.z; blood.pool(px, pz, 2.6); }
   if(typeof onPlayerDied==='function') onPlayerDied();
 }
 function respawn(){
   dead=false; hp=100; syncHP();
   $('wasted').classList.add('hidden');
-  if(person){ person.rotation.x=0; person.position.y=0; }
+  if(person){ resetPose(person); }
   const fee=mode==='tdm' ? 0 : Math.min(500, Math.round(save.cash*0.05));
   if(fee>0){ save.cash-=fee; saveSave(save); syncCash(); }
   leaveFootMode();
@@ -1557,6 +1593,7 @@ function frame(now){
   if(state==='freeroam' && !paused && !garageOpen && !editorOpen){
     npcPlayer.x=onFoot?foot.pos.x:physics.pos.x; npcPlayer.z=onFoot?foot.pos.z:physics.pos.z;
     npcPlayer.alive=!dead; npcPlayer.hidden=!!inside; npcPlayer.inCar=!onFoot;
+    if(audio.listener){ audio.listener(npcPlayer.x, npcPlayer.z); audio.ambience(inside ? 0.12 : onFoot ? 0.7 : 0.35, PRESET_ORDER[todIdx]==='day'); }
     if(!storeOpen && !pickOpen){
       people.update(dt, npcPlayer);
       traffic.update(dt, npcPlayer, onFoot?null:npcPlayer);
@@ -1575,7 +1612,7 @@ function frame(now){
       const bv = policeRes && policeRes.bustFrac > 0.02 ? policeRes.bustFrac * 0.5 : 0;
       $('hurt').style.opacity=String(Math.max(bv, Math.max(0,hurtFlash/0.35)*0.75));
     }
-    if(dead){ deadT+=dt; if(deadT>3.2) respawn(); }
+    if(dead){ deadT+=dt; if(onFoot && person) animateDeath(person, deadT); if(deadT>3.2) respawn(); }
   }
   // missions
   if(playing && missions && missions.active){
@@ -1739,13 +1776,16 @@ async function boot(){
       toast,
       spark:(x,z)=>{ if(smoke) smoke.emit(x, 1.1, z, { vx:(Math.random()-0.5)*5, vy:2.5, vz:(Math.random()-0.5)*5, life:0.5, size:0.6 }); },
       blood:(x,y,z,dx,dz,amt)=>{ blood.hit(x, y, z, dx, dz, amt); },
-      buildCharacter, animateCharacter,
+      buildCharacter, animateCharacter, animateDeath, startDeath, kickHit,
     });
     missions=createMissionRunner({ scene, people, toast, beep:(f,d)=>audio.beep(f,d) });
     weaponCtx.hitables=[people.hitList, trafficHits, remoteHits, police.copHitList()];
-    weaponCtx.onPersonHit=(ref, dmg, dx, dz)=>{
+    weaponCtx.onPersonHit=(ref, dmg, dx, dz, head)=>{
+      if(head && audio.impact) audio.impact('head');
+      else if(audio.impact) audio.impact('flesh');
       if(ref.kind==='ped' || ref.kind==='enemy'){
         const killed=people.damage(ref, dmg, dx, dz);
+        if(killed && head) toast('🎯 HEADSHOT', 900);
         if(killed && ref.kind==='ped') commitCrime('pedKill', ref.x, ref.z);
       }
       else if(ref.kind==='footcop'){
@@ -1777,6 +1817,7 @@ async function boot(){
       steal:()=>{ const c=traffic.cars[0]; foot.reset(c.x+2,c.z,0); stealCar(c); return carDef.name; }, physics:()=>physics, missions:()=>missions, setDone:n=>{save.missionsDone=n;}, people:()=>people, traffic:()=>traffic, hp:()=>hp, hurt:d=>hurtPlayer(d),
       police:()=>police, wanted:n=>{ if(police) police.debugWanted(n); return police&&police.stars; },
       car:()=>({vis:carGroup.visible, inScene:!!carGroup.parent, pos:carGroup.position.toArray().map(v=>+v.toFixed(1)), id:carDef.id, phys:[+physics.pos.x.toFixed(1),+physics.pos.z.toFixed(1)], cam:camera.position.toArray().map(v=>+v.toFixed(1))}),
+      look:(y,p)=>{ camYaw=y; camPitch=p; }, lowgfx:()=>{ if(qm) qm.setMode('low'); }, aimInfo:()=>({camYaw,camPitch,aimH:weaponCtx.aimH,aimPitch:weaponCtx.aimPitch,heading:foot.heading,aimHold}), arm:id=>{ const g=gear(); if(!g.weapons.includes(id)) g.weapons.push(id); g.ammo[id]=999; g.equipped=id; syncPersonGear(); },
       cam:()=>({c:camera.position.toArray().map(v=>+v.toFixed(2)), p:person.position.toArray().map(v=>+v.toFixed(2)), pv:person.visible, f:[foot.pos.x,foot.pos.z,foot.heading]}) };
     rebuildCar();
     physics=new CarPhysics(carStats);
@@ -1807,8 +1848,8 @@ async function boot(){
       onTab:t=>editorTab(t),
     });
     mp=createMultiplayer({
-      scene, CAR_DEFS, buildCar, applyCarSkin, buildCharacter, setOutfit, setHeldWeapon, animateCharacter, unpackLook,
-      remoteShot:(a,b,c,d)=>weapons.remoteShot(a,b,c,d),
+      scene, CAR_DEFS, buildCar, applyCarSkin, buildCharacter, setOutfit, setHeldWeapon, animateCharacter, animateDeath, startDeath, resetPose, unpackLook,
+      remoteShot:(a,b,c,d)=>{ weapons.remoteShot(a,b,c,d); if(audio.shot) audio.shot('rifle', a, b); },
       localBuilding:()=>inside?inside.b.id:-1,
       onHit:(p)=>{
         if(mode!=='tdm' || !tdm.team || p.tm===tdm.team || dead) return;

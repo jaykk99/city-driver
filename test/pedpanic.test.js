@@ -16,14 +16,15 @@ function makePeople(){
 // loop fields are enough — same style as the people.witnesses tests.
 const ped = (x, z, state = 'walk') => ({ state, x, z, cx:0, cz:0, p:0, dir:1, flee:0 });
 
+const PANIC = new Set(['react', 'escape', 'cower', 'surrender', 'flee']);
 describe('pedestrians flee gunfire', () => {
   it('scares nearby peds, leaves distant ones walking, ignores the dead', () => {
     const people = makePeople();
     const near = ped(5, 0), far = ped(100, 0), dead = ped(2, 0, 'dead');
     people.peds.push(near, far, dead);
     people.scare(0, 0, 45);
-    assert.equal(near.state, 'flee');
-    assert.ok(near.flee > 0, 'fleeing ped needs a running timer');
+    assert.ok(PANIC.has(near.state), `near ped should react, got ${near.state}`);
+    assert.ok(near.react > 0, 'a startled ped needs a (short) reaction time before acting');
     assert.equal(far.state, 'walk');
     assert.equal(dead.state, 'dead');
   });
@@ -33,16 +34,22 @@ describe('pedestrians flee gunfire', () => {
     people.peds.push(edge, inside);
     people.scare(0, 0, 45);
     assert.equal(edge.state, 'walk');
-    assert.equal(inside.state, 'flee');
+    assert.ok(PANIC.has(inside.state));
   });
   it('fresh gunfire refreshes the flee timer, so a shootout keeps peds running', () => {
     const people = makePeople();
     const p = ped(5, 0);
     people.peds.push(p);
     people.scare(0, 0, 45);
-    p.flee = 1;                       // almost calmed down
+    p.state = 'escape'; p.flee = 1;   // running, almost calmed down
     people.scare(0, 0, 45);           // another shot rings out
     assert.ok(p.flee > 1, `timer should refresh, got ${p.flee}`);
-    assert.equal(p.state, 'flee');
+    assert.equal(p.state, 'escape');
+  });
+  it('each startled ped picks a human reaction: run, hide, surrender or flee', () => {
+    const people = makePeople();
+    const seen = new Set();
+    for(let i = 0; i < 200; i++){ const p = ped(3, 0); people.peds.length = 0; people.peds.push(p); people.scare(0, 0, 45); seen.add(p.next); }
+    for(const k of ['escape', 'cower', 'surrender', 'flee']) assert.ok(seen.has(k), `never chose ${k}`);
   });
 });

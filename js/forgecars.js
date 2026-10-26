@@ -16,6 +16,7 @@ import { tireSize } from './forge/builders/vehiclesim.js';
 import { rimMaterial } from './forge/builders/wheel.js';
 import { carPaint, glass as forgeGlass, lens, Q } from './forge/render/materials.js';
 import { VEHICLE_DEFAULTS } from './forge/vehicleDefaults.js';
+import { addCarDetail } from './forge/builders/cardetail.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // Phones get Forge's "balanced" mesh density (fewer loft stations / wheel segments); desktops get "high".
@@ -35,7 +36,24 @@ export const FORGE_DESIGNS = {
   taxi:   { text:'four-door sedan, boxy, upright windshield', rim:'steelie', rimSize:16, finish:'gloss', seed:808, len:4.64, W:1.84, wb:2.8, R:0.33 },
   van:    { text:'delivery van, boxy, tall', rim:'steelie', rimSize:16, finish:'gloss', seed:909, len:5.0, W:2.0, wb:3.2, R:0.36 },
   police: { text:'four-door sedan, sleek, black trim, tinted', rim:'sixspoke', rimSize:18, finish:'gloss', seed:1001, len:4.64, W:1.84, wb:2.8, R:0.33 },
-  hyper:  { text:'hypercar, mid-engine, very low, aero, gt wing, wide', rim:'turbine', rimSize:20, finish:'candy', seed:1102, len:4.85, W:2.04, wb:2.8, R:0.34, spoiler:'gtwing' },
+  hyper:  { text:'hypercar, mid-engine, very low, aero, gt wing, wide', rim:'turbine', rimSize:20, finish:'candy', seed:1102, len:4.85, W:2.04, wb:2.8, R:0.34, spoiler:'gtwing', tailBar:true },
+  // ---- hero cars: described in words, then the key body numbers pinned so each one has a strong,
+  // deliberate silhouette (still built from numbers by the Forge lofter — no stored shapes)
+  brawler:{ text:'muscle fastback, two-door, long hood, wide, hood scoop, racing stripes, quad exhaust, v8',
+    rim:'fivespoke', rimSize:19, finish:'gloss', seed:1201, len:4.79, W:1.95, wb:2.72, R:0.355, stripes:'racing', stripeColor:'#141416', exhaust:'quad', spoiler:'lip',
+    design:{ height:1.33, hood:0.36, windshield:0.64, roofLength:0.15, rearWindow:0.94, noseHeight:0.5, cowlHeight:0.76, deckHeight:0.78, tailHeight:0.72, beltLine:0.64, tumblehome:0.72, boxy:0.6, round:0.45, flares:0 } },
+  kaze:   { text:'sports coupe, two-door, curvy, sleek, slim lights, lip spoiler, inline six twin turbo',
+    rim:'split', rimSize:18, rimFinish:'gunmetal', finish:'pearl', seed:1302, len:4.5, W:1.84, wb:2.55, R:0.33, spoiler:'lip', tailBar:true, exhaust:'single',
+    design:{ height:1.27, hood:0.34, windshield:0.8, roofLength:0.15, rearWindow:0.8, noseHeight:0.42, cowlHeight:0.66, deckHeight:0.77, tailHeight:0.71, beltLine:0.6, tumblehome:0.7, boxy:0.35, round:0.8, flares:0 } },
+  vanta:  { text:'mid-engine supercar, wedge, low, wide, vented hood, quad exhaust, v10',
+    rim:'multispoke', rimSize:20, rimFinish:'black', finish:'metallic', seed:1403, len:4.56, W:1.98, wb:2.65, R:0.34, spoiler:'wing', tailBar:true, exhaust:'quad',
+    design:{ height:1.13, noseHeight:0.34, cowlHeight:0.58, deckHeight:0.82, tailHeight:0.76, windshield:0.9, rearWindow:0.84, roofLength:0.13, beltLine:0.55, tumblehome:0.66, boxy:0.75, round:0.2, flares:0.05 } },
+  rally:  { text:'hot hatch, rally, wide, fender flares, awd, turbo, mud',
+    rim:'sixspoke', rimSize:17, rimFinish:'gold', finish:'gloss', seed:1504, len:4.16, W:1.86, wb:2.56, R:0.33, tire:'allterrain', spoiler:'wing', rollCage:true, exhaust:'single',
+    design:{ height:1.44, hood:0.25, windshield:0.6, roofLength:0.44, rearWindow:0.16, noseHeight:0.5, cowlHeight:0.7, deckHeight:0.58, tailHeight:0.54, beltLine:0.6, tumblehome:0.8, boxy:0.62, round:0.4, clearance:0.18, flares:0.05 } },
+  baja:   { text:'pickup truck, prerunner, offroad, wide, fender flares, beadlocks, v8',
+    rim:'beadlock', rimSize:17, rimFinish:'black', finish:'satin', seed:1605, len:5.42, W:2.1, wb:3.3, R:0.44, tire:'allterrain', exhaust:'dual',
+    design:{ height:1.9, clearance:0.3, hood:0.31, windshield:0.36, roofLength:0.17, noseHeight:0.6, cowlHeight:0.72, beltLine:0.6, tumblehome:0.88, boxy:0.86, round:0.35, flares:0.06, trim:'black' } },
 };
 
 const toHex = n => '#' + (n >>> 0).toString(16).padStart(6, '0').slice(-6);
@@ -44,7 +62,7 @@ const toHex = n => '#' + (n >>> 0).toString(16).padStart(6, '0').slice(-6);
 export function forgeParamsFor(id, colorHex = 0xc01818){
   const spec = FORGE_DESIGNS[id] || FORGE_DESIGNS.sport;
   const d = designFromText(spec.text, spec.seed);
-  const P = { ...VEHICLE_DEFAULTS, ...d };
+  const P = { ...VEHICLE_DEFAULTS, ...d, ...(spec.design || {}) };
   // footprint from the game
   P.length = spec.len; P.width = spec.W; P.wheelbase = Math.min(0.86, spec.wb / spec.len); P.overhangF = 0.5;
   // tire sized so its radius matches the game's wheel radius
@@ -52,16 +70,17 @@ export function forgeParamsFor(id, colorHex = 0xc01818){
   const rimR = P.rimSize * 0.0254 / 2;
   P.sidewall = Math.round(Math.max(25, Math.min(90, (spec.R - rimR) / (P.tireWidthF / 1000) * 100)));
   P.skinnies = false;
-  P.rim = spec.rim; P.rimFinish = spec.rimFinish || 'polished'; P.tire = spec.tire || 'sport';
+  P.rim = spec.rim; P.rimFinish = spec.rimFinish || (P.rimFinish === 'black' ? 'black' : 'polished'); P.tire = spec.tire || 'sport';
   if (P.tire === 'slick') P.tire = 'sport';           // road car look; slicks come from the tuning shop
   if (spec.headlights) P.headlights = spec.headlights;
   if (spec.spoiler) P.spoiler = spec.spoiler;
   if (spec.exhaust) P.exhaust = spec.exhaust;
   // the game draws its own light bars / bull bars / racks / wings from the tuning shop, keep the shell clean
-  P.lightBar = false; P.bullBar = false; P.roofRack = id === 'suv'; P.rollCage = false; P.parachute = false; P.wheelieBar = false;
+  P.lightBar = false; P.bullBar = false; P.roofRack = id === 'suv'; P.rollCage = !!spec.rollCage; P.parachute = false; P.wheelieBar = false;
   P.lift = 0; P.hoodOpen = false; P.interior = true;
   P.paint = toHex(colorHex); P.finish = spec.finish || 'metallic';
-  P.stripes = 'none';
+  P.stripes = spec.stripes || 'none'; if (spec.stripeColor) P.stripeColor = spec.stripeColor;
+  P.hd = true; P.tailBar = !!spec.tailBar; P.quadLights = !!spec.quadLights;
   return P;
 }
 
@@ -100,6 +119,8 @@ function makeTemplate(id){
   }
   // the hood never opens in the game, so the engine bay (~12k triangles) is dropped
   if (v.body){ const eng = root.userData.engine; if (eng && eng.parent) eng.parent.remove(eng); }
+  // high-detail fascias, lights, seams, skirts... (built from this shell's own numbers)
+  if (P.hd && v.body) addCarDetail(v, v.body, { paint:paintM, tail:tailM });
   body.add(root);
 
   // synthetic side profile in the old format (+X = front, Y up) so stripes, racks, wings, drivers line up
