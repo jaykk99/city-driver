@@ -1711,7 +1711,7 @@ async function boot(){
     weapons=createWeapons(scene);
     Object.assign(weaponCtx, { save, colliders:city.colliders, targets:shops.targets, audio, toast,
       onTargetHit:()=>{ addCash(TARGET_PAY); toast('TARGET +$'+TARGET_PAY, 900); },
-      onShot:shots=>{ if(mp) mp.sendShots(shots); if(shots.length){ commitCrime('gunshot', weaponCtx.pos.x, weaponCtx.pos.z, WITNESS_LOUD_RADIUS); if(traffic) traffic.panicAt(weaponCtx.pos.x, weaponCtx.pos.z); } } });
+      onShot:shots=>{ if(mp) mp.sendShots(shots); if(shots.length){ commitCrime('gunshot', weaponCtx.pos.x, weaponCtx.pos.z, WITNESS_LOUD_RADIUS); if(traffic) traffic.panicAt(weaponCtx.pos.x, weaponCtx.pos.z); if(people) people.scare(weaponCtx.pos.x, weaponCtx.pos.z, 45); } } });
     interiors=createInteriors(scene);
     blood=createBlood(scene);
     people=createPeople({ scene, blood, audio, count:14,
