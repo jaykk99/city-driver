@@ -38,6 +38,7 @@ import { buildStats, normalizeBuild, migrateLegacy, timeslip } from './tuning.js
 import { createTuningUI } from './tuningui.js';
 import { createMissionRunner, generateMission, TOTAL_MISSIONS, EMERALD_FORTUNE } from './missions.js';
 import { CarDamage } from './cardamage.js';
+import { FuelTank, nearestStation, STATION_RADIUS } from './fuel.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
 
@@ -92,6 +93,7 @@ function updateWater(dt){
 let blood=null, people=null, traffic=null, trafficHits=null;
 let hp=100, dead=false, deadT=0, hurtFlash=0;
 let carDamage=new CarDamage(), lastDmgCarId=null, prevDriveSpeed=null, crashCool=0, wreckT=0;
+let fuelTank=new FuelTank(), fuelLowWarned=false, fuelEmptyT=0, stationDwellT=0;
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
 let missions=null, boardOpen=false, lastGear=0;
 // engine character per car: cylinders, idle, redline
@@ -170,7 +172,9 @@ function rebuildCar(){
   carStats=buildStats(carDef, bld);
   // a different car means fresh bodywork; tuning the car you own never
   // repairs it (refreshSceneKeep rebuilds the same car id)
-  if(carDef.id!==lastDmgCarId){ carDamage=new CarDamage(); lastDmgCarId=carDef.id; prevDriveSpeed=null; syncCarHP(); }
+  if(carDef.id!==lastDmgCarId){ carDamage=new CarDamage(); lastDmgCarId=carDef.id; prevDriveSpeed=null; syncCarHP();
+    // a different car means a full tank too; tuning the car you own never refuels it
+    fuelTank=new FuelTank(); fuelLowWarned=false; fuelEmptyT=0; stationDwellT=0; syncFuel(); }
   applyBuildVisual(carGroup, { rideHeight:carStats.rideHeight, tireScale:carStats.tireScale, offset:carStats.offset,
     slicks:bld.tires==='slicks', adder:bld.adder, body:bld.body });
   etCache=null;
@@ -998,6 +1002,15 @@ function syncCarHP(){
   f.style.background = h>60 ? '#4ade80' : h>30 ? '#fbbf24' : '#ef4444';
   $('car-hud').classList.toggle('hidden', !!onFoot);
 }
+// ---------------- fuel ----------------
+// Same shape as syncCarHP: the bar hides while on foot.
+function syncFuel(){
+  const f=$('fuel-fill'); if(!f) return;
+  const l=fuelTank?fuelTank.level:100;
+  f.style.width=Math.max(0,l)+'%';
+  f.style.background = l>20 ? '#4ade80' : l>0 ? '#fbbf24' : '#ef4444';
+  $('fuel-hud').classList.toggle('hidden', !!onFoot);
+}
 function damageCar(impact){
   if(!carDamage || onFoot || dead || state!=='freeroam') return 0;
   const before=carDamage.hp;
@@ -1531,13 +1544,43 @@ function frame(now){
     updateAction();
     if(controls.consumeAction()) doAction();
     syncCarHP();   // hides the car bar while on foot
+    syncFuel();    // hides the fuel bar while on foot
   }else if(playing){
     physics.surf=surfaceGrip(surfAt(physics.pos.x, physics.pos.z), carStats.offroad, carStats.snorkel);
-    // battered cars lose pace; a wrecked car stalls until the tow arrives
+    // battered cars lose pace; a wrecked car stalls until the tow arrives;
+    // an empty tank stalls just the same
     const dmgF=carDamage?carDamage.perfFactor():1;
-    const driveInput=dmgF>=1 ? controls.input
-      : { ...controls.input, throttle: dmgF<=0 ? 0 : (controls.input.throttle||0)*dmgF };
+    const fuelF=fuelTank&&fuelTank.empty?0:1;
+    const driveInput=dmgF>=1 && fuelF>=1 ? controls.input
+      : { ...controls.input, throttle: (dmgF<=0||fuelF<=0) ? 0 : (controls.input.throttle||0)*dmgF };
     tele=physics.update(driveInput, dt, collide);
+    // fuel: driving burns it; an empty tank stalls, stations refill cheap,
+    // and the fuel truck rescues a stalled car at the delivery price
+    if(fuelTank){
+      fuelTank.consume(dt, Math.abs(tele.speed), !!(controls.input.nitro));
+      syncFuel();
+      if(fuelTank.low && !fuelLowWarned){ fuelLowWarned=true; toast('⛽ Low fuel — pull into a gas station', 2200); }
+      else if(!fuelTank.low) fuelLowWarned=false;
+      if(fuelTank.empty){
+        fuelEmptyT+=dt;
+        if(fuelEmptyT>3){
+          const d=fuelTank.deliver(); const paid=Math.min(save.cash, d.cost);
+          if(paid>0) addCash(-paid);
+          toast(paid>0 ? '⛽ Fuel truck +'+d.added+' — $'+paid.toLocaleString() : '⛽ Fuel truck +'+d.added, 2400);
+          fuelEmptyT=0; fuelLowWarned=false; syncFuel();
+        }
+      }else fuelEmptyT=0;
+      const st=nearestStation(physics.pos.x, physics.pos.z);
+      if(st.dist<=STATION_RADIUS && Math.abs(tele.speed)<1 && !fuelTank.full){
+        stationDwellT+=dt;
+        if(stationDwellT>=2){
+          const f=fuelTank.fill(); const paid=Math.min(save.cash, f.cost);
+          if(paid>0) addCash(-paid);
+          toast(paid>0 ? '⛽ Filled up — $'+paid.toLocaleString() : '⛽ Filled up', 2200);
+          stationDwellT=0; fuelLowWarned=false; syncFuel();
+        }
+      }else stationDwellT=0;
+    }
     // crash detector: a one-frame speed collapse only comes from a shunt
     // (braking and drag bleed speed slowly). tele.speed lags collisions by
     // a frame, so this catches walls and traffic alike.
