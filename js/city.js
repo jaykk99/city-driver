@@ -15,6 +15,8 @@ import { mergeGeometries as _merge } from 'three/addons/utils/BufferGeometryUtil
 const mergeGeometries = list => _merge(list.map(g => g.index ? g.toNonIndexed() : g));
 import { BLOCKS, BLOCK, ROAD_W, PITCH, GRID_HALF, LINES, LANE, blockCenter, RED_RIVER, ASSINIBOINE, BRIDGE_Z, BRIDGE_HALF,
   STRIP_X, STRIP_HALF, SPECIAL, isSpecialBlock, districtOf, MAIN_X, PORTAGE_Z, NS_NAMES, EW_NAMES, OFFROAD, MUD_PITS, ROCKS, WORLD_HALF, RIVER_ZN, RIVER_ZS, ASSINI_XW } from './world.js';
+import { STATIONS } from './fuel.js';
+import { stationLayout, buildFuelStationMeshes } from './fuelstations.js';
 
 const SEED = 20481;
 function mulberry32(a){
@@ -368,7 +370,10 @@ export function buildCity(scene, reserved = []){
     landmarkBank(scene, px, pz, addCol, buildingInfo);
     pmLots.push({ minX:px - 14, maxX:px + 14, minZ:pz - 13, maxZ:pz + 13 });
   }
-  const allReserved = reserved.concat(pmLots);
+  // gas-station forecourts: reserved like the Portage & Main lots, so no
+  // building, tree, parked car or furniture spawns on a pad or its pumps
+  const stationLayouts = STATIONS.map(stationLayout);
+  const allReserved = reserved.concat(pmLots, stationLayouts.map(l => l.lot));
 
   // ---- regular blocks ----
   const inset = 4;
@@ -591,6 +596,20 @@ export function buildCity(scene, reserved = []){
 
   // ---------- street furniture: bus shelters, benches, hydrants, bins ----------
   buildFurniture(LM, blocks, allReserved);
+
+  // ---------- gas stations: canopy, pumps and sign on each forecourt ----------
+  // (the fuel system refills at these points; now the player can see them)
+  {
+    const gasTex = makeCanvas(256, 144, (g, w, h) => {
+      g.fillStyle = '#ffc21a'; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#c8102e'; g.font = 'bold 84px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText('GAS', w / 2, h / 2 + 4);
+    });
+    for(const L of stationLayouts){
+      scene.add(buildFuelStationMeshes(THREE, L, { signTexture: gasTex }));
+      for(const c of L.colliders) addCol(c.minX, c.maxX, c.minZ, c.maxZ);
+    }
+  }
 
   // ---------- street-name signs at intersections along Portage and Main ----------
   buildStreetSigns(LM);

@@ -18,14 +18,16 @@ export const DELIVERY_PRICE = 5;       // $ per unit from the fuel truck
 export const DELIVERY_UNITS = 25;      // units the fuel truck brings
 export const STATION_RADIUS = 22;      // m: pull onto the shoulder by a station
 
-// Forecourt points (pump meshes are a follow-up; the radius is generous so
-// a car pulled onto the shoulder beside one counts). Both sit one block
-// corner off their intersection, 18 m from each road centre line.
+// Forecourt points (visible stations are built by fuelstations.js; the radius
+// is generous so a car pulled onto the pad beside the pumps counts). Both sit
+// one block corner off their intersection, 18 m from each road centre line.
 // Portage & Main: (203, -55) is 18 m from Main St (x=185) and Portage Ave (z=-37).
 // Arlington & York: (-203, 129) is 18 m from Arlington St (x=-185) and York Ave (z=111).
+// `axis` is the road the pump row runs parallel to; `toward` steps from the
+// station point toward its intersection (the corner the price sign stands on).
 export const STATIONS = [
-  { name: 'Portage & Main', x: 203, z: -55 },
-  { name: 'Arlington & York', x: -203, z: 129 },
+  { name: 'Portage & Main', x: 203, z: -55, axis: 'z', toward: [-1, 1] },
+  { name: 'Arlington & York', x: -203, z: 129, axis: 'x', toward: [1, -1] },
 ];
 
 // Nearest station to (x, z), with its distance. Never null: the list is fixed.
