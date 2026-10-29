@@ -1,0 +1,13 @@
+# Cloudflare Pages config — City Driver game. PREPARED 2026-10-29, not
+# yet connected. To go live on Cloudflare: Workers & Pages -> Create ->
+# Pages -> Connect to Git -> pick this repo, production branch
+# "master", output dir ".". js/bundle.js is committed prebuilt, so no
+# build command is required; optionally set build command
+# "npm run build" to rebuild the bundle on every push. Creates
+# city-driver.pages.dev as an ADDITIONAL home; it does not change the
+# current live site (jaykk99.github.io/city-driver). The game client is
+# static; the multiplayer socket.io server is a separate backend and is
+# NOT part of this Pages prep. No database wiring.
+name = "city-driver"
+pages_build_output_dir = "."
+compatibility_date = "2026-10-29"
