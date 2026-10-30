@@ -81,6 +81,25 @@ export function stationLayouts(){
   return STATIONS.map(stationLayout);
 }
 
+// A car parked alongside a pump island sits ~2-3 m from the pump (island
+// half-width 0.8 m + car half-width ~1 m); 5 m leaves room for a sloppy
+// park job but excludes the station midpoint (6 m from either pump) and
+// the road shoulder — refuelling means pulling up to a pump, not just
+// stopping somewhere on the forecourt.
+export const PUMP_REFUEL_DIST = 5;
+
+// Nearest pump island to (x, z), with its distance. Never null: the list
+// is fixed, same as nearestStation.
+export function nearestPump(x, z){
+  let best = null, bestD = Infinity;
+  for(const L of stationLayouts())
+    for(const p of L.pumps){
+      const d = Math.hypot(p.x - x, p.z - z);
+      if(d < bestD){ best = p; bestD = d; }
+    }
+  return { pump: best, dist: bestD };
+}
+
 // Meshes for one layout, in the layout's local frame (long axis = +X), on a
 // group positioned at the station point and rotated for the row axis.
 // opts.signTexture: optional canvas texture for the price sign face.

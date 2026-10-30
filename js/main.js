@@ -38,7 +38,8 @@ import { buildStats, normalizeBuild, migrateLegacy, timeslip } from './tuning.js
 import { createTuningUI } from './tuningui.js';
 import { createMissionRunner, generateMission, TOTAL_MISSIONS, EMERALD_FORTUNE } from './missions.js';
 import { CarDamage } from './cardamage.js';
-import { FuelTank, nearestStation, STATION_RADIUS } from './fuel.js';
+import { FuelTank, nearestStation, STATION_RADIUS, FUEL_FILL_RATE } from './fuel.js';
+import { nearestPump, PUMP_REFUEL_DIST } from './fuelstations.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
 
@@ -93,7 +94,7 @@ function updateWater(dt){
 let blood=null, people=null, traffic=null, trafficHits=null;
 let hp=100, dead=false, deadT=0, hurtFlash=0;
 let carDamage=new CarDamage(), lastDmgCarId=null, prevDriveSpeed=null, crashCool=0, wreckT=0;
-let fuelTank=new FuelTank(), fuelLowWarned=false, fuelEmptyT=0, stationDwellT=0;
+let fuelTank=new FuelTank(), fuelLowWarned=false, fuelEmptyT=0, pumpHintShown=false, fillSessionCost=0;
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
 let missions=null, boardOpen=false, lastGear=0;
 // engine character per car: cylinders, idle, redline
@@ -174,7 +175,7 @@ function rebuildCar(){
   // repairs it (refreshSceneKeep rebuilds the same car id)
   if(carDef.id!==lastDmgCarId){ carDamage=new CarDamage(); lastDmgCarId=carDef.id; prevDriveSpeed=null; syncCarHP();
     // a different car means a full tank too; tuning the car you own never refuels it
-    fuelTank=new FuelTank(); fuelLowWarned=false; fuelEmptyT=0; stationDwellT=0; syncFuel(); }
+    fuelTank=new FuelTank(); fuelLowWarned=false; fuelEmptyT=0; pumpHintShown=false; fillSessionCost=0; syncFuel(); }
   applyBuildVisual(carGroup, { rideHeight:carStats.rideHeight, tireScale:carStats.tireScale, offset:carStats.offset,
     slicks:bld.tires==='slicks', adder:bld.adder, body:bld.body });
   etCache=null;
@@ -1571,15 +1572,26 @@ function frame(now){
         }
       }else fuelEmptyT=0;
       const st=nearestStation(physics.pos.x, physics.pos.z);
+      // Pump-side refuelling: sitting still on the forecourt is not enough
+      // — pull up alongside a pump island and the gauge climbs at the fill
+      // rate; driving off mid-fill keeps the fuel (and the charge) so far.
       if(st.dist<=STATION_RADIUS && Math.abs(tele.speed)<1 && !fuelTank.full){
-        stationDwellT+=dt;
-        if(stationDwellT>=2){
-          const f=fuelTank.fill(); const paid=Math.min(save.cash, f.cost);
+        const np=nearestPump(physics.pos.x, physics.pos.z);
+        if(np.dist<=PUMP_REFUEL_DIST){
+          const f=fuelTank.add(FUEL_FILL_RATE*dt);
+          const paid=Math.min(save.cash, f.cost);
           if(paid>0) addCash(-paid);
-          toast(paid>0 ? '⛽ Filled up — $'+paid.toLocaleString() : '⛽ Filled up', 2200);
-          stationDwellT=0; fuelLowWarned=false; syncFuel();
+          fillSessionCost+=paid;
+          if(fuelTank.full){
+            toast(fillSessionCost>0 ? '⛽ Filled up — $'+fillSessionCost.toLocaleString() : '⛽ Filled up', 2200);
+            fillSessionCost=0; fuelLowWarned=false; pumpHintShown=false;
+          }
+          syncFuel();
+        }else{
+          fillSessionCost=0;
+          if(!pumpHintShown){ pumpHintShown=true; toast('⛽ Pull up to a pump to refuel', 2200); }
         }
-      }else stationDwellT=0;
+      }else{ pumpHintShown=false; fillSessionCost=0; }
     }
     // crash detector: a one-frame speed collapse only comes from a shunt
     // (braking and drag bleed speed slowly). tele.speed lags collisions by

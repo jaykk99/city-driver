@@ -17,6 +17,9 @@ export const STATION_PRICE = 2;        // $ per unit at a station
 export const DELIVERY_PRICE = 5;       // $ per unit from the fuel truck
 export const DELIVERY_UNITS = 25;      // units the fuel truck brings
 export const STATION_RADIUS = 22;      // m: pull onto the shoulder by a station
+export const FUEL_FILL_RATE = 25;       // units/s while parked at a pump: a
+                                        // full tank takes ~4 s, and driving
+                                        // off mid-fill keeps what you got
 
 // Forecourt points (visible stations are built by fuelstations.js; the radius
 // is generous so a car pulled onto the pad beside the pumps counts). Both sit
@@ -70,6 +73,15 @@ export class FuelTank {
     const added = FUEL_MAX - this.level;
     const cost = Math.ceil(added * STATION_PRICE);
     this.level = FUEL_MAX;
+    return { added, cost };
+  }
+  // Partial top-up of `units` at the station price, capped at full. This is
+  // what pump-side refuelling uses: the gauge climbs while you sit at the
+  // pump, and driving off mid-fill keeps the fuel (and the charge) so far.
+  add(units){
+    const added = Math.min(Math.max(0, units), FUEL_MAX - this.level);
+    const cost = Math.ceil(added * STATION_PRICE);
+    this.level += added;
     return { added, cost };
   }
   // Fuel-truck delivery: a fixed top-up at the delivery price, capped at full.
