@@ -40,6 +40,7 @@ import { createMissionRunner, generateMission, TOTAL_MISSIONS, EMERALD_FORTUNE }
 import { CarDamage } from './cardamage.js';
 import { FuelTank, nearestStation, STATION_RADIUS, FUEL_FILL_RATE } from './fuel.js';
 import { nearestPump, PUMP_REFUEL_DIST } from './fuelstations.js';
+import { FuelTruckRun, buildFuelTruckMeshes } from './fueltruck.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
 
@@ -95,6 +96,7 @@ let blood=null, people=null, traffic=null, trafficHits=null;
 let hp=100, dead=false, deadT=0, hurtFlash=0;
 let carDamage=new CarDamage(), lastDmgCarId=null, prevDriveSpeed=null, crashCool=0, wreckT=0;
 let fuelTank=new FuelTank(), fuelLowWarned=false, fuelEmptyT=0, pumpHintShown=false, fillSessionCost=0;
+let fuelTruck=null, fuelTruckMesh=null, fuelTruckCost=0;   // visible delivery run, if one is out
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
 let missions=null, boardOpen=false, lastGear=0;
 // engine character per car: cylinders, idle, redline
@@ -175,7 +177,10 @@ function rebuildCar(){
   // repairs it (refreshSceneKeep rebuilds the same car id)
   if(carDef.id!==lastDmgCarId){ carDamage=new CarDamage(); lastDmgCarId=carDef.id; prevDriveSpeed=null; syncCarHP();
     // a different car means a full tank too; tuning the car you own never refuels it
-    fuelTank=new FuelTank(); fuelLowWarned=false; fuelEmptyT=0; pumpHintShown=false; fillSessionCost=0; syncFuel(); }
+    fuelTank=new FuelTank(); fuelLowWarned=false; fuelEmptyT=0; pumpHintShown=false; fillSessionCost=0; syncFuel();
+    // a new car strands no truck: drop any delivery run aimed at the old one
+    if(fuelTruckMesh) scene.remove(fuelTruckMesh);
+    fuelTruck=null; fuelTruckMesh=null; fuelTruckCost=0; }
   applyBuildVisual(carGroup, { rideHeight:carStats.rideHeight, tireScale:carStats.tireScale, offset:carStats.offset,
     slicks:bld.tires==='slicks', adder:bld.adder, body:bld.body });
   etCache=null;
@@ -1564,13 +1569,34 @@ function frame(now){
       else if(!fuelTank.low) fuelLowWarned=false;
       if(fuelTank.empty){
         fuelEmptyT+=dt;
-        if(fuelEmptyT>3){
-          const d=fuelTank.deliver(); const paid=Math.min(save.cash, d.cost);
-          if(paid>0) addCash(-paid);
-          toast(paid>0 ? '⛽ Fuel truck +'+d.added+' — $'+paid.toLocaleString() : '⛽ Fuel truck +'+d.added, 2400);
-          fuelEmptyT=0; fuelLowWarned=false; syncFuel();
+        // The rescue is a real truck now, not an instant top-up: after 3 s
+        // stalled it drives in along the car's heading, parks beside the
+        // car and fills it progressively (fueltruck.js), then drives off.
+        if(!fuelTruck && fuelEmptyT>3){
+          fuelTruck=new FuelTruckRun(physics.pos.x, physics.pos.z, physics.heading);
+          fuelTruckMesh=buildFuelTruckMeshes(THREE);
+          fuelTruckMesh.position.set(fuelTruck.x, 0, fuelTruck.z);
+          fuelTruckMesh.rotation.y=fuelTruck.heading;
+          scene.add(fuelTruckMesh);
+          fuelTruckCost=0; fuelEmptyT=0; fuelLowWarned=false;
         }
       }else fuelEmptyT=0;
+      if(fuelTruck){
+        const r=fuelTruck.update(dt, fuelTank);
+        if(r.arrived) toast('⛽ Fuel truck arrived — filling up', 2200);
+        if(r.added>0){
+          const paid=Math.min(save.cash, r.cost);
+          if(paid>0) addCash(-paid);
+          fuelTruckCost+=paid; syncFuel();
+        }
+        if(r.deliveryFinished){
+          toast(fuelTruckCost>0 ? '⛽ Fuel truck +'+Math.round(fuelTruck.delivered)+' — $'+fuelTruckCost.toLocaleString() : '⛽ Fuel truck +'+Math.round(fuelTruck.delivered), 2400);
+          fuelTruckCost=0;
+        }
+        fuelTruckMesh.position.set(fuelTruck.x, 0, fuelTruck.z);
+        fuelTruckMesh.rotation.y=fuelTruck.heading;
+        if(fuelTruck.done){ scene.remove(fuelTruckMesh); fuelTruck=null; fuelTruckMesh=null; }
+      }
       const st=nearestStation(physics.pos.x, physics.pos.z);
       // Pump-side refuelling: sitting still on the forecourt is not enough
       // — pull up alongside a pump island and the gauge climbs at the fill

@@ -84,6 +84,16 @@ export class FuelTank {
     this.level += added;
     return { added, cost };
   }
+  // Partial fuel-truck delivery at the delivery price, capped at full.
+  // This is what the visible truck (fueltruck.js) uses: it fills the tank
+  // progressively over its dwell beside the stalled car, so a near-full
+  // tank or an interrupted run keeps only what was actually delivered.
+  deliverPartial(units){
+    const added = Math.min(Math.max(0, units), FUEL_MAX - this.level);
+    const cost = Math.ceil(added * DELIVERY_PRICE);
+    this.level += added;
+    return { added, cost };
+  }
   // Fuel-truck delivery: a fixed top-up at the delivery price, capped at full.
   deliver(){
     const added = Math.min(DELIVERY_UNITS, FUEL_MAX - this.level);
