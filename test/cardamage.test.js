@@ -54,3 +54,18 @@ test('repair bills per missing hp and restores full health', () => {
   assert.equal(c.wrecked, false);
   assert.equal(c.repairCost(), 0);
 });
+
+test('repairPartial: progressive bay repair caps at full and bills only what was added', () => {
+  const c = new CarDamage();
+  c.damage(50);                                    // hp 50
+  const r = c.repairPartial(20);
+  assert.deepEqual(r, { added: 20, cost: 200 });
+  assert.equal(c.hp, 70);
+  const over = c.repairPartial(999);               // caps at full
+  assert.deepEqual(over, { added: 30, cost: 300 });
+  assert.equal(c.hp, CAR_MAX_HP);
+  const full = c.repairPartial(10);                // full car: nothing added, nothing billed
+  assert.deepEqual(full, { added: 0, cost: 0 });
+  const neg = c.repairPartial(-5);
+  assert.deepEqual(neg, { added: 0, cost: 0 });
+});

@@ -37,9 +37,10 @@ import { THEMES as MAP_THEMES, spawnOf } from './custommap.js';
 import { buildStats, normalizeBuild, migrateLegacy, timeslip } from './tuning.js';
 import { createTuningUI } from './tuningui.js';
 import { createMissionRunner, generateMission, TOTAL_MISSIONS, EMERALD_FORTUNE } from './missions.js';
-import { CarDamage } from './cardamage.js';
+import { CarDamage, CAR_MAX_HP } from './cardamage.js';
 import { FuelTank, nearestStation, STATION_RADIUS, FUEL_FILL_RATE } from './fuel.js';
 import { nearestPump, PUMP_REFUEL_DIST } from './fuelstations.js';
+import { nearestBay, nearestRepairShop, REPAIR_RADIUS, REPAIR_RATE, BAY_REPAIR_DIST } from './repairshop.js';
 import { FuelTruckRun, buildFuelTruckMeshes } from './fueltruck.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
@@ -96,6 +97,7 @@ let blood=null, people=null, traffic=null, trafficHits=null;
 let hp=100, dead=false, deadT=0, hurtFlash=0;
 let carDamage=new CarDamage(), lastDmgCarId=null, prevDriveSpeed=null, crashCool=0, wreckT=0;
 let fuelTank=new FuelTank(), fuelLowWarned=false, fuelEmptyT=0, pumpHintShown=false, fillSessionCost=0;
+let bayHintShown=false, repairSessionCost=0;   // drive-in repair shop state
 let fuelTruck=null, fuelTruckMesh=null, fuelTruckCost=0;   // visible delivery run, if one is out
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
 let missions=null, boardOpen=false, lastGear=0;
@@ -177,7 +179,7 @@ function rebuildCar(){
   // repairs it (refreshSceneKeep rebuilds the same car id)
   if(carDef.id!==lastDmgCarId){ carDamage=new CarDamage(); lastDmgCarId=carDef.id; prevDriveSpeed=null; syncCarHP();
     // a different car means a full tank too; tuning the car you own never refuels it
-    fuelTank=new FuelTank(); fuelLowWarned=false; fuelEmptyT=0; pumpHintShown=false; fillSessionCost=0; syncFuel();
+    fuelTank=new FuelTank(); fuelLowWarned=false; fuelEmptyT=0; pumpHintShown=false; fillSessionCost=0; bayHintShown=false; repairSessionCost=0; syncFuel();
     // a new car strands no truck: drop any delivery run aimed at the old one
     if(fuelTruckMesh) scene.remove(fuelTruckMesh);
     fuelTruck=null; fuelTruckMesh=null; fuelTruckCost=0; }
@@ -1619,6 +1621,30 @@ function frame(now){
         }
       }else{ pumpHintShown=false; fillSessionCost=0; }
     }
+    // Bay-side repair: sitting still on the shop lot is not enough — pull
+    // into a service bay and HP climbs at the tow-bill rate; driving off
+    // mid-repair keeps the HP (and the charge) so far. Wrecked cars skip
+    // this: the tow truck still handles those.
+    if(carDamage && !carDamage.wrecked && carDamage.hp < CAR_MAX_HP){
+      const rs = nearestRepairShop(physics.pos.x, physics.pos.z);
+      if(rs.dist <= REPAIR_RADIUS && Math.abs(tele.speed) < 1){
+        const nb = nearestBay(physics.pos.x, physics.pos.z);
+        if(nb.dist <= BAY_REPAIR_DIST){
+          const r = carDamage.repairPartial(REPAIR_RATE * dt);
+          const paid = Math.min(save.cash, r.cost);
+          if(paid > 0) addCash(-paid);
+          repairSessionCost += paid;
+          if(carDamage.hp >= CAR_MAX_HP){
+            toast(repairSessionCost > 0 ? '🔧 Repaired — $' + repairSessionCost.toLocaleString() : '🔧 Repaired', 2200);
+            repairSessionCost = 0; bayHintShown = false;
+          }
+          syncCarHP();
+        }else{
+          repairSessionCost = 0;
+          if(!bayHintShown){ bayHintShown = true; toast('🔧 Pull into a service bay to repair', 2200); }
+        }
+      }else{ bayHintShown = false; repairSessionCost = 0; }
+    }else{ bayHintShown = false; repairSessionCost = 0; }
     // crash detector: a one-frame speed collapse only comes from a shunt
     // (braking and drag bleed speed slowly). tele.speed lags collisions by
     // a frame, so this catches walls and traffic alike.

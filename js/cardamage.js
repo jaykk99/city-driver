@@ -59,4 +59,14 @@ export class CarDamage {
     this.hp = CAR_MAX_HP;
     return cost;
   }
+  // Partial repair of `hp` points at the tow-bill rate, capped at full.
+  // This is what bay-side repair uses: HP climbs while the car sits in a
+  // bay, and driving off mid-repair keeps the HP (and the charge) so far.
+  // Returns { added, cost } — cost only covers what was actually added.
+  repairPartial(hp){
+    const added = Math.min(Math.max(0, hp), CAR_MAX_HP - this.hp);
+    const cost = Math.ceil(added * REPAIR_PER_HP);
+    this.hp += added;
+    return { added, cost };
+  }
 }

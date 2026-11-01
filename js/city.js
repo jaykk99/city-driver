@@ -17,6 +17,8 @@ import { BLOCKS, BLOCK, ROAD_W, PITCH, GRID_HALF, LINES, LANE, blockCenter, RED_
   STRIP_X, STRIP_HALF, SPECIAL, isSpecialBlock, districtOf, MAIN_X, PORTAGE_Z, NS_NAMES, EW_NAMES, OFFROAD, MUD_PITS, ROCKS, WORLD_HALF, RIVER_ZN, RIVER_ZS, ASSINI_XW } from './world.js';
 import { STATIONS } from './fuel.js';
 import { stationLayout, buildFuelStationMeshes } from './fuelstations.js';
+import { REPAIR_SHOPS } from './repairshop.js';
+import { shopLayout, buildRepairShopMeshes } from './repairshop.js';
 
 const SEED = 20481;
 function mulberry32(a){
@@ -373,7 +375,10 @@ export function buildCity(scene, reserved = []){
   // gas-station forecourts: reserved like the Portage & Main lots, so no
   // building, tree, parked car or furniture spawns on a pad or its pumps
   const stationLayouts = STATIONS.map(stationLayout);
-  const allReserved = reserved.concat(pmLots, stationLayouts.map(l => l.lot));
+  // repair-shop lots: same treatment, so no building, tree, parked car or
+  // furniture spawns on a pad, a bay or a lift
+  const repairLayouts = REPAIR_SHOPS.map(shopLayout);
+  const allReserved = reserved.concat(pmLots, stationLayouts.map(l => l.lot), repairLayouts.map(l => l.lot));
 
   // ---- regular blocks ----
   const inset = 4;
@@ -607,6 +612,20 @@ export function buildCity(scene, reserved = []){
     });
     for(const L of stationLayouts){
       scene.add(buildFuelStationMeshes(THREE, L, { signTexture: gasTex }));
+      for(const c of L.colliders) addCol(c.minX, c.maxX, c.minZ, c.maxZ);
+    }
+  }
+
+  // ---------- repair shops: canopy, bays, lifts and sign on each lot ----------
+  // (the damage system repairs at these points; now the player can see them)
+  {
+    const repairTex = makeCanvas(256, 144, (g, w, h) => {
+      g.fillStyle = '#e8730c'; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#0b0f1a'; g.font = 'bold 52px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText('REPAIR', w / 2, h / 2 + 4);
+    });
+    for(const L of repairLayouts){
+      scene.add(buildRepairShopMeshes(THREE, L, { signTexture: repairTex }));
       for(const c of L.colliders) addCol(c.minX, c.maxX, c.minZ, c.maxZ);
     }
   }
