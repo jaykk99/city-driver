@@ -4,6 +4,7 @@ import { BLOCKS, ROAD_W, GRID_HALF, LINES, blockCenter, RED_RIVER, ASSINIBOINE, 
   WORLD_HALF, ROADS, LAKES, FIELDS, OFFROAD, AIRPORT, MUD_PATCHES, MUD_PITS } from './world.js';
 import { STATIONS } from './fuel.js';
 import { REPAIR_SHOPS } from './repairshop.js';
+import { TIRE_SHOPS } from './tireshop.js';
 
 // CITY DRIVER — gas stations on the map.
 //
@@ -46,6 +47,24 @@ function pumpDiamond(g, cx, cy, r){
 function wrenchSquare(g, cx, cy, r){
   g.fillStyle = '#e8730c'; g.strokeStyle = '#0b0f1a'; g.lineWidth = 1.5;
   g.beginPath(); g.rect(cx - r, cy - r, r * 2, r * 2); g.fill(); g.stroke();
+}
+
+// Same shape for tire shops: shops within `radius` m of (px, pz),
+// nearest first.
+export function tiresNear(px, pz, radius){
+  return TIRE_SHOPS
+    .map(s => ({ ...s, dist: Math.hypot(s.x - px, s.z - pz) }))
+    .filter(s => s.dist <= radius)
+    .sort((a, b) => a.dist - b.dist);
+}
+
+// Paint one tire marker: a blue ring like a tire seen from the side, dark
+// outline so it reads on roads and never confuses with a diamond or square.
+function tireRing(g, cx, cy, r){
+  g.strokeStyle = '#1e40af'; g.lineWidth = 3;
+  g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.stroke();
+  g.fillStyle = '#0b0f1a';
+  g.beginPath(); g.arc(cx, cy, r * 0.35, 0, Math.PI * 2); g.fill();
 }
 
 const SPECIAL_COL = { parking:'#3b3f46', arena:'#4b5bd6', legislature:'#c9b98f', forks:'#b98a5a', museum:'#7fb3d5', mansion:'#0f9d58', hospital:'#e2e8f0', park:'#3f8a3a' };
@@ -114,6 +133,7 @@ export function createMinimap(canvas, stores, bigCanvas){
     }
     if(!custom) for(const s of stationsNear(px, pz, R)) pumpDiamond(g, W(s.x), H(s.z), 5);
     if(!custom) for(const s of repairsNear(px, pz, R)) wrenchSquare(g, W(s.x), H(s.z), 5);
+    if(!custom) for(const s of tiresNear(px, pz, R)) tireRing(g, W(s.x), H(s.z), 5);
     if(car){ g.fillStyle = '#ffffff'; g.fillRect(W(car.x) - 3, H(car.z) - 3, 6, 6); }
     if(wp){
       // waypoint: on the radar if close, else a marker pinned to the rim pointing at it
@@ -166,6 +186,7 @@ export function createMinimap(canvas, stores, bigCanvas){
       for(const s of stores){ bg.fillStyle = s.color; bg.beginPath(); bg.arc(W(s.door.x), H(s.door.z), 3, 0, Math.PI * 2); bg.fill(); }
       for(const s of STATIONS){ pumpDiamond(bg, W(s.x), H(s.z), 5); label('⛽ GAS', s.x, s.z - 14); }
       for(const s of REPAIR_SHOPS){ wrenchSquare(bg, W(s.x), H(s.z), 5); label('🔧 REPAIR', s.x, s.z - 14); }
+      for(const s of TIRE_SHOPS){ tireRing(bg, W(s.x), H(s.z), 5); label('🛞 TIRES', s.x, s.z - 14); }
     }
     if(extra) extra(bg, W, H);
     if(wp){ bg.fillStyle = '#ffd23f'; bg.strokeStyle = '#0b0f1a'; bg.lineWidth = 2; bg.beginPath(); bg.arc(W(wp.x), H(wp.z), 7, 0, Math.PI * 2); bg.fill(); bg.stroke(); }

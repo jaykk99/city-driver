@@ -41,6 +41,8 @@ import { CarDamage, CAR_MAX_HP } from './cardamage.js';
 import { FuelTank, nearestStation, STATION_RADIUS, FUEL_FILL_RATE } from './fuel.js';
 import { nearestPump, PUMP_REFUEL_DIST } from './fuelstations.js';
 import { nearestBay, nearestRepairShop, REPAIR_RADIUS, REPAIR_RATE, BAY_REPAIR_DIST } from './repairshop.js';
+import { TireWear, WORN_WARN, WORN_BAD } from './tires.js';
+import { nearestTireBay, nearestTireShop, TIRE_RADIUS, TIRE_RATE, BAY_TIRE_DIST } from './tireshop.js';
 import { FuelTruckRun, buildFuelTruckMeshes } from './fueltruck.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
@@ -98,6 +100,9 @@ let hp=100, dead=false, deadT=0, hurtFlash=0;
 let carDamage=new CarDamage(), lastDmgCarId=null, prevDriveSpeed=null, crashCool=0, wreckT=0;
 let fuelTank=new FuelTank(), fuelLowWarned=false, fuelEmptyT=0, pumpHintShown=false, fillSessionCost=0;
 let bayHintShown=false, repairSessionCost=0;   // drive-in repair shop state
+let tireWear=new TireWear(), tireHintShown=false, tireSessionCost=0;   // drive-in tire shop state
+let tireWarnedHalf=false, tireWarnedBald=false;   // worn-tire toasts, once per set
+let tireBaseGrip=null, tireStatsObj=null;   // fresh-stats grip, recaptured per stats object
 let fuelTruck=null, fuelTruckMesh=null, fuelTruckCost=0;   // visible delivery run, if one is out
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
 let missions=null, boardOpen=false, lastGear=0;
@@ -180,6 +185,10 @@ function rebuildCar(){
   if(carDef.id!==lastDmgCarId){ carDamage=new CarDamage(); lastDmgCarId=carDef.id; prevDriveSpeed=null; syncCarHP();
     // a different car means a full tank too; tuning the car you own never refuels it
     fuelTank=new FuelTank(); fuelLowWarned=false; fuelEmptyT=0; pumpHintShown=false; fillSessionCost=0; bayHintShown=false; repairSessionCost=0; syncFuel();
+    // a different car means a fresh set of tires too; tuning the car you
+    // own never replaces its tires for free
+    tireWear=new TireWear(); tireHintShown=false; tireSessionCost=0;
+    tireWarnedHalf=false; tireWarnedBald=false; tireStatsObj=null;
     // a new car strands no truck: drop any delivery run aimed at the old one
     if(fuelTruckMesh) scene.remove(fuelTruckMesh);
     fuelTruck=null; fuelTruckMesh=null; fuelTruckCost=0; }
@@ -1561,6 +1570,11 @@ function frame(now){
     const fuelF=fuelTank&&fuelTank.empty?0:1;
     const driveInput=dmgF>=1 && fuelF>=1 ? controls.input
       : { ...controls.input, throttle: (dmgF<=0||fuelF<=0) ? 0 : (controls.input.throttle||0)*dmgF };
+    // worn tires lose grip: capture the fresh stats grip once per stats
+    // object (a rebuild makes a new one, so tuning never inherits a worn
+    // value as its base), then scale it by tire wear each frame
+    if(physics.stats!==tireStatsObj){ tireStatsObj=physics.stats; tireBaseGrip=physics.stats.grip; }
+    physics.stats.grip=tireBaseGrip*tireWear.gripFactor();
     tele=physics.update(driveInput, dt, collide);
     // fuel: driving burns it; an empty tank stalls, stations refill cheap,
     // and the fuel truck rescues a stalled car at the delivery price
@@ -1621,6 +1635,14 @@ function frame(now){
         }
       }else{ pumpHintShown=false; fillSessionCost=0; }
     }
+    // tire wear: every metre driven scrubs rubber, drifting and off-road
+    // driving much faster — so the drift economy now has a running cost
+    if(tireWear){
+      const offroad=physics.surf && physics.surf.name!=='road';
+      tireWear.drive(Math.abs(tele.speed)*dt, { drifting: !!tele.drifting, offroad });
+      if(tireWear.wear>=WORN_BAD && !tireWarnedBald){ tireWarnedBald=true; toast('🛞 Tires nearly bald — grip is gone, find a tire shop', 2600); }
+      else if(tireWear.wear>=WORN_WARN && !tireWarnedHalf){ tireWarnedHalf=true; toast('🛞 Tires half-worn — grip is slipping', 2200); }
+    }
     // Bay-side repair: sitting still on the shop lot is not enough — pull
     // into a service bay and HP climbs at the tow-bill rate; driving off
     // mid-repair keeps the HP (and the charge) so far. Wrecked cars skip
@@ -1645,6 +1667,31 @@ function frame(now){
         }
       }else{ bayHintShown = false; repairSessionCost = 0; }
     }else{ bayHintShown = false; repairSessionCost = 0; }
+    // Bay-side tire swap: sitting still on the shop lot is not enough —
+    // pull into a tire bay and a fresh set goes on progressively at the
+    // flat per-set price; driving off mid-swap keeps the rubber (and the
+    // charge) so far. Wrecked cars skip this: the tow truck still handles
+    // those.
+    if(tireWear && tireWear.wear > 0 && !(carDamage && carDamage.wrecked)){
+      const ts = nearestTireShop(physics.pos.x, physics.pos.z);
+      if(ts.dist <= TIRE_RADIUS && Math.abs(tele.speed) < 1){
+        const nb = nearestTireBay(physics.pos.x, physics.pos.z);
+        if(nb.dist <= BAY_TIRE_DIST){
+          const r = tireWear.replacePartial(TIRE_RATE * dt);
+          const paid = Math.min(save.cash, r.cost);
+          if(paid > 0) addCash(-paid);
+          tireSessionCost += paid;
+          if(tireWear.wear <= 0){
+            toast(tireSessionCost > 0 ? '🛞 New tires — $' + tireSessionCost.toLocaleString() : '🛞 New tires', 2200);
+            tireSessionCost = 0; tireHintShown = false;
+            tireWarnedHalf = false; tireWarnedBald = false;
+          }
+        }else{
+          tireSessionCost = 0;
+          if(!tireHintShown){ tireHintShown = true; toast('🛞 Pull into a tire bay for new tires', 2200); }
+        }
+      }else{ tireHintShown = false; tireSessionCost = 0; }
+    }else{ tireHintShown = false; tireSessionCost = 0; }
     // crash detector: a one-frame speed collapse only comes from a shunt
     // (braking and drag bleed speed slowly). tele.speed lags collisions by
     // a frame, so this catches walls and traffic alike.

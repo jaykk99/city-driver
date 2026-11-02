@@ -19,6 +19,8 @@ import { STATIONS } from './fuel.js';
 import { stationLayout, buildFuelStationMeshes } from './fuelstations.js';
 import { REPAIR_SHOPS } from './repairshop.js';
 import { shopLayout, buildRepairShopMeshes } from './repairshop.js';
+import { TIRE_SHOPS } from './tireshop.js';
+import { tireShopLayout, buildTireShopMeshes } from './tireshop.js';
 
 const SEED = 20481;
 function mulberry32(a){
@@ -378,7 +380,10 @@ export function buildCity(scene, reserved = []){
   // repair-shop lots: same treatment, so no building, tree, parked car or
   // furniture spawns on a pad, a bay or a lift
   const repairLayouts = REPAIR_SHOPS.map(shopLayout);
-  const allReserved = reserved.concat(pmLots, stationLayouts.map(l => l.lot), repairLayouts.map(l => l.lot));
+  // tire-shop lots: same treatment, so no building, tree, parked car or
+  // furniture spawns on a pad, a bay or a tire stack
+  const tireLayouts = TIRE_SHOPS.map(tireShopLayout);
+  const allReserved = reserved.concat(pmLots, stationLayouts.map(l => l.lot), repairLayouts.map(l => l.lot), tireLayouts.map(l => l.lot));
 
   // ---- regular blocks ----
   const inset = 4;
@@ -626,6 +631,21 @@ export function buildCity(scene, reserved = []){
     });
     for(const L of repairLayouts){
       scene.add(buildRepairShopMeshes(THREE, L, { signTexture: repairTex }));
+      for(const c of L.colliders) addCol(c.minX, c.maxX, c.minZ, c.maxZ);
+    }
+  }
+
+  // ---------- tire shops: canopy, bays, tire stacks and sign on each lot ----------
+  // (the tire system wears with distance; now the player can see where a
+  // fresh set goes on)
+  {
+    const tireTex = makeCanvas(256, 144, (g, w, h) => {
+      g.fillStyle = '#1e40af'; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#f2f3f5'; g.font = 'bold 52px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText('TIRES', w / 2, h / 2 + 4);
+    });
+    for(const L of tireLayouts){
+      scene.add(buildTireShopMeshes(THREE, L, { signTexture: tireTex }));
       for(const c of L.colliders) addCol(c.minX, c.maxX, c.minZ, c.maxZ);
     }
   }
