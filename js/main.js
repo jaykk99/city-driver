@@ -44,6 +44,7 @@ import { nearestBay, nearestRepairShop, REPAIR_RADIUS, REPAIR_RATE, BAY_REPAIR_D
 import { TireWear, WORN_WARN, WORN_BAD } from './tires.js';
 import { nearestTireBay, nearestTireShop, TIRE_RADIUS, TIRE_RATE, BAY_TIRE_DIST } from './tireshop.js';
 import { FuelTruckRun, buildFuelTruckMeshes } from './fueltruck.js';
+import { createTaxiJob, isTaxiCar } from './taxi.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
 
@@ -104,6 +105,7 @@ let tireWear=new TireWear(), tireHintShown=false, tireSessionCost=0;   // drive-
 let tireWarnedHalf=false, tireWarnedBald=false;   // worn-tire toasts, once per set
 let tireBaseGrip=null, tireStatsObj=null;   // fresh-stats grip, recaptured per stats object
 let fuelTruck=null, fuelTruckMesh=null, fuelTruckCost=0;   // visible delivery run, if one is out
+let taxi=createTaxiJob(), taxiBeacon=null;   // cab fares: beacon + state live here, logic in taxi.js
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
 let missions=null, boardOpen=false, lastGear=0;
 // engine character per car: cylinders, idle, redline
@@ -970,6 +972,39 @@ function updateMissionHud(){
   else $('boss-hud').classList.add('hidden');
 }
 
+// ---------------- taxi fares: beacon + HUD (logic lives in taxi.js) ----------------
+function setTaxiBeacon(p){
+  if(!p){ if(taxiBeacon) taxiBeacon.visible = false; return; }
+  if(!taxiBeacon){
+    const ringMat = new THREE.MeshBasicMaterial({ color:0xffc400, transparent:true, opacity:0.85, depthWrite:false, side:THREE.DoubleSide });
+    const beamMat = new THREE.MeshBasicMaterial({ color:0xffc400, transparent:true, opacity:0.2, depthWrite:false, side:THREE.DoubleSide, blending:THREE.AdditiveBlending });
+    taxiBeacon = new THREE.Group();
+    taxiBeacon.add(new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 40).rotateX(-Math.PI / 2).translate(0, 0.1, 0), ringMat));
+    taxiBeacon.add(new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 30, 24, 1, true).translate(0, 15, 0), beamMat));
+    scene.add(taxiBeacon);
+  }
+  taxiBeacon.visible = true; taxiBeacon.position.set(p.x, 0, p.z);
+}
+function updateTaxiHud(){
+  const el = $('taxi-hud'); if(!el) return;
+  if(!taxi.active){ el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  const px = physics.pos.x, pz = physics.pos.z, h = physics.heading, tg = taxi.target;
+  $('tx-obj').textContent = taxi.state === 'hail' ? 'Pick up the fare' : 'Drop off the passenger';
+  const tl = taxi.timeLeft;
+  $('tx-time').textContent = taxi.state === 'hail' ? '⏱ ' + Math.ceil(tl) + 's'
+    : (tl >= 0 ? '⏱ ' + Math.ceil(tl) + 's' : '⏱ LATE');
+  $('tx-time').classList.toggle('low', tl < 10);
+  if(tg && !inside){
+    const a = Math.atan2(-(tg.x - px), -(tg.z - pz));
+    const rel = Math.atan2(Math.sin(a - h), Math.cos(a - h));
+    const arrow = $('tx-arrow');
+    arrow.style.transform = 'rotate(' + (-rel).toFixed(3) + 'rad)';
+    arrow.classList.remove('hidden');
+    $('tx-dist').textContent = Math.round(Math.hypot(tg.x - px, tg.z - pz)) + ' m';
+  }else{ $('tx-arrow').classList.add('hidden'); $('tx-dist').textContent = ''; }
+}
+
 // ---------------- full map + GPS waypoint ----------------
 let bigMapOpen=false;
 function playerXZ(){ return onFoot ? { x:inside?inside.back.x:foot.pos.x, z:inside?inside.back.z:foot.pos.z, h:foot.heading } : { x:physics.pos.x, z:physics.pos.z, h:physics.heading }; }
@@ -1544,6 +1579,12 @@ function frame(now){
   updateWindTime(now/1000);               // v4: tree canopy sway
 
   const playing = state==='freeroam' && !paused && !garageOpen && !storeOpen && !editorOpen && !pickOpen && !dead && !boardOpen;
+  // a fare only lives while you are driving the cab in free roam: leaving
+  // the cab, the garage, a shop or the world itself ends it (the map and
+  // mission board pauses do not — a fare survives a quick look at the map)
+  if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && taxi.active){
+    taxi.abandon(); setTaxiBeacon(null); updateTaxiHud(); toast('🚕 Fare abandoned — you left the cab', 2000);
+  }
   if(editorOpen){
     updateEditorCamera(dt);
   }else if(playing && onFoot){
@@ -1692,6 +1733,19 @@ function frame(now){
         }
       }else{ tireHintShown = false; tireSessionCost = 0; }
     }else{ tireHintShown = false; tireSessionCost = 0; }
+    // Taxi fares: driving the Peg City Cab turns free roam into a shift —
+    // fares hail nearby, pay base + distance, and tip for a quick clean ride.
+    if(taxi.setInCab(isTaxiCar(carDef)) === 'abandoned') toast('🚕 Fare abandoned — you switched cars', 2000);
+    for(const ev of taxi.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100 })){
+      if(ev.type === 'hail'){ setTaxiBeacon(ev.point); toast('🚕 Fare hailing nearby — drive to the yellow marker', 2600); }
+      else if(ev.type === 'hailExpired'){ setTaxiBeacon(null); toast('🚕 Fare gave up waiting', 2000); }
+      else if(ev.type === 'pickup'){ setTaxiBeacon(ev.dest); audio.beep(880, 0.08); toast('🚕 Passenger aboard — $' + ev.fareEstimate.toLocaleString() + ' on the meter', 2600); }
+      else if(ev.type === 'dropoff'){ addCash(ev.total); setTaxiBeacon(null);
+        toast(ev.tip > 0 ? '🚕 Fare paid — $' + ev.fare.toLocaleString() + ' + $' + ev.tip.toLocaleString() + ' tip'
+          : '🚕 Fare paid — $' + ev.fare.toLocaleString(), 2800); }
+      else if(ev.type === 'rideFailed'){ setTaxiBeacon(null); toast('🚕 Passenger bailed — wrecked cab', 2400); }
+    }
+    if(frameN % 3 === 0) updateTaxiHud();
     // crash detector: a one-frame speed collapse only comes from a shunt
     // (braking and drag bleed speed slowly). tele.speed lags collisions by
     // a frame, so this catches walls and traffic alike.
@@ -1724,7 +1778,7 @@ function frame(now){
     updateEffects(dt);
     shops.update(dt);
     weapons.update(dt, weaponCtx, false, false);   // let bullets finish flying
-    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null, mp, copBlips());
+    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null, mp, copBlips(), taxi.target);
     updateAction();
     if(controls.consumeAction()) doAction();
     if(qm) qm.update(dt);

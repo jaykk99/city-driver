@@ -117,7 +117,7 @@ export function createMinimap(canvas, stores, bigCanvas){
   const k = (S / 2) / R;
   let frame = 0, custom = null, wp = null;
 
-  function draw(px, pz, heading, car, mp, blips){
+  function draw(px, pz, heading, car, mp, blips, taxi){
     if((frame++ & 3) !== 0) return;
     const W = x => S / 2 + (x - px) * k;
     const H = z => S / 2 + (z - pz) * k;
@@ -155,6 +155,13 @@ export function createMinimap(canvas, stores, bigCanvas){
       g.fillStyle = (frame >> 3) & 1 ? '#ff3b4e' : '#3b8bff';       // flashing cop lights
       g.strokeStyle = '#0b0f1a'; g.lineWidth = 1.5;
       g.beginPath(); g.arc(bx, bz, 4.5, 0, Math.PI * 2); g.fill(); g.stroke();
+    }
+    if(taxi){   // cab fare target: steady yellow cab dot, never flashing like a cop
+      const tx = W(taxi.x), tz = H(taxi.z);
+      if(tx >= -8 && tz >= -8 && tx <= S + 8 && tz <= S + 8){
+        g.fillStyle = '#ffc400'; g.strokeStyle = '#0b0f1a'; g.lineWidth = 1.5;
+        g.beginPath(); g.arc(tx, tz, 4.5, 0, Math.PI * 2); g.fill(); g.stroke();
+      }
     }
     g.restore();
     g.save();
