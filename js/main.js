@@ -1582,7 +1582,7 @@ function frame(now){
   // a fare only lives while you are driving the cab in free roam: leaving
   // the cab, the garage, a shop or the world itself ends it (the map and
   // mission board pauses do not — a fare survives a quick look at the map)
-  if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && taxi.active){
+  if((state!=='freeroam' || customMap || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && taxi.active){
     taxi.abandon(); setTaxiBeacon(null); updateTaxiHud(); toast('🚕 Fare abandoned — you left the cab', 2000);
   }
   if(editorOpen){
@@ -1735,7 +1735,9 @@ function frame(now){
     }else{ tireHintShown = false; tireSessionCost = 0; }
     // Taxi fares: driving the Peg City Cab turns free roam into a shift —
     // fares hail nearby, pay base + distance, and tip for a quick clean ride.
-    if(taxi.setInCab(isTaxiCar(carDef)) === 'abandoned') toast('🚕 Fare abandoned — you switched cars', 2000);
+    // Main city only: the hail/destination pickers use the main-city grid.
+    if(customMap){ if(taxi.inCab) taxi.setInCab(false); }
+    else if(taxi.setInCab(isTaxiCar(carDef)) === 'abandoned') toast('🚕 Fare abandoned — you switched cars', 2000);
     for(const ev of taxi.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100 })){
       if(ev.type === 'hail'){ setTaxiBeacon(ev.point); toast('🚕 Fare hailing nearby — drive to the yellow marker', 2600); }
       else if(ev.type === 'hailExpired'){ setTaxiBeacon(null); toast('🚕 Fare gave up waiting', 2000); }
