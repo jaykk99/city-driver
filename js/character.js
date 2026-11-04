@@ -264,6 +264,7 @@ const POSE_KEYS = Object.keys(J0());
 
 // speed: signed m/s, phase: walk cycle, aiming: arm(s) raised
 // opts.pose: 'cower' | 'handsup' | 'flinch' | 'panic' | 'hurt' (blended in), opts.pitch: aim up/down (rad)
+// opts.wave: standing hail wave — right arm up, waving side to side with the phase
 export function animateCharacter(root, phase, speed, aiming, dt, opts){
   const u = root.userData;
   if(!u.J){ u.J = J0(); }
@@ -309,6 +310,14 @@ export function animateCharacter(root, phase, speed, aiming, dt, opts){
       t[k] = t[k] * (1 - w) + P[k] * w + (k.endsWith('kX') && legsToo ? 0 : 0);
     }
     if(u.pose === 'cower') t.bob *= 1 - w;
+  }
+  // hail wave: right arm up, waving side to side with the walk-cycle phase
+  // (the caller advances the phase while the ped stands still). Overriding
+  // here, after the pose blend, keeps the wave steady whatever the ped's
+  // reaction pose is doing — a hailer waves through a flinch, not instead.
+  if(opts && opts.wave){
+    t.rsX = 0.25; t.rsZ = 2.25 + Math.sin(phase) * 0.45; t.reX = 0.35; t.reZ = 0;
+    t.lsX = 0.1; t.lsZ = -0.07; t.leX = 0.12;
   }
   // hit flinch overlay (decays fast): thrown back from the hit direction
   if(u.hit > 0){

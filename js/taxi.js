@@ -10,8 +10,8 @@
 // rides lose the tip, a wrecked cab loses the passenger).
 //
 // Pure state machine + fare math, no THREE and no document, so the whole
-// loop is unit-testable in node. main.js owns the beacon, the HUD, the
-// toasts and the cash; this module only decides what happens when.
+// loop is unit-testable in node. main.js owns the beacon, the hailer ped,
+// the HUD, the toasts and the cash; this module only decides what happens when.
 import { LINES, LANE, GRID_HALF, BLOCKS, PITCH, blockCenter, isSpecialBlock } from './world.js';
 
 export const TAXI_BASE_FARE = 40;      // $ flat, before distance

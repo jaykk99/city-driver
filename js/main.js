@@ -20,7 +20,7 @@ import { buildStores, STORE_LOTS } from './stores.js';
 import { createWeapons } from './weapons.js';
 import { createStoreUI } from './storeui.js';
 import { createMinimap } from './minimap.js';
-import { ensureSkins, carSkinFor, packLook, unpackLook } from './skins.js';
+import { ensureSkins, carSkinFor, packLook, unpackLook, PALETTE, SKIN_TONES, HAIR_COLORS } from './skins.js';
 import { createSkinEditor } from './skineditor.js';
 import { createInteriors, styleFor, STYLE_NAMES } from './interiors.js';
 import { createTutorial, TUTORIAL_REWARD } from './tutorial.js';
@@ -105,7 +105,7 @@ let tireWear=new TireWear(), tireHintShown=false, tireSessionCost=0;   // drive-
 let tireWarnedHalf=false, tireWarnedBald=false;   // worn-tire toasts, once per set
 let tireBaseGrip=null, tireStatsObj=null;   // fresh-stats grip, recaptured per stats object
 let fuelTruck=null, fuelTruckMesh=null, fuelTruckCost=0;   // visible delivery run, if one is out
-let taxi=createTaxiJob(), taxiBeacon=null;   // cab fares: beacon + state live here, logic in taxi.js
+let taxi=createTaxiJob(), taxiBeacon=null, taxiPed=null, taxiPedPhase=0;   // cab fares: beacon + hailer ped + state live here, logic in taxi.js
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
 let missions=null, boardOpen=false, lastGear=0;
 // engine character per car: cylinders, idle, redline
@@ -985,6 +985,35 @@ function setTaxiBeacon(p){
   }
   taxiBeacon.visible = true; taxiBeacon.position.set(p.x, 0, p.z);
 }
+// The hailer is a person, not just a marker: a waving ped standing on the
+// sidewalk at the hail point, facing the cab, until the fare is picked up
+// (then they are in the cab, so the ped hides) or the hail ends. The ped
+// is never a bullet target — it is a scene prop, not in the hit lists —
+// so it cannot be shot, run over for a crime, or counted as a witness.
+function setTaxiPed(p){
+  if(!scene) return;
+  const pick = arr => arr[(Math.random() * arr.length) | 0];
+  const outfit = { shirt:pick(PALETTE), pants:pick([0x2d3748, 0x1e3a8a, 0x111827, 0x6b7280, 0x8a5a1a, 0xcbd5e1]),
+    skin:pick(SKIN_TONES), hair:pick(HAIR_COLORS.slice(0, 6)),
+    hat:Math.random() < 0.25 ? pick(['cap', 'beanie', 'cowboy']) : 'none', hatColor:pick(PALETTE),
+    hairLong:Math.random() < 0.4 };
+  if(!taxiPed){ taxiPed = buildCharacter(outfit); scene.add(taxiPed); }
+  else setOutfit(taxiPed, outfit);
+  resetPose(taxiPed);
+  taxiPed.position.set(p.x, 0, p.z);
+  taxiPed.visible = true;
+  taxiPedPhase = 0;
+}
+function hideTaxiPed(){ if(taxiPed) taxiPed.visible = false; }
+// Every frame while a fare is hailing: the ped faces the cab and waves.
+// Body faces -Z at rotation 0, so facing (dx, dz) is atan2(-dx, -dz).
+function updateTaxiPed(dt){
+  if(!taxiPed || !taxiPed.visible || taxi.state !== 'hail') return;
+  const dx = physics.pos.x - taxiPed.position.x, dz = physics.pos.z - taxiPed.position.z;
+  taxiPed.rotation.y = Math.atan2(-dx, -dz);
+  taxiPedPhase += dt * 9;
+  animateCharacter(taxiPed, taxiPedPhase, 0, false, dt, { wave:true });
+}
 function updateTaxiHud(){
   const el = $('taxi-hud'); if(!el) return;
   if(!taxi.active){ el.classList.add('hidden'); return; }
@@ -1583,7 +1612,7 @@ function frame(now){
   // the cab, the garage, a shop or the world itself ends it (the map and
   // mission board pauses do not — a fare survives a quick look at the map)
   if((state!=='freeroam' || customMap || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && taxi.active){
-    taxi.abandon(); setTaxiBeacon(null); updateTaxiHud(); toast('🚕 Fare abandoned — you left the cab', 2000);
+    taxi.abandon(); setTaxiBeacon(null); hideTaxiPed(); updateTaxiHud(); toast('🚕 Fare abandoned — you left the cab', 2000);
   }
   if(editorOpen){
     updateEditorCamera(dt);
@@ -1737,16 +1766,17 @@ function frame(now){
     // fares hail nearby, pay base + distance, and tip for a quick clean ride.
     // Main city only: the hail/destination pickers use the main-city grid.
     if(customMap){ if(taxi.inCab) taxi.setInCab(false); }
-    else if(taxi.setInCab(isTaxiCar(carDef)) === 'abandoned') toast('🚕 Fare abandoned — you switched cars', 2000);
+    else if(taxi.setInCab(isTaxiCar(carDef)) === 'abandoned'){ hideTaxiPed(); toast('🚕 Fare abandoned — you switched cars', 2000); }
     for(const ev of taxi.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100 })){
-      if(ev.type === 'hail'){ setTaxiBeacon(ev.point); toast('🚕 Fare hailing nearby — drive to the yellow marker', 2600); }
-      else if(ev.type === 'hailExpired'){ setTaxiBeacon(null); toast('🚕 Fare gave up waiting', 2000); }
-      else if(ev.type === 'pickup'){ setTaxiBeacon(ev.dest); audio.beep(880, 0.08); toast('🚕 Passenger aboard — $' + ev.fareEstimate.toLocaleString() + ' on the meter', 2600); }
-      else if(ev.type === 'dropoff'){ addCash(ev.total); setTaxiBeacon(null);
+      if(ev.type === 'hail'){ setTaxiBeacon(ev.point); setTaxiPed(ev.point); toast('🚕 Fare hailing nearby — drive to the yellow marker', 2600); }
+      else if(ev.type === 'hailExpired'){ setTaxiBeacon(null); hideTaxiPed(); toast('🚕 Fare gave up waiting', 2000); }
+      else if(ev.type === 'pickup'){ setTaxiBeacon(ev.dest); hideTaxiPed(); audio.beep(880, 0.08); toast('🚕 Passenger aboard — $' + ev.fareEstimate.toLocaleString() + ' on the meter', 2600); }
+      else if(ev.type === 'dropoff'){ addCash(ev.total); setTaxiBeacon(null); hideTaxiPed();
         toast(ev.tip > 0 ? '🚕 Fare paid — $' + ev.fare.toLocaleString() + ' + $' + ev.tip.toLocaleString() + ' tip'
           : '🚕 Fare paid — $' + ev.fare.toLocaleString(), 2800); }
-      else if(ev.type === 'rideFailed'){ setTaxiBeacon(null); toast('🚕 Passenger bailed — wrecked cab', 2400); }
+      else if(ev.type === 'rideFailed'){ setTaxiBeacon(null); hideTaxiPed(); toast('🚕 Passenger bailed — wrecked cab', 2400); }
     }
+    updateTaxiPed(dt);
     if(frameN % 3 === 0) updateTaxiHud();
     // crash detector: a one-frame speed collapse only comes from a shunt
     // (braking and drag bleed speed slowly). tele.speed lags collisions by
