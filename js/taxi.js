@@ -13,6 +13,7 @@
 // loop is unit-testable in node. main.js owns the beacon, the hailer ped,
 // the HUD, the toasts and the cash; this module only decides what happens when.
 import { LINES, LANE, GRID_HALF, BLOCKS, PITCH, blockCenter, isSpecialBlock } from './world.js';
+import { getTile, tileCenter } from './custommap.js';
 
 export const TAXI_BASE_FARE = 40;      // $ flat, before distance
 export const TAXI_PER_METRE = 0.30;    // $ per metre of straight-line trip
@@ -24,6 +25,9 @@ export const HAIL_DELAY_MIN = 8;       // s between fares (short end)
 export const HAIL_DELAY_MAX = 20;      // s between fares (long end)
 export const FARE_COOLDOWN = 6;        // s after a fare ends before the next hail
 export const MIN_TRIP = 220;           // m: a fare worth driving for
+export const CUSTOM_MIN_TRIP = 60;     // m: shortest trip worth hailing for on a custom map
+export const HAIL_SEARCH = 180;        // m: on a custom map, hailers spawn on roads this near the cab
+export const HAIL_RETRY = 5;           // s: wait before retrying a hail when no road is near
 
 const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -85,12 +89,85 @@ export function destinationFar(from, rng){
   return p;
 }
 
+// ---------- custom maps ----------
+
+// Road tiles a cab can actually use on a custom map: '#' roads and the 'S'
+// spawn (mapbuilder treats both as road). Map-local coords, tile centres.
+export function roadTilesOf(map){
+  const roads = [];
+  if(!map || typeof map.size !== 'number' || typeof map.tiles !== 'string') return roads;
+  for(let j = 0; j < map.size; j++) for(let i = 0; i < map.size; i++){
+    const ch = getTile(map, i, j);
+    if(ch === '#' || ch === 'S'){ const c = tileCenter(map, i, j); roads.push({ i, j, x:c.x, z:c.z }); }
+  }
+  return roads;
+}
+
+// Point pickers for a custom map, in world coords: the map sits at `offset`
+// (mapbuilder OFFSET), so local tile coords get the offset added back.
+// A map only gets fares when its streets can carry a real trip — a lone
+// spawn tile, or roads too short to be worth driving, means no hails.
+export function customMapPickers(map, offset = { x:0, z:0 }){
+  const roads = roadTilesOf(map);
+  const toLocal = p => ({ x:p.x - offset.x, z:p.z - offset.z });
+  const toWorld = p => ({ x:p.x + offset.x, z:p.z + offset.z });
+  const isRoad = (i, j) => { const c = getTile(map, i, j); return c === '#' || c === 'S'; };
+
+  // A destination on a road at least MIN_TRIP away, or the farthest road
+  // when the map is too small for a full trip; null when no trip of at
+  // least CUSTOM_MIN_TRIP exists at all. Samples first, then falls back to
+  // a full scan so a real trip is never missed to a bad draw.
+  function destFar(from, rng){
+    if(!roads.length) return null;
+    const f = toLocal(from);
+    let best = null, bestD = -1;
+    for(let k = 0; k < 8; k++){
+      const t = roads[(rng() * roads.length) | 0];
+      const d = Math.hypot(t.x - f.x, t.z - f.z);
+      if(d > bestD){ best = t; bestD = d; }
+      if(d >= MIN_TRIP) break;
+    }
+    if(bestD < MIN_TRIP){
+      for(const t of roads){
+        const d = Math.hypot(t.x - f.x, t.z - f.z);
+        if(d > bestD){ best = t; bestD = d; }
+      }
+    }
+    return bestD >= CUSTOM_MIN_TRIP ? toWorld(best) : null;
+  }
+
+  // A hailer on a road near the cab, standing at the road's edge (4 m
+  // toward the nearest non-road neighbour, so they are not mid-lane).
+  // Only hails when a real trip exists from that spot; null when the cab
+  // is off the streets or the map's roads cannot carry a trip.
+  function hailNear(px, pz, rng){
+    if(!roads.length) return null;
+    const p = toLocal({ x:px, z:pz });
+    const near = roads.filter(t => Math.hypot(t.x - p.x, t.z - p.z) <= HAIL_SEARCH);
+    if(!near.length) return null;
+    const start = (rng() * near.length) | 0;
+    for(let k = 0; k < Math.min(4, near.length); k++){
+      const t = near[(start + k) % near.length];
+      const pt = { x:t.x, z:t.z };
+      if(!destFar(toWorld(pt), rng)) continue;
+      for(const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]){
+        if(!isRoad(t.i + di, t.j + dj)){ pt.x += di * 4; pt.z += dj * 4; break; }
+      }
+      return toWorld(pt);
+    }
+    return null;
+  }
+  return { hailNear, destFar };
+}
+
 // States: off (not in a cab) -> idle (in a cab, waiting for a hail) ->
 // hail (a fare is waiting) -> ride (passenger aboard) -> cooldown ->
 // idle. Events are returned from update() for main.js to toast/pay on.
-export function createTaxiJob(rng = Math.random){
+const MAIN_CITY_PICKERS = { hailNear: hailPointNear, destFar: destinationFar };
+export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
   let state = 'off';
   let inCab = false;
+  let activePickers = pickers || MAIN_CITY_PICKERS;
   let timer = 0;                 // idle: until next hail; hail: patience left
   let hailPoint = null, dest = null, pickupPoint = null;
   let parSeconds = 0, rideSeconds = 0, hpStart = 0, maxHp = 100;
@@ -105,6 +182,11 @@ export function createTaxiJob(rng = Math.random){
     get target(){ return state === 'hail' ? hailPoint : state === 'ride' ? dest : null; },
     // Seconds left: patience while hailing, par time while riding (negative = late).
     get timeLeft(){ return state === 'hail' ? timer : state === 'ride' ? parSeconds - rideSeconds : 0; },
+
+    // Swap the point pickers when the world changes (main city <-> custom
+    // map); null restores the main-city grid. main.js abandons a live fare
+    // before the swap, so this only ever affects idle / cooldown.
+    setPickers(p){ activePickers = p || MAIN_CITY_PICKERS; },
 
     // Returns 'abandoned' when switching out of the cab killed a live fare.
     setInCab(v){
@@ -132,20 +214,31 @@ export function createTaxiJob(rng = Math.random){
       if(state === 'idle'){
         timer -= dt;
         if(timer <= 0){
-          hailPoint = hailPointNear(ctx.x, ctx.z, rng);
-          state = 'hail'; timer = HAIL_PATIENCE;
-          events.push({ type:'hail', point:{ ...hailPoint } });
+          // No hail point (off the streets, or roads too short for a trip)
+          // is not an error: wait a beat and try again.
+          hailPoint = activePickers.hailNear(ctx.x, ctx.z, rng);
+          if(!hailPoint){ timer = HAIL_RETRY; }
+          else{
+            state = 'hail'; timer = HAIL_PATIENCE;
+            events.push({ type:'hail', point:{ ...hailPoint } });
+          }
         }
       }else if(state === 'hail'){
         timer -= dt;
         if(dist(ctx, hailPoint) < PICKUP_RADIUS && Math.abs(ctx.speed) < 1){
           pickupPoint = { ...hailPoint };
-          dest = destinationFar(pickupPoint, rng);
-          const trip = dist(pickupPoint, dest);
-          parSeconds = parTimeFor(trip); rideSeconds = 0;
-          hpStart = ctx.hp; maxHp = ctx.maxHp || 100;
-          state = 'ride';
-          events.push({ type:'pickup', dest:{ ...dest }, parSeconds, fareEstimate:fareFor(trip) });
+          dest = activePickers.destFar(pickupPoint, rng);
+          if(!dest){
+            // Nowhere worth driving to from here: the fare falls through.
+            state = 'cooldown'; timer = FARE_COOLDOWN; hailPoint = pickupPoint = null;
+            events.push({ type:'hailExpired' });
+          }else{
+            const trip = dist(pickupPoint, dest);
+            parSeconds = parTimeFor(trip); rideSeconds = 0;
+            hpStart = ctx.hp; maxHp = ctx.maxHp || 100;
+            state = 'ride';
+            events.push({ type:'pickup', dest:{ ...dest }, parSeconds, fareEstimate:fareFor(trip) });
+          }
         }else if(timer <= 0){
           state = 'cooldown'; timer = FARE_COOLDOWN; hailPoint = null;
           events.push({ type:'hailExpired' });

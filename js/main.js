@@ -31,7 +31,7 @@ import { createTraffic } from './traffic.js';
 import { createPolice, POLICE_STATION, WITNESS_RADIUS, WITNESS_LOUD_RADIUS } from './police.js';
 import { HOSPITAL_SPAWN, GRID_HALF, surfaceAt, surfaceGrip, WATER_DEPTH, isWet } from './world.js';
 import { createWheelFX } from './fx.js';
-import { buildCustomMap } from './mapbuilder.js';
+import { buildCustomMap, OFFSET } from './mapbuilder.js';
 import { createMapEditor } from './mapeditor.js';
 import { THEMES as MAP_THEMES, spawnOf } from './custommap.js';
 import { buildStats, normalizeBuild, migrateLegacy, timeslip } from './tuning.js';
@@ -44,7 +44,7 @@ import { nearestBay, nearestRepairShop, REPAIR_RADIUS, REPAIR_RATE, BAY_REPAIR_D
 import { TireWear, WORN_WARN, WORN_BAD } from './tires.js';
 import { nearestTireBay, nearestTireShop, TIRE_RADIUS, TIRE_RATE, BAY_TIRE_DIST } from './tireshop.js';
 import { FuelTruckRun, buildFuelTruckMeshes } from './fueltruck.js';
-import { createTaxiJob, isTaxiCar } from './taxi.js';
+import { createTaxiJob, isTaxiCar, customMapPickers } from './taxi.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
 
@@ -789,6 +789,9 @@ function playCustom(map){
   people.clearEnemies(); people.setCount(0); traffic.setCount(0);
   weaponCtx.save=save; $('tdm-hud').classList.add('hidden');
   customMap=buildCustomMap(scene, map); lastCustom=map;
+  // A fare cannot follow you to another world: end it here, quietly.
+  if(taxi.active){ taxi.abandon(); setTaxiBeacon(null); hideTaxiPed(); updateTaxiHud(); }
+  taxi.setPickers(customMapPickers(map, OFFSET));   // cab fares run on custom streets too
   weaponCtx.colliders=customMap.colliders; weaponCtx.targets=[];
   minimap.setCustom(customMap.painter); minimap.setWaypoint(null);
   setTimeOfDay((MAP_THEMES[map.theme]||MAP_THEMES.summer).sky, true);
@@ -800,6 +803,9 @@ function playCustom(map){
 }
 function exitCustom(){
   if(!customMap) return;
+  // Leaving the custom world ends a live fare, same as leaving the cab.
+  if(taxi.active){ taxi.abandon(); setTaxiBeacon(null); hideTaxiPed(); updateTaxiHud(); }
+  taxi.setPickers(null);   // back to the main-city grid
   customMap.dispose(); customMap=null;
   weaponCtx.colliders=city.colliders; weaponCtx.targets=shops.targets;
   minimap.setCustom(null);
@@ -1610,8 +1616,10 @@ function frame(now){
   const playing = state==='freeroam' && !paused && !garageOpen && !storeOpen && !editorOpen && !pickOpen && !dead && !boardOpen;
   // a fare only lives while you are driving the cab in free roam: leaving
   // the cab, the garage, a shop or the world itself ends it (the map and
-  // mission board pauses do not — a fare survives a quick look at the map)
-  if((state!=='freeroam' || customMap || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && taxi.active){
+  // mission board pauses do not — a fare survives a quick look at the map).
+  // Switching worlds is handled in playCustom/exitCustom, which end the
+  // fare before the teleport; the cab keeps working on custom maps.
+  if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && taxi.active){
     taxi.abandon(); setTaxiBeacon(null); hideTaxiPed(); updateTaxiHud(); toast('🚕 Fare abandoned — you left the cab', 2000);
   }
   if(editorOpen){
@@ -1764,9 +1772,9 @@ function frame(now){
     }else{ tireHintShown = false; tireSessionCost = 0; }
     // Taxi fares: driving the Peg City Cab turns free roam into a shift —
     // fares hail nearby, pay base + distance, and tip for a quick clean ride.
-    // Main city only: the hail/destination pickers use the main-city grid.
-    if(customMap){ if(taxi.inCab) taxi.setInCab(false); }
-    else if(taxi.setInCab(isTaxiCar(carDef)) === 'abandoned'){ hideTaxiPed(); toast('🚕 Fare abandoned — you switched cars', 2000); }
+    // The pickers follow the world: main-city grid at home, custom streets
+    // on a custom map (swapped in playCustom/exitCustom).
+    if(taxi.setInCab(isTaxiCar(carDef)) === 'abandoned'){ hideTaxiPed(); toast('🚕 Fare abandoned — you switched cars', 2000); }
     for(const ev of taxi.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100 })){
       if(ev.type === 'hail'){ setTaxiBeacon(ev.point); setTaxiPed(ev.point); toast('🚕 Fare hailing nearby — drive to the yellow marker', 2600); }
       else if(ev.type === 'hailExpired'){ setTaxiBeacon(null); hideTaxiPed(); toast('🚕 Fare gave up waiting', 2000); }
