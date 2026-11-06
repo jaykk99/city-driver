@@ -1030,6 +1030,16 @@ function updateTaxiHud(){
   $('tx-time').textContent = taxi.state === 'hail' ? '⏱ ' + Math.ceil(tl) + 's'
     : (tl >= 0 ? '⏱ ' + Math.ceil(tl) + 's' : '⏱ LATE');
   $('tx-time').classList.toggle('low', tl < 10);
+  // Streak + lifetime rating, when there is anything to show: the streak
+  // is this shift's, the rating is the career average from the save.
+  const st = $('tx-streak');
+  if(st){
+    const bits = [];
+    if(taxi.streak > 1) bits.push('🔥 Streak x' + taxi.streak + ' (+' + Math.min(10 * (taxi.streak - 1), 50) + '%)');
+    else if(taxi.streak === 1) bits.push('🔥 Streak x1');
+    if(taxi.ratingCount > 0) bits.push('★ ' + taxi.ratingAvg.toFixed(1) + ' (' + taxi.ratingCount + ' rides)');
+    st.textContent = bits.join(' · ');
+  }
   if(tg && !inside){
     const a = Math.atan2(-(tg.x - px), -(tg.z - pz));
     const rel = Math.atan2(Math.sin(a - h), Math.cos(a - h));
@@ -1771,7 +1781,9 @@ function frame(now){
       }else{ tireHintShown = false; tireSessionCost = 0; }
     }else{ tireHintShown = false; tireSessionCost = 0; }
     // Taxi fares: driving the Peg City Cab turns free roam into a shift —
-    // fares hail nearby, pay base + distance, and tip for a quick clean ride.
+    // fares hail nearby, pay base + distance, tip for a quick clean ride,
+    // and earn a streak bonus (+10% per consecutive fare, cap +50%) plus a
+    // passenger star rating that follows the driver across sessions.
     // The pickers follow the world: main-city grid at home, custom streets
     // on a custom map (swapped in playCustom/exitCustom).
     if(taxi.setInCab(isTaxiCar(carDef)) === 'abandoned'){ hideTaxiPed(); toast('🚕 Fare abandoned — you switched cars', 2000); }
@@ -1780,8 +1792,13 @@ function frame(now){
       else if(ev.type === 'hailExpired'){ setTaxiBeacon(null); hideTaxiPed(); toast('🚕 Fare gave up waiting', 2000); }
       else if(ev.type === 'pickup'){ setTaxiBeacon(ev.dest); hideTaxiPed(); audio.beep(880, 0.08); toast('🚕 Passenger aboard — $' + ev.fareEstimate.toLocaleString() + ' on the meter', 2600); }
       else if(ev.type === 'dropoff'){ addCash(ev.total); setTaxiBeacon(null); hideTaxiPed();
-        toast(ev.tip > 0 ? '🚕 Fare paid — $' + ev.fare.toLocaleString() + ' + $' + ev.tip.toLocaleString() + ' tip'
-          : '🚕 Fare paid — $' + ev.fare.toLocaleString(), 2800); }
+        save.taxi = taxi.career; saveSave(save);   // career (rides, best streak, rating) persists
+        const stars = '★'.repeat(ev.rating) + '☆'.repeat(5 - ev.rating);
+        let msg = '🚕 Fare paid — $' + ev.fare.toLocaleString();
+        if(ev.tip > 0) msg += ' + $' + ev.tip.toLocaleString() + ' tip';
+        if(ev.streakBonus > 0) msg += ' + $' + ev.streakBonus.toLocaleString() + ' streak x' + ev.streak;
+        msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';
+        toast(msg, 3200); }
       else if(ev.type === 'rideFailed'){ setTaxiBeacon(null); hideTaxiPed(); toast('🚕 Passenger bailed — wrecked cab', 2400); }
     }
     updateTaxiPed(dt);
@@ -1985,6 +2002,7 @@ function onViewResize(w, h){
 async function boot(){
   try{
     save=ensureSkins(ensureArsenal(loadSave()));
+    taxi.loadCareer(save.taxi);   // cab career (rides, earnings, rating) survives sessions
     audio=createAudio();
     orient=initOrientation(onViewResize);
     await initScene();

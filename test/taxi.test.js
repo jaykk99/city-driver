@@ -5,7 +5,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   TAXI_BASE_FARE, TAXI_PER_METRE, TAXI_TIP_RATE, PICKUP_RADIUS, DROPOFF_RADIUS,
-  HAIL_PATIENCE, MIN_TRIP, fareFor, parTimeFor, tipFor, isTaxiCar,
+  HAIL_PATIENCE, MIN_TRIP, STREAK_BONUS_RATE, STREAK_BONUS_CAP,
+  fareFor, parTimeFor, tipFor, isTaxiCar, streakBonusFor, ratingFor,
   hailPointNear, destinationFar, createTaxiJob,
 } from '../js/taxi.js';
 import { GRID_HALF } from '../js/world.js';
@@ -174,5 +175,121 @@ describe('job state machine', () => {
     const outside = { x:hail.point.x + PICKUP_RADIUS + 2, z:hail.point.z };
     assert.deepEqual(job.update(0.1, at(outside.x, outside.z, 0)), []);
     assert.equal(job.state, 'hail');
+  });
+});
+
+describe('streak bonus + passenger rating', () => {
+  it('streak bonus is 0 on the first fare, +10% per fare after, capped at +50%', () => {
+    assert.equal(streakBonusFor(1, 200, 100), 0);
+    assert.equal(streakBonusFor(2, 200, 100), Math.round(300 * STREAK_BONUS_RATE));
+    assert.equal(streakBonusFor(3, 200, 100), Math.round(300 * STREAK_BONUS_RATE * 2));
+    assert.equal(streakBonusFor(6, 200, 100), Math.round(300 * STREAK_BONUS_CAP));
+    assert.equal(streakBonusFor(20, 200, 100), Math.round(300 * STREAK_BONUS_CAP), 'cap holds past streak 6');
+    assert.equal(streakBonusFor(0, 200, 100), 0);
+  });
+
+  it('rating is 5 for a quick clean ride, less for late or battered ones', () => {
+    const par = 60;
+    assert.equal(ratingFor(30, par, 0), 5);
+    assert.equal(ratingFor(61, par, 0), 3, 'late costs 2 stars');
+    assert.equal(ratingFor(30, par, 0.3), 4, 'light damage costs 1 star');
+    assert.equal(ratingFor(30, par, 0.6), 3, 'heavy damage costs 2 stars');
+    assert.equal(ratingFor(61, par, 0.6), 1, 'late and wrecked-adjacent bottoms out at 1, never 0');
+  });
+
+  // Drive one full fare on an already-shifted job and return the dropoff.
+  function driveFare(job){
+    let hail = null;
+    for(let k = 0; k < 60 && !hail; k++){ const evs = job.update(5, at(0, 0)); hail = evs.find(e => e.type === 'hail'); }
+    assert.ok(hail, 'a hail arrives');
+    const pickup = job.update(0.1, at(hail.point.x, hail.point.z, 0));
+    assert.equal(pickup[0].type, 'pickup');
+    const d = pickup[0].dest;
+    const drop = job.update(0.1, at(d.x, d.z, 0));
+    assert.equal(drop[0].type, 'dropoff');
+    return drop[0];
+  }
+
+  it('consecutive fares build the streak and pay the bonus', () => {
+    const job = createTaxiJob(cyclingRng());
+    job.setInCab(true);
+    const first = driveFare(job);
+    assert.equal(job.streak, 1);
+    assert.equal(first.streakBonus, 0, 'first fare of a streak earns no bonus');
+    assert.equal(first.total, first.fare + first.tip);
+    assert.equal(first.rating, 5, 'quick clean ride is 5 stars');
+    assert.equal(job.ratingAvg, 5);
+    assert.equal(job.rides, 1);
+    const second = driveFare(job);
+    assert.equal(job.streak, 2);
+    assert.equal(second.streak, 2);
+    assert.ok(second.streakBonus > 0, 'second consecutive fare pays a streak bonus');
+    assert.equal(second.streakBonus, streakBonusFor(2, second.fare, second.tip));
+    assert.equal(second.total, second.fare + second.tip + second.streakBonus);
+    assert.equal(job.bestStreak, 2);
+    assert.equal(job.earned, first.total + second.total);
+    assert.equal(job.ratingCount, 2);
+  });
+
+  it('a wrecked cab ends the streak with no payout', () => {
+    const job = createTaxiJob(cyclingRng());
+    job.setInCab(true);
+    driveFare(job);
+    assert.equal(job.streak, 1);
+    let hail = null;
+    for(let k = 0; k < 60 && !hail; k++){ const evs = job.update(5, at(0, 0)); hail = evs.find(e => e.type === 'hail'); }
+    job.update(0.1, at(hail.point.x, hail.point.z, 0));
+    assert.equal(job.state, 'ride');
+    job.update(0.1, at(50, 50, 0, 0));
+    assert.equal(job.streak, 0);
+    assert.equal(job.bestStreak, 1, 'best streak survives the wreck');
+  });
+
+  it('leaving the cab ends the shift and the streak', () => {
+    const job = createTaxiJob(cyclingRng());
+    job.setInCab(true);
+    driveFare(job);
+    assert.equal(job.streak, 1);
+    job.setInCab(false);
+    assert.equal(job.streak, 0);
+    job.setInCab(true);
+    const next = driveFare(job);
+    assert.equal(next.streak, 1, 'new shift starts a new streak');
+    assert.equal(next.streakBonus, 0);
+  });
+
+  it('an expired hail does not break the streak', () => {
+    const job = createTaxiJob(cyclingRng());
+    job.setInCab(true);
+    driveFare(job);
+    assert.equal(job.streak, 1);
+    let hail = null;
+    for(let k = 0; k < 60 && !hail; k++){ const evs = job.update(5, at(0, 0)); hail = evs.find(e => e.type === 'hail'); }
+    assert.ok(hail);
+    const expired = job.update(HAIL_PATIENCE + 1, at(0, 0));
+    assert.equal(expired[0].type, 'hailExpired');
+    assert.equal(job.streak, 1, 'missing a hail is not losing a passenger');
+    const next = driveFare(job);
+    assert.equal(next.streak, 2);
+    assert.ok(next.streakBonus > 0);
+  });
+
+  it('career loads from a save and the streak never carries over', () => {
+    const job = createTaxiJob(cyclingRng());
+    job.loadCareer({ rides: 10, earned: 5000, bestStreak: 4, ratingSum: 45, ratingCount: 10 });
+    assert.equal(job.rides, 10);
+    assert.equal(job.earned, 5000);
+    assert.equal(job.bestStreak, 4);
+    assert.equal(job.ratingAvg, 4.5);
+    assert.equal(job.streak, 0, 'a new session starts a new shift');
+    assert.deepEqual(job.career, { rides: 10, earned: 5000, bestStreak: 4, ratingSum: 45, ratingCount: 10 });
+    const bad = createTaxiJob(cyclingRng());
+    bad.loadCareer({ rides: 'many', earned: -5, ratingSum: NaN });
+    assert.equal(bad.rides, 0);
+    assert.equal(bad.earned, 0);
+    assert.equal(bad.ratingAvg, 0);
+    const none = createTaxiJob(cyclingRng());
+    none.loadCareer(null);
+    assert.equal(none.ratingCount, 0);
   });
 });

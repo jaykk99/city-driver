@@ -30,6 +30,8 @@ function defaultSave(){
     upgrades:{ sport:blankUpgrades() },
     paint:{ sport:0xd7263d },
     wheels:{ sport:0 },
+    // Taxi career (taxi.js): lifetime fares, earnings, best streak, rating.
+    taxi:{ rides:0, earned:0, bestStreak:0, ratingSum:0, ratingCount:0 },
   };
 }
 
@@ -50,6 +52,11 @@ function normalize(s){
     out.wheels[id]=Math.max(0, out.wheels[id]|0);
   }
   out.cash = Math.max(0, Math.floor(+out.cash||0));
+  // Taxi career: old saves have no taxi block; bad values read as 0.
+  const tx = (out.taxi && typeof out.taxi === 'object') ? out.taxi : {};
+  const txn = v => (typeof v === 'number' && isFinite(v) && v > 0) ? Math.floor(v) : 0;
+  out.taxi = { rides:txn(tx.rides), earned:txn(tx.earned), bestStreak:txn(tx.bestStreak),
+    ratingSum:txn(tx.ratingSum), ratingCount:txn(tx.ratingCount) };
   return out;
 }
 

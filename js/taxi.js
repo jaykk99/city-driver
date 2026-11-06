@@ -18,6 +18,8 @@ import { getTile, tileCenter } from './custommap.js';
 export const TAXI_BASE_FARE = 40;      // $ flat, before distance
 export const TAXI_PER_METRE = 0.30;    // $ per metre of straight-line trip
 export const TAXI_TIP_RATE = 0.5;      // tip = this fraction of the fare, on time
+export const STREAK_BONUS_RATE = 0.10; // +10% of the payout per consecutive fare past the first
+export const STREAK_BONUS_CAP = 0.50;  // streak bonus tops out at +50%
 export const PICKUP_RADIUS = 7;        // m: stop this close to the hailer to board
 export const DROPOFF_RADIUS = 7;       // m: stop this close to the destination to pay
 export const HAIL_PATIENCE = 45;       // s: a hailer waits this long, then walks off
@@ -49,6 +51,26 @@ export function parTimeFor(distM){
 export function tipFor(fare, seconds, parSeconds, damageFrac){
   if(seconds > parSeconds) return 0;
   return Math.round(fare * TAXI_TIP_RATE * (1 - clamp(damageFrac, 0, 1)));
+}
+
+// Streak bonus: consecutive completed fares pay more — +10% of the
+// fare + tip for each fare past the first in the streak, capped at +50%.
+// The first fare of a streak earns no bonus. `streak` counts the fare
+// just completed, so streak 1 pays 0 and streak 6+ pays the cap.
+export function streakBonusFor(streak, fare, tip){
+  const rate = Math.min(STREAK_BONUS_RATE * Math.max(0, streak - 1), STREAK_BONUS_CAP);
+  return Math.round((fare + tip) * rate);
+}
+
+// Passenger rating, 1-5 stars: a quick clean ride is 5. Late costs 2
+// stars, heavy damage costs 2, light damage costs 1 — a late, battered
+// ride bottoms out at 1, never 0.
+export function ratingFor(seconds, parSeconds, damageFrac){
+  let stars = 5;
+  if(seconds > parSeconds) stars -= 2;
+  if(damageFrac >= 0.5) stars -= 2;
+  else if(damageFrac >= 0.2) stars -= 1;
+  return clamp(stars, 1, 5);
 }
 
 export function isTaxiCar(carDef){
@@ -171,6 +193,10 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
   let timer = 0;                 // idle: until next hail; hail: patience left
   let hailPoint = null, dest = null, pickupPoint = null;
   let parSeconds = 0, rideSeconds = 0, hpStart = 0, maxHp = 100;
+  // Streak + rating: the streak is this shift only (a wreck or a walk-away
+  // ends it); the career totals persist in the save via loadCareer/career.
+  let streak = 0, bestStreak = 0, rides = 0, earned = 0;
+  let ratingSum = 0, ratingCount = 0;
 
   function nextDelay(){ return HAIL_DELAY_MIN + rng() * (HAIL_DELAY_MAX - HAIL_DELAY_MIN); }
 
@@ -182,6 +208,25 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
     get target(){ return state === 'hail' ? hailPoint : state === 'ride' ? dest : null; },
     // Seconds left: patience while hailing, par time while riding (negative = late).
     get timeLeft(){ return state === 'hail' ? timer : state === 'ride' ? parSeconds - rideSeconds : 0; },
+    // Consecutive completed fares this shift (0 until the first dropoff).
+    get streak(){ return streak; },
+    get bestStreak(){ return bestStreak; },
+    get rides(){ return rides; },
+    get earned(){ return earned; },
+    get ratingCount(){ return ratingCount; },
+    // Lifetime passenger rating, 1-5; 0 until the first rated ride.
+    get ratingAvg(){ return ratingCount ? ratingSum / ratingCount : 0; },
+    // Career snapshot for the save file (plain numbers, no state).
+    get career(){ return { rides, earned, bestStreak, ratingSum, ratingCount }; },
+
+    // Seed the career totals from a save (missing/corrupt fields read as 0).
+    // The streak itself is never restored: a new session starts a new shift.
+    loadCareer(c){
+      const n = v => (typeof v === 'number' && isFinite(v) && v > 0) ? Math.floor(v) : 0;
+      if(!c || typeof c !== 'object') return;
+      rides = n(c.rides); earned = n(c.earned); bestStreak = n(c.bestStreak);
+      ratingSum = n(c.ratingSum); ratingCount = n(c.ratingCount);
+    },
 
     // Swap the point pickers when the world changes (main city <-> custom
     // map); null restores the main-city grid. main.js abandons a live fare
@@ -189,10 +234,12 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
     setPickers(p){ activePickers = p || MAIN_CITY_PICKERS; },
 
     // Returns 'abandoned' when switching out of the cab killed a live fare.
+    // Leaving the cab ends the shift, so the streak resets either way.
     setInCab(v){
       if(v === inCab) return null;
       inCab = v;
       if(v){ if(state === 'off'){ state = 'idle'; timer = nextDelay(); } return null; }
+      streak = 0;
       if(state === 'hail' || state === 'ride'){
         state = 'off'; hailPoint = dest = pickupPoint = null; return 'abandoned';
       }
@@ -203,6 +250,7 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
     // Returns true when a fare was actually live. The cooldown only
     // applies when the cab is still the car (setInCab(true) re-arms idle).
     abandon(){
+      streak = 0;   // leaving the scene ends the shift (an expired hail does not)
       if(state !== 'hail' && state !== 'ride') return false;
       state = inCab ? 'cooldown' : 'off'; timer = FARE_COOLDOWN;
       hailPoint = dest = pickupPoint = null; return true;
@@ -246,6 +294,7 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
       }else if(state === 'ride'){
         rideSeconds += dt;
         if(ctx.hp <= 0){
+          streak = 0;   // the passenger bails and the streak dies with the cab
           state = 'cooldown'; timer = FARE_COOLDOWN; dest = pickupPoint = null;
           events.push({ type:'rideFailed', reason:'wrecked' });
         }else if(dist(ctx, dest) < DROPOFF_RADIUS && Math.abs(ctx.speed) < 1){
@@ -253,8 +302,16 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
           const fare = fareFor(trip);
           const damageFrac = maxHp > 0 ? (hpStart - ctx.hp) / maxHp : 0;
           const tip = tipFor(fare, rideSeconds, parSeconds, damageFrac);
+          streak++;
+          bestStreak = Math.max(bestStreak, streak);
+          const streakBonus = streakBonusFor(streak, fare, tip);
+          const rating = ratingFor(rideSeconds, parSeconds, damageFrac);
+          ratingSum += rating; ratingCount++; rides++;
+          const total = fare + tip + streakBonus;
+          earned += total;
           state = 'cooldown'; timer = FARE_COOLDOWN; dest = pickupPoint = null;
-          events.push({ type:'dropoff', fare, tip, total:fare + tip });
+          events.push({ type:'dropoff', fare, tip, streakBonus, streak, rating,
+            ratingAvg: ratingCount ? ratingSum / ratingCount : 0, total });
         }
       }else if(state === 'cooldown'){
         timer -= dt;
