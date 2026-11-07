@@ -44,7 +44,7 @@ import { nearestBay, nearestRepairShop, REPAIR_RADIUS, REPAIR_RATE, BAY_REPAIR_D
 import { TireWear, WORN_WARN, WORN_BAD } from './tires.js';
 import { nearestTireBay, nearestTireShop, TIRE_RADIUS, TIRE_RATE, BAY_TIRE_DIST } from './tireshop.js';
 import { FuelTruckRun, buildFuelTruckMeshes } from './fueltruck.js';
-import { createTaxiJob, isTaxiCar, customMapPickers } from './taxi.js';
+import { createTaxiJob, isTaxiCar, customMapPickers, surgeMultiplierFor, surgeLabelFor } from './taxi.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
 
@@ -1035,6 +1035,7 @@ function updateTaxiHud(){
   const st = $('tx-streak');
   if(st){
     const bits = [];
+    if(taxi.surge > 1) bits.push((taxi.surge >= 1.5 ? '🌙 ' : '🌇 ') + surgeLabelFor(taxi.surge) + ' ×' + taxi.surge);
     if(taxi.streak > 1) bits.push('🔥 Streak x' + taxi.streak + ' (+' + Math.min(10 * (taxi.streak - 1), 50) + '%)');
     else if(taxi.streak === 1) bits.push('🔥 Streak x1');
     if(taxi.ratingCount > 0) bits.push('★ ' + taxi.ratingAvg.toFixed(1) + ' (' + taxi.ratingCount + ' rides)');
@@ -1784,19 +1785,24 @@ function frame(now){
     // fares hail nearby, pay base + distance, tip for a quick clean ride,
     // and earn a streak bonus (+10% per consecutive fare, cap +50%) plus a
     // passenger star rating that follows the driver across sessions.
+    // Fares surge with the time of day (sunset +25%, night +50%), locked
+    // in at pickup — the meter follows the sky, not the clock mid-ride.
     // The pickers follow the world: main-city grid at home, custom streets
     // on a custom map (swapped in playCustom/exitCustom).
     if(taxi.setInCab(isTaxiCar(carDef)) === 'abandoned'){ hideTaxiPed(); toast('🚕 Fare abandoned — you switched cars', 2000); }
-    for(const ev of taxi.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100 })){
-      if(ev.type === 'hail'){ setTaxiBeacon(ev.point); setTaxiPed(ev.point); toast('🚕 Fare hailing nearby — drive to the yellow marker', 2600); }
+    for(const ev of taxi.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100, surge:surgeMultiplierFor(PRESET_ORDER[todIdx]) })){
+      if(ev.type === 'hail'){ setTaxiBeacon(ev.point); setTaxiPed(ev.point);
+        toast(ev.surge > 1 ? '🚕 Fare hailing nearby — ' + surgeLabelFor(ev.surge) + ' ×' + ev.surge : '🚕 Fare hailing nearby — drive to the yellow marker', 2600); }
       else if(ev.type === 'hailExpired'){ setTaxiBeacon(null); hideTaxiPed(); toast('🚕 Fare gave up waiting', 2000); }
-      else if(ev.type === 'pickup'){ setTaxiBeacon(ev.dest); hideTaxiPed(); audio.beep(880, 0.08); toast('🚕 Passenger aboard — $' + ev.fareEstimate.toLocaleString() + ' on the meter', 2600); }
+      else if(ev.type === 'pickup'){ setTaxiBeacon(ev.dest); hideTaxiPed(); audio.beep(880, 0.08);
+        toast('🚕 Passenger aboard — $' + ev.fareEstimate.toLocaleString() + ' on the meter' + (ev.surge > 1 ? ' (' + surgeLabelFor(ev.surge) + ' ×' + ev.surge + ')' : ''), 2600); }
       else if(ev.type === 'dropoff'){ addCash(ev.total); setTaxiBeacon(null); hideTaxiPed();
         save.taxi = taxi.career; saveSave(save);   // career (rides, best streak, rating) persists
         const stars = '★'.repeat(ev.rating) + '☆'.repeat(5 - ev.rating);
         let msg = '🚕 Fare paid — $' + ev.fare.toLocaleString();
         if(ev.tip > 0) msg += ' + $' + ev.tip.toLocaleString() + ' tip';
         if(ev.streakBonus > 0) msg += ' + $' + ev.streakBonus.toLocaleString() + ' streak x' + ev.streak;
+        if(ev.surge > 1) msg += ' · ' + surgeLabelFor(ev.surge) + ' ×' + ev.surge;
         msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';
         toast(msg, 3200); }
       else if(ev.type === 'rideFailed'){ setTaxiBeacon(null); hideTaxiPed(); toast('🚕 Passenger bailed — wrecked cab', 2400); }

@@ -7,7 +7,10 @@
 // hail nearby. Pull up to the yellow marker and stop to pick up, then
 // follow it to the destination and stop again to get paid — base fare
 // plus distance, with a tip for a quick, clean ride (late or battered
-// rides lose the tip, a wrecked cab loses the passenger).
+// rides lose the tip, a wrecked cab loses the passenger). Fares surge
+// with the time of day: sunset rush pays +25%, night pays +50%, locked
+// in when the passenger boards so the sky changing mid-ride never
+// reprices a fare already running.
 //
 // Pure state machine + fare math, no THREE and no document, so the whole
 // loop is unit-testable in node. main.js owns the beacon, the hailer ped,
@@ -18,6 +21,19 @@ import { getTile, tileCenter } from './custommap.js';
 export const TAXI_BASE_FARE = 40;      // $ flat, before distance
 export const TAXI_PER_METRE = 0.30;    // $ per metre of straight-line trip
 export const TAXI_TIP_RATE = 0.5;      // tip = this fraction of the fare, on time
+// Surge pricing follows the time-of-day cycle (sky.js presets): day
+// pays the meter, sunset rush pays +25%, night pays +50% — the whole
+// meter (fare, and the tip + streak bonus computed off it) scales.
+export const SURGE_RATES = { day: 1, sunset: 1.25, night: 1.5 };
+export function surgeMultiplierFor(preset){
+  return (preset && SURGE_RATES[preset]) || 1;
+}
+// Human label for a surge rate, for toasts and the HUD; '' at no surge.
+export function surgeLabelFor(rate){
+  if(rate >= 1.5) return 'Night surge';
+  if(rate > 1) return 'Sunset surge';
+  return '';
+}
 export const STREAK_BONUS_RATE = 0.10; // +10% of the payout per consecutive fare past the first
 export const STREAK_BONUS_CAP = 0.50;  // streak bonus tops out at +50%
 export const PICKUP_RADIUS = 7;        // m: stop this close to the hailer to board
@@ -34,9 +50,13 @@ export const HAIL_RETRY = 5;           // s: wait before retrying a hail when no
 const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-// A fare of `distM` metres pays the base plus distance, rounded to dollars.
-export function fareFor(distM){
-  return TAXI_BASE_FARE + Math.round(TAXI_PER_METRE * distM);
+// A fare of `distM` metres pays the base plus distance, times the surge
+// in effect when the passenger boards (1 in the day, 1.5 at night).
+// The tip and streak bonus are computed off the surged fare, so the
+// whole meter scales — a night fare pays 1.5x end to end.
+export function fareFor(distM, surge = 1){
+  const s = (typeof surge === 'number' && isFinite(surge) && surge > 0) ? surge : 1;
+  return Math.round((TAXI_BASE_FARE + Math.round(TAXI_PER_METRE * distM)) * s);
 }
 
 // Par time for a trip: city pace ~11 m/s (the deliver missions' base pace)
@@ -197,6 +217,11 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
   // ends it); the career totals persist in the save via loadCareer/career.
   let streak = 0, bestStreak = 0, rides = 0, earned = 0;
   let ratingSum = 0, ratingCount = 0;
+  // Surge: the rate in effect right now (from ctx.surge, set by main.js
+  // from the time-of-day preset) and the rate locked in when the current
+  // passenger boarded — the meter is fixed at pickup, so the sky changing
+  // mid-ride never reprices a fare already running.
+  let curSurge = 1, rideSurge = 1;
 
   function nextDelay(){ return HAIL_DELAY_MIN + rng() * (HAIL_DELAY_MAX - HAIL_DELAY_MIN); }
 
@@ -216,6 +241,9 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
     get ratingCount(){ return ratingCount; },
     // Lifetime passenger rating, 1-5; 0 until the first rated ride.
     get ratingAvg(){ return ratingCount ? ratingSum / ratingCount : 0; },
+    // Surge in effect: the locked-in rate during a ride, the live rate
+    // otherwise (1 in the day, 1.5 at night). The HUD reads this.
+    get surge(){ return state === 'ride' ? rideSurge : curSurge; },
     // Career snapshot for the save file (plain numbers, no state).
     get career(){ return { rides, earned, bestStreak, ratingSum, ratingCount }; },
 
@@ -256,9 +284,11 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
       hailPoint = dest = pickupPoint = null; return true;
     },
 
-    // ctx = { x, z, speed, hp }. Returns events for main.js.
+    // ctx = { x, z, speed, hp, surge? }. Returns events for main.js.
     update(dt, ctx){
       const events = [];
+      const s = ctx && ctx.surge;
+      curSurge = (typeof s === 'number' && isFinite(s) && s > 0) ? s : 1;
       if(state === 'idle'){
         timer -= dt;
         if(timer <= 0){
@@ -268,7 +298,7 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
           if(!hailPoint){ timer = HAIL_RETRY; }
           else{
             state = 'hail'; timer = HAIL_PATIENCE;
-            events.push({ type:'hail', point:{ ...hailPoint } });
+            events.push({ type:'hail', point:{ ...hailPoint }, surge: curSurge });
           }
         }
       }else if(state === 'hail'){
@@ -282,10 +312,12 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
             events.push({ type:'hailExpired' });
           }else{
             const trip = dist(pickupPoint, dest);
+            rideSurge = curSurge;   // the meter is fixed at pickup
             parSeconds = parTimeFor(trip); rideSeconds = 0;
             hpStart = ctx.hp; maxHp = ctx.maxHp || 100;
             state = 'ride';
-            events.push({ type:'pickup', dest:{ ...dest }, parSeconds, fareEstimate:fareFor(trip) });
+            events.push({ type:'pickup', dest:{ ...dest }, parSeconds,
+              fareEstimate:fareFor(trip, rideSurge), surge: rideSurge });
           }
         }else if(timer <= 0){
           state = 'cooldown'; timer = FARE_COOLDOWN; hailPoint = null;
@@ -299,7 +331,7 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
           events.push({ type:'rideFailed', reason:'wrecked' });
         }else if(dist(ctx, dest) < DROPOFF_RADIUS && Math.abs(ctx.speed) < 1){
           const trip = dist(pickupPoint, dest);
-          const fare = fareFor(trip);
+          const fare = fareFor(trip, rideSurge);
           const damageFrac = maxHp > 0 ? (hpStart - ctx.hp) / maxHp : 0;
           const tip = tipFor(fare, rideSeconds, parSeconds, damageFrac);
           streak++;
@@ -311,6 +343,7 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
           earned += total;
           state = 'cooldown'; timer = FARE_COOLDOWN; dest = pickupPoint = null;
           events.push({ type:'dropoff', fare, tip, streakBonus, streak, rating,
+            surge: rideSurge,
             ratingAvg: ratingCount ? ratingSum / ratingCount : 0, total });
         }
       }else if(state === 'cooldown'){
