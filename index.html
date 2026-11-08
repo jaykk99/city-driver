@@ -30,6 +30,8 @@
   <div id="online-hud" class="dim">🌐 …</div>
   <div id="mission-btn" title="Missions">📱</div>
   <div id="health-hud"><span>❤</span><div class="hp-bar"><div id="hp-fill"></div></div></div>
+  <div id="car-hud"><span>🚗</span><div class="hp-bar"><div id="car-fill"></div></div></div>
+  <div id="fuel-hud"><span>⛽</span><div class="hp-bar"><div id="fuel-fill"></div></div></div>
   <div id="wanted-hud" class="hidden"></div>
 </div>
 
@@ -49,6 +51,14 @@
 </div>
 <div id="boss-hud" class="hidden"><b>👑 EMERALD</b><div class="boss-bar"><div id="boss-fill"></div></div></div>
 
+<!-- Taxi fare HUD -->
+<div id="taxi-hud" class="hidden">
+  <div class="obj-top"><b>🚕 TAXI FARE</b><span id="tx-time"></span></div>
+  <div class="obj-main"><span id="tx-arrow">▲</span><span id="tx-obj">…</span></div>
+  <div id="tx-dist"></div>
+  <div id="tx-streak"></div>
+</div>
+
 <!-- Tutorial objective -->
 <div id="objective" class="hidden">
   <div class="obj-top"><b id="obj-step">STEP 1/6</b><button id="obj-skip">SKIP</button></div>
@@ -59,6 +69,7 @@
 
 <!-- Touch controls -->
 <div id="touch-controls" class="hidden">
+  <div id="look-zone" style="display:none"></div>
   <div id="steer-zone">
     <button id="btn-left" class="tbtn steer">◀</button>
     <button id="btn-right" class="tbtn steer">▶</button>

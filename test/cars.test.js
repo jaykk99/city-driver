@@ -8,7 +8,7 @@ const STAT_KEYS = ['topSpeed', 'accel', 'handling', 'grip', 'nitroTime', 'nitroP
 
 describe('CAR_DEFS', () => {
   it('has 11 cars with unique ids', () => {
-    assert.equal(CAR_DEFS.length, 11);
+    assert.equal(CAR_DEFS.length, 16);
     const ids = CAR_DEFS.map(c => c.id);
     assert.equal(new Set(ids).size, ids.length, 'duplicate car ids');
   });

@@ -2,6 +2,70 @@
 // One painter draws the whole world: rivers, lakes, fields, roads, landmarks.
 import { BLOCKS, ROAD_W, GRID_HALF, LINES, blockCenter, RED_RIVER, ASSINIBOINE, BRIDGE_Z, STRIP_X, STRIP_HALF, SPECIAL,
   WORLD_HALF, ROADS, LAKES, FIELDS, OFFROAD, AIRPORT, MUD_PATCHES, MUD_PITS } from './world.js';
+import { STATIONS } from './fuel.js';
+import { REPAIR_SHOPS } from './repairshop.js';
+import { TIRE_SHOPS } from './tireshop.js';
+
+// CITY DRIVER — gas stations on the map.
+//
+// The fuel system (Oct 27) and the visible forecourts (Oct 28) gave the
+// player somewhere to refuel, but no way to FIND one: the radar showed
+// stores, never stations, and the low-fuel toast named no direction. So a
+// driver running dry had to stumble onto a forecourt by luck. These markers
+// close that gap: a yellow pump diamond on the radar when a station is in
+// range, and on the full map always, labelled GAS. Main-city only — custom
+// maps are separate worlds with no stations in them.
+
+// Pure: stations within `radius` m of (px, pz), nearest first. The radar
+// uses it to skip off-radar stations instead of relying on canvas clipping.
+export function stationsNear(px, pz, radius){
+  return STATIONS
+    .map(s => ({ ...s, dist: Math.hypot(s.x - px, s.z - pz) }))
+    .filter(s => s.dist <= radius)
+    .sort((a, b) => a.dist - b.dist);
+}
+
+// Same shape for repair shops: shops within `radius` m of (px, pz),
+// nearest first. The radar skips off-radar shops instead of relying on
+// canvas clipping.
+export function repairsNear(px, pz, radius){
+  return REPAIR_SHOPS
+    .map(s => ({ ...s, dist: Math.hypot(s.x - px, s.z - pz) }))
+    .filter(s => s.dist <= radius)
+    .sort((a, b) => a.dist - b.dist);
+}
+
+// Paint one pump diamond on context `g` at canvas point (cx, cy), radius r:
+// yellow like the forecourt price sign, dark outline so it reads on roads.
+function pumpDiamond(g, cx, cy, r){
+  g.fillStyle = '#ffc21a'; g.strokeStyle = '#0b0f1a'; g.lineWidth = 1.5;
+  g.beginPath(); g.moveTo(cx, cy - r); g.lineTo(cx + r, cy); g.lineTo(cx, cy + r); g.lineTo(cx - r, cy); g.closePath(); g.fill(); g.stroke();
+}
+
+// Paint one repair marker: an orange square like the shop sign, dark
+// outline so it reads on roads and never confuses with a pump diamond.
+function wrenchSquare(g, cx, cy, r){
+  g.fillStyle = '#e8730c'; g.strokeStyle = '#0b0f1a'; g.lineWidth = 1.5;
+  g.beginPath(); g.rect(cx - r, cy - r, r * 2, r * 2); g.fill(); g.stroke();
+}
+
+// Same shape for tire shops: shops within `radius` m of (px, pz),
+// nearest first.
+export function tiresNear(px, pz, radius){
+  return TIRE_SHOPS
+    .map(s => ({ ...s, dist: Math.hypot(s.x - px, s.z - pz) }))
+    .filter(s => s.dist <= radius)
+    .sort((a, b) => a.dist - b.dist);
+}
+
+// Paint one tire marker: a blue ring like a tire seen from the side, dark
+// outline so it reads on roads and never confuses with a diamond or square.
+function tireRing(g, cx, cy, r){
+  g.strokeStyle = '#1e40af'; g.lineWidth = 3;
+  g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.stroke();
+  g.fillStyle = '#0b0f1a';
+  g.beginPath(); g.arc(cx, cy, r * 0.35, 0, Math.PI * 2); g.fill();
+}
 
 const SPECIAL_COL = { parking:'#3b3f46', arena:'#4b5bd6', legislature:'#c9b98f', forks:'#b98a5a', museum:'#7fb3d5', mansion:'#0f9d58', hospital:'#e2e8f0', park:'#3f8a3a' };
 const CROP_COL = { canola:'#c9ad2a', wheat:'#b8975a', plowed:'#5a4128', hay:'#8e9c52' };
@@ -53,7 +117,7 @@ export function createMinimap(canvas, stores, bigCanvas){
   const k = (S / 2) / R;
   let frame = 0, custom = null, wp = null;
 
-  function draw(px, pz, heading, car, mp, blips){
+  function draw(px, pz, heading, car, mp, blips, taxi){
     if((frame++ & 3) !== 0) return;
     const W = x => S / 2 + (x - px) * k;
     const H = z => S / 2 + (z - pz) * k;
@@ -67,6 +131,9 @@ export function createMinimap(canvas, stores, bigCanvas){
       g.beginPath(); g.arc(W(s.door.x), H(s.door.z), 4.5, 0, Math.PI * 2); g.fill();
       g.strokeStyle = '#0b0f1a'; g.lineWidth = 1.5; g.stroke();
     }
+    if(!custom) for(const s of stationsNear(px, pz, R)) pumpDiamond(g, W(s.x), H(s.z), 5);
+    if(!custom) for(const s of repairsNear(px, pz, R)) wrenchSquare(g, W(s.x), H(s.z), 5);
+    if(!custom) for(const s of tiresNear(px, pz, R)) tireRing(g, W(s.x), H(s.z), 5);
     if(car){ g.fillStyle = '#ffffff'; g.fillRect(W(car.x) - 3, H(car.z) - 3, 6, 6); }
     if(wp){
       // waypoint: on the radar if close, else a marker pinned to the rim pointing at it
@@ -88,6 +155,13 @@ export function createMinimap(canvas, stores, bigCanvas){
       g.fillStyle = (frame >> 3) & 1 ? '#ff3b4e' : '#3b8bff';       // flashing cop lights
       g.strokeStyle = '#0b0f1a'; g.lineWidth = 1.5;
       g.beginPath(); g.arc(bx, bz, 4.5, 0, Math.PI * 2); g.fill(); g.stroke();
+    }
+    if(taxi){   // cab fare target: steady yellow cab dot, never flashing like a cop
+      const tx = W(taxi.x), tz = H(taxi.z);
+      if(tx >= -8 && tz >= -8 && tx <= S + 8 && tz <= S + 8){
+        g.fillStyle = '#ffc400'; g.strokeStyle = '#0b0f1a'; g.lineWidth = 1.5;
+        g.beginPath(); g.arc(tx, tz, 4.5, 0, Math.PI * 2); g.fill(); g.stroke();
+      }
     }
     g.restore();
     g.save();
@@ -117,6 +191,9 @@ export function createMinimap(canvas, stores, bigCanvas){
       label('DOWNTOWN', 0, 0); label('PERIMETER HWY', 0, -1268); label('AIRPORT', -1120, -540); label('OFF-ROAD PARK', (OFFROAD.minX + OFFROAD.maxX) / 2, (OFFROAD.minZ + OFFROAD.maxZ) / 2);
       label('RED RIVER', 380, -900); label('ASSINIBOINE', -700, 375); label('DRAG STRIP', STRIP_X, -240);
       for(const s of stores){ bg.fillStyle = s.color; bg.beginPath(); bg.arc(W(s.door.x), H(s.door.z), 3, 0, Math.PI * 2); bg.fill(); }
+      for(const s of STATIONS){ pumpDiamond(bg, W(s.x), H(s.z), 5); label('⛽ GAS', s.x, s.z - 14); }
+      for(const s of REPAIR_SHOPS){ wrenchSquare(bg, W(s.x), H(s.z), 5); label('🔧 REPAIR', s.x, s.z - 14); }
+      for(const s of TIRE_SHOPS){ tireRing(bg, W(s.x), H(s.z), 5); label('🛞 TIRES', s.x, s.z - 14); }
     }
     if(extra) extra(bg, W, H);
     if(wp){ bg.fillStyle = '#ffd23f'; bg.strokeStyle = '#0b0f1a'; bg.lineWidth = 2; bg.beginPath(); bg.arc(W(wp.x), H(wp.z), 7, 0, Math.PI * 2); bg.fill(); bg.stroke(); }

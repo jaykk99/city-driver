@@ -1,6 +1,10 @@
-// CITY DRIVER — people: sidewalk pedestrians (walk, flee from gunfire, die
-// with blood) and hostile gunmen used by missions and the final boss.
-import { buildCharacter, setOutfit, setHeldWeapon, animateCharacter, kickRecoil } from './character.js';
+// CITY DRIVER — people: sidewalk pedestrians and hostile gunmen.
+// Pedestrians react like people: when shots ring out they flinch and look toward the noise, then each
+// one does their own thing — sprint away from the shooter with their hands over their head, drop and
+// cower behind their arms, or freeze with their hands up if the shooter is right there. A gun pointed
+// at someone makes them put their hands up and back away. Wounded people clutch their side and limp
+// off; anyone killed buckles at the knees and falls the way the bullet pushed them.
+import { buildCharacter, setOutfit, setHeldWeapon, animateCharacter, kickRecoil, kickHit, startDeath, animateDeath, resetPose } from './character.js';
 import { PALETTE, SKIN_TONES, HAIR_COLORS } from './skins.js';
 import { countWitnesses } from './police.js';
 
@@ -50,8 +54,9 @@ export function createPeople(deps){
     const blocks = blockCenters(px, pz);
     const b = blocks.length ? pickOf(blocks) : { cx:0, cz:0 };
     ped.cx = b.cx; ped.cz = b.cz; ped.p = rnd(0, PERIM); ped.dir = Math.random() < 0.5 ? 1 : -1;
-    ped.state = 'walk'; ped.hp = 40; ped.flee = 0; ped.phase = rnd(0, 6); ped.deadT = 0;
+    ped.state = 'walk'; ped.hp = 40; ped.flee = 0; ped.phase = rnd(0, 6); ped.deadT = 0; ped.react = 0; ped.pose = null; ped.wounded = false; ped.held = 0;
     setOutfit(ped.person, randomOutfit());
+    resetPose(ped.person);
     ped.person.rotation.set(0, 0, 0);
     ped.person.visible = true;
     loopPos(ped.cx, ped.cz, ped.p, tmp);
@@ -69,10 +74,10 @@ export function createPeople(deps){
   function kill(t, dx = 0, dz = 0, cause = 'shot'){
     if(t.state === 'dead') return;
     t.state = 'dead'; t.deadT = 0; t.hp = 0;
-    // fall away from the hit
-    const fall = Math.atan2(dx, dz);
-    t.person.rotation.set(0, fall + Math.PI, 0);
+    // knees buckle, then they fall the way the hit pushed them
+    startDeath(t.person, dx || 0.001, dz || 0.001);
     t.fallDir = { x:dx, z:dz };
+    if(deps.audio && deps.audio.scream && cause !== 'car' && Math.random() < 0.6) deps.audio.scream(t.x, t.z, 'death');
     deps.blood.hit(t.x, 1.0, t.z, dx, dz, cause === 'car' ? 2.5 : 1.5);
     deps.blood.pool(t.x + dx * 0.9, t.z + dz * 0.9, rnd(1.8, 2.8));
     if(t.kind === 'enemy' && t.onDeath) t.onDeath(t);
@@ -85,23 +90,64 @@ export function createPeople(deps){
     t.hp -= dmg;
     deps.blood.hit(t.x, 1.25, t.z, dx, dz, 0.8);
     if(t.hp <= 0){ kill(t, dx, dz); return true; }
-    if(t.kind === 'ped'){ t.state = 'flee'; t.flee = 7; }
+    kickHit(t.person, dx, dz);
+    if(t.kind === 'ped'){
+      // wounded: clutch the side and limp away from the shooter
+      const l = Math.hypot(dx, dz) || 1;
+      Object.assign(t, { state:'escape', ex:dx / l, ez:dz / l, flee:rnd(5, 8), pose:'hurt', wounded:true, react:0 });
+      if(deps.audio && deps.audio.scream) deps.audio.scream(t.x, t.z, 'hurt');
+    }
     if(t.kind === 'enemy') t.aggro = true;
     return false;
   }
 
+  // something scary at (x,z) (gunfire, a body, a crash). Every living ped in range reacts on their own.
   function scare(x, z, radius){
+    let screamed = 0;
     for(const p of peds){
       if(p.state === 'dead') continue;
       const d = Math.hypot(p.x - x, p.z - z);
-      if(d < radius){
-        p.state = 'flee'; p.flee = 6 + Math.random() * 3;
-        // run along the loop away from the danger
-        loopPos(p.cx, p.cz, p.p + 1, tmp);
-        const ahead = Math.hypot(tmp.x - x, tmp.z - z);
-        p.dir = ahead > d ? 1 : -1;
+      if(d >= radius) continue;
+      if(p.state === 'escape' || p.state === 'cower'){ p.flee = Math.max(p.flee, 3); continue; }   // already reacting
+      const dx = p.x - x, dz = p.z - z, l = d || 1;
+      p.threatX = x; p.threatZ = z;
+      p.react = rnd(0.12, 0.45) * (0.6 + d / radius);     // reaction time: closer people react faster
+      p.flinch = 0.45;
+      const r = Math.random();
+      if(d < 9 && r < 0.3) p.next = 'surrender';          // right next to the shooter: freeze, hands up
+      else if(r < 0.62) p.next = 'escape';               // sprint straight away from the noise
+      else if(r < 0.88) p.next = 'cower';                 // drop and cover their head
+      else p.next = 'flee';                               // run along the sidewalk
+      p.ex = dx / l; p.ez = dz / l;
+      p.state = 'react';
+      if(deps.audio && deps.audio.scream && screamed < 2 && Math.random() < 0.35 && d < radius * 0.7){ deps.audio.scream(p.x, p.z, 'scared'); screamed++; }
+    }
+  }
+
+  // the player is pointing a gun: anyone in the line of fire and close puts their hands up
+  function aimedAt(player){
+    if(!player.aiming || player.inCar) return;
+    for(const p of peds){
+      if(p.state === 'dead' || p.state === 'escape' || p.state === 'cower') continue;
+      const dx = p.x - player.x, dz = p.z - player.z, d = Math.hypot(dx, dz);
+      if(d > 16 || d < 0.6) continue;
+      const a = Math.atan2(-dx, -dz), diff = Math.abs(Math.atan2(Math.sin(a - player.aimH), Math.cos(a - player.aimH)));
+      if(diff < 0.22 + 0.6 / d){
+        if(p.state !== 'surrender'){ p.state = 'surrender'; p.flee = rnd(1.5, 3); p.threatX = player.x; p.threatZ = player.z; }
+        p.held = 0.4;                                     // keeps them frozen while the gun stays on them
       }
     }
+  }
+
+  function faceToward(p, x, z, dt, rate = 8){
+    const a = Math.atan2(-(x - p.x), -(z - p.z));
+    p.h += Math.atan2(Math.sin(a - p.h), Math.cos(a - p.h)) * Math.min(1, dt * rate);
+  }
+  function moveFree(p, vx, vz, speed, dt){
+    const r = deps.collide(p.x + vx * speed * dt, p.z + vz * speed * dt, 0.4);
+    // blocked: slide sideways along the wall instead of running on the spot
+    if(Math.abs(r.x - p.x) + Math.abs(r.z - p.z) < speed * dt * 0.3){ const t = p.ex; p.ex = -p.ez * (p.slide || 1); p.ez = t * (p.slide || 1); }
+    p.x = r.x; p.z = r.z;
   }
 
   // ---------- hostile gunmen ----------
@@ -124,7 +170,7 @@ export function createPeople(deps){
   }
 
   function updateEnemy(e, dt, player){
-    if(e.state === 'dead'){ e.deadT += dt; animateDead(e, dt); return; }
+    if(e.state === 'dead'){ e.deadT += dt; animateDeath(e.person, e.deadT); return; }
     const dx = player.x - e.x, dz = player.z - e.z, d = Math.hypot(dx, dz);
     if(d < e.range || e.aggro) e.aggro = true;
     let speed = 0;
@@ -153,7 +199,7 @@ export function createPeople(deps){
         const tx = player.x + (-dz / d) * miss, tz = player.z + (dx / d) * miss;
         deps.shoot(mx0, mz0, tx + (tx - mx0) / d * (hit ? 0 : 12), tz + (tz - mz0) / d * (hit ? 0 : 12));
         kickRecoil(e.person);
-        if(deps.audio && deps.audio.shot) deps.audio.shot(e.weapon === 'glock' ? 'pistol' : e.weapon);
+        if(deps.audio && deps.audio.shot) deps.audio.shot(e.weapon === 'glock' ? 'pistol' : e.weapon, e.x, e.z);
         if(hit) deps.onPlayerHit(e.dmg, e);
       }
     }
@@ -163,48 +209,71 @@ export function createPeople(deps){
     animateCharacter(e.person, e.phase, speed, e.aggro, dt);
   }
 
-  function animateDead(t, dt){
-    // tip over onto the ground over ~0.35s
-    const k = Math.min(1, t.deadT / 0.35);
-    t.person.rotation.x = -k * (Math.PI / 2 - 0.05);
-    t.person.position.y = 0.12 * k;
-    if(t.deadT > 0.4){
-      const u = t.person.userData;
-      u.legs[0].rotation.x = 0.1; u.legs[1].rotation.x = -0.15;
-      u.arms[0].rotation.z = 0.9; u.arms[1].rotation.z = -0.9;
-    }
-  }
-
   function update(dt, player){
     // keep the crowd near the player
     while(peds.length < maxPeds) placePed(makePed(), player.x, player.z);
+    aimedAt(player);
     for(const p of peds){
       const far = Math.hypot(p.x - player.x, p.z - player.z) > 190;
       if(p.state === 'dead'){
-        p.deadT += dt; animateDead(p, dt);
+        p.deadT += dt; animateDeath(p.person, p.deadT);
         if(p.deadT > 30 || (far && p.deadT > 3)) placePed(p, player.x, player.z);
         continue;
       }
       if(far){ placePed(p, player.x, player.z); continue; }
-      if(p.state === 'escape'){
-        p.flee -= dt;
-        const r = deps.collide(p.x + p.ex * RUN * dt, p.z + p.ez * RUN * dt, 0.4);
-        p.x = r.x; p.z = r.z; p.phase += RUN * dt * 2.1;
-        p.person.position.set(p.x, 0, p.z);
-        animateCharacter(p.person, p.phase, RUN, false, dt);
-        if(p.flee <= 0) snapToLoop(p);
-        continue;
+      let speed = 0, pose = null;
+      if(p.flinch > 0){ p.flinch -= dt; pose = 'flinch'; }
+      switch(p.state){
+        case 'react': {                     // startled: flinch and look toward the noise, then decide
+          p.react -= dt;
+          faceToward(p, p.threatX, p.threatZ, dt, 10);
+          if(p.react <= 0){
+            p.state = p.next || 'escape';
+            p.flee = p.state === 'cower' ? rnd(2.5, 6) : p.state === 'surrender' ? rnd(2, 4) : rnd(5, 9);
+            p.slide = Math.random() < 0.5 ? 1 : -1;
+            // escape direction: away from the threat with a little randomness so crowds scatter
+            const a = Math.atan2(p.ex, p.ez) + rnd(-0.5, 0.5); p.ex = Math.sin(a); p.ez = Math.cos(a);
+            if(p.state === 'flee'){ loopPos(p.cx, p.cz, p.p + 1, tmp); p.dir = Math.hypot(tmp.x - p.threatX, tmp.z - p.threatZ) > Math.hypot(p.x - p.threatX, p.z - p.threatZ) ? 1 : -1; }
+          }
+          break;
+        }
+        case 'cower': {                     // down on the ground, arms over the head; bolt when it's quiet
+          p.flee -= dt; pose = 'cower';
+          if(p.flee <= 0){ p.state = 'escape'; p.flee = rnd(4, 7); }
+          break;
+        }
+        case 'surrender': {                 // hands up, facing the gun, shuffling back
+          p.held -= dt; if(p.held <= 0) p.flee -= dt;
+          pose = 'handsup';
+          faceToward(p, p.threatX, p.threatZ, dt, 6);
+          const dx = p.x - p.threatX, dz = p.z - p.threatZ, l = Math.hypot(dx, dz) || 1;
+          if(l < 7){ speed = -0.9; moveFree(p, dx / l, dz / l, 0.9, dt); }
+          if(p.flee <= 0){ p.state = 'escape'; p.ex = dx / l; p.ez = dz / l; p.flee = rnd(5, 8); }
+          break;
+        }
+        case 'escape': {                    // running free (off the sidewalk loop) away from danger
+          p.flee -= dt;
+          const sp = p.wounded ? 2.6 : RUN * (p.fast || (p.fast = rnd(0.85, 1.15)));
+          moveFree(p, p.ex, p.ez, sp, dt);
+          const a = Math.atan2(-p.ex, -p.ez); p.h += Math.atan2(Math.sin(a - p.h), Math.cos(a - p.h)) * Math.min(1, dt * 8);
+          speed = sp; pose = p.wounded ? 'hurt' : (p.flee > 2 ? 'panic' : null);
+          if(p.flee <= 0){ p.wounded = false; snapToLoop(p); }
+          break;
+        }
+        default: {                          // walk / flee along the sidewalk loop
+          speed = WALK;
+          if(p.state === 'flee'){ p.flee -= dt; speed = RUN; pose = pose || 'panic'; if(p.flee <= 0) p.state = 'walk'; }
+          p.p += p.dir * speed * dt;
+          loopPos(p.cx, p.cz, p.p, tmp);
+          p.x = tmp.x; p.z = tmp.z;
+          const h = tmp.h + (p.dir < 0 ? Math.PI : 0);
+          p.h += Math.atan2(Math.sin(h - p.h), Math.cos(h - p.h)) * Math.min(1, dt * 10);
+        }
       }
-      let speed = WALK;
-      if(p.state === 'flee'){ p.flee -= dt; speed = RUN; if(p.flee <= 0) p.state = 'walk'; }
-      p.p += p.dir * speed * dt;
-      loopPos(p.cx, p.cz, p.p, tmp);
-      p.x = tmp.x; p.z = tmp.z;
-      p.h = tmp.h + (p.dir < 0 ? Math.PI : 0);
-      p.phase += speed * dt * 2.1;
+      p.phase += Math.abs(speed) * dt * 2.1;
       p.person.position.set(p.x, 0, p.z);
       p.person.rotation.y = p.h;
-      animateCharacter(p.person, p.phase, speed, false, dt);
+      animateCharacter(p.person, p.phase, speed, false, dt, pose ? { pose } : undefined);
     }
     for(const e of enemies) updateEnemy(e, dt, player);
     // refresh bullet targets
@@ -236,8 +305,9 @@ export function createPeople(deps){
     for(const p of peds){ const d = Math.hypot(p.x - awayX, p.z - awayZ); if(p.state !== 'dead' && d > far){ far = d; ped = p; } }
     if(!ped) return;
     const dx = x - awayX, dz = z - awayZ, d = Math.hypot(dx, dz) || 1;
-    Object.assign(ped, { state:'escape', x, z, ex:dx / d, ez:dz / d, flee:3.5, hp:40 });
-    ped.person.rotation.set(0, Math.atan2(-dx, -dz), 0);
+    Object.assign(ped, { state:'escape', x, z, ex:dx / d, ez:dz / d, flee:3.5, hp:40, h:Math.atan2(-dx, -dz), wounded:false });
+    resetPose(ped.person);
+    ped.person.rotation.set(0, ped.h, 0);
     ped.person.position.set(x, 0, z);
   }
   function snapToLoop(p){

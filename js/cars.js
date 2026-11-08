@@ -3,6 +3,10 @@
 // arches), glasshouse + painted roof, detailed 5-spoke rims, surface-mounted
 // lights. Convention: car faces -Z (matches physics heading 0 = -Z).
 import * as THREE from 'three';
+import { buildForgeCar } from './forgecars.js';
+
+// Forge 3D bodies are on by default; add ?classic to the URL to drive the old procedural cars.
+export const USE_FORGE = !(typeof location !== 'undefined' && /[?&]classic\b/.test(location.search));
 
 export const CAR_DEFS = [
   { id:'sport',  name:'Apex S',      desc:'Balanced coupe. Great all-rounder.', price:0,     colors:[0xc01818,0x1a5fd0,0xf2f2f2,0x14161c,0xff8c1a],
@@ -27,6 +31,17 @@ export const CAR_DEFS = [
     stats:{ topSpeed:60, accel:19, handling:1.1, grip:1.15, nitroTime:3.4, nitroPower:1.4 }, extra:'police' },
   { id:'hyper',  name:'Aurora Hyper', desc:'The fastest thing in the city. Wings and all.', price:90000, colors:[0xff5e3a,0xa855f7,0x18c0c0,0xf2f2f2,0x14161c],
     stats:{ topSpeed:76, accel:27, handling:1.3, grip:1.4, nitroTime:3.2, nitroPower:1.55 } },
+  // ---- hero cars (Forge 3D, high-detail) ----
+  { id:'brawler', name:'Brawler GT', desc:'V8 fastback. Long hood, loud pipes, smokes the tires on command.', price:26000, colors:[0x1f4fd1,0xc01818,0x111214,0xf2c400,0x2d5a3a],
+    stats:{ topSpeed:60, accel:20, handling:0.95, grip:0.95, nitroTime:3.6, nitroPower:1.45 } },
+  { id:'kaze',    name:'Kaze RS',    desc:'Twin-turbo straight-six coupe. Builds boost, loves to drift.', price:32000, colors:[0xf2f2f0,0xff5a00,0x121a33,0xc0141c,0x6d7278],
+    stats:{ topSpeed:63, accel:20.5, handling:1.15, grip:1.08, nitroTime:3.4, nitroPower:1.5 } },
+  { id:'vanta',   name:'Vanta V10',  desc:'Mid-engine V10 wedge. Screams to 8,700 rpm.', price:62000, colors:[0x8fd400,0x111214,0xff5a00,0xc4c9cf,0x5b2a9a],
+    stats:{ topSpeed:70, accel:24, handling:1.25, grip:1.3, nitroTime:3.0, nitroPower:1.5 } },
+  { id:'rally',   name:'Sidewinder R4', desc:'AWD turbo rally hatch. Grips on dirt, flies over jumps.', price:24000, colors:[0x1f4fd1,0xf2f2f0,0xc0141c,0xf2c400,0x111214],
+    stats:{ topSpeed:56, accel:19, handling:1.2, grip:1.25, nitroTime:3.2, nitroPower:1.4 } },
+  { id:'baja',    name:'Badlands Prerunner', desc:'Long-travel V8 desert truck. Big tires, bigger air.', price:38000, colors:[0xc9b07a,0x111214,0xff5a00,0xf2f2f0,0x4c5640],
+    stats:{ topSpeed:54, accel:17, handling:0.9, grip:1.2, nitroTime:4.0, nitroPower:1.4 } },
 ];
 export const carDef = id => CAR_DEFS.find(c=>c.id===id) || CAR_DEFS[0];
 
@@ -50,7 +65,7 @@ const plateMat = () => new THREE.MeshStandardMaterial({ color:0xe8e8e8, roughnes
 
 // ---- side profiles: [x, y], +X = FRONT, Y = up. Arches cut as holes. ----
 const ARCH = (x, y, r) => ({ x, y, r });
-const PROFILE_ALIAS = { taxi:'sedan', police:'sedan' };
+const PROFILE_ALIAS = { taxi:'sedan', police:'sedan', brawler:'muscle', kaze:'sport', vanta:'super', rally:'sport', baja:'truck' };
 const PROFILES = {
   sport: {
     W:1.86, wb:1.35, wheelR:0.34, track:1.58,
@@ -185,6 +200,10 @@ export function buildCar(idOrDef, colorHex, wheelStyle='stock'){
   const def = typeof idOrDef === 'string' ? carDef(idOrDef) : (idOrDef || CAR_DEFS[0]);
   const id = def.id || 'sport';
   if (typeof colorHex !== 'number') colorHex = (typeof def.color === 'number') ? def.color : def.colors[0];
+  if(USE_FORGE){
+    const fg = buildForgeCar(def, colorHex);
+    if(fg){ addRoofExtras(fg, def, fg.userData.profile); return fg; }
+  }
   const P = PROFILES[id] || PROFILES[PROFILE_ALIAS[id]] || PROFILES.sport;
   const group = new THREE.Group();
   const paint = paintMat(colorHex);
@@ -333,8 +352,22 @@ export function buildCar(idOrDef, colorHex, wheelStyle='stock'){
     }
   }
 
-  // ---- taxi sign / police light bar ----
+  const flashers = addRoofExtras(group, def, P);
+
+  group.userData = {
+    flashers,
+    defId:id, bodyColor:colorHex, wheels,
+    frontWheels: wheels.filter(w=>w.position.z<0),
+    rim, glass, paint, setBrake:(on)=>{},
+    profile:P, frontZ, rearZ,
+  };
+  return group;
+}
+
+// ---- taxi sign / police light bar (shared by classic and Forge bodies) ----
+function addRoofExtras(group, def, P){
   let flashers = null;
+  const trim = new THREE.MeshStandardMaterial({ color:0x14161a, metalness:0.4, roughness:0.6 });
   if(def.extra === 'taxi' || def.extra === 'police'){
     const roofY = Math.max(...(P.roof || P.glass).map(p => p[1])) + 0.02;
     const roofX = (P.roof || P.glass).reduce((a, p) => a + p[0], 0) / (P.roof || P.glass).length;
@@ -358,17 +391,12 @@ export function buildCar(idOrDef, colorHex, wheelStyle='stock'){
     }
   }
 
-  group.userData = {
-    flashers,
-    defId:id, bodyColor:colorHex, wheels,
-    frontWheels: wheels.filter(w=>w.position.z<0),
-    rim, glass, paint, setBrake:(on)=>{},
-    profile:P, frontZ, rearZ,
-  };
-  return group;
+  if(flashers) group.userData.flashers = flashers;
+  return flashers;
 }
 
 export function paintCar(group, hex){
+  if(group.userData.forge && group.userData.paint){ group.userData.paint.color.setHex(hex); group.userData.bodyColor = hex; return; }
   const target = new THREE.Color(hex);
   group.traverse(o=>{
     if(o.isMesh && o.material && o.material.isMeshPhysicalMaterial &&

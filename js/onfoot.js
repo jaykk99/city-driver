@@ -36,6 +36,31 @@ export class FootPhysics {
   }
 }
 
+// Camera-relative movement (free-look): walk toward moveYaw at stick strength mag (0..1); the body
+// turns to faceYaw (the camera direction while aiming = strafing, otherwise the way you walk).
+FootPhysics.prototype.updateFree = function(moveYaw, mag, faceYaw, run, dt, collide, turnRate = 10){
+  dt = Math.min(dt, 0.05);
+  mag = Math.max(0, Math.min(1, mag || 0));
+  const target = mag * (run ? RUN_SPEED : WALK_SPEED) * (faceYaw !== moveYaw && mag > 0 ? strafeK(moveYaw, faceYaw) : 1);
+  const k = Math.min(1, dt * (target > this.speed ? 9 : 14));
+  this.speed += (target - this.speed) * k;
+  if(this.speed < 0.02 && !mag) this.speed = 0;
+  // turn the body (shortest way round)
+  const dh = Math.atan2(Math.sin(faceYaw - this.heading), Math.cos(faceYaw - this.heading));
+  if(mag > 0.05 || faceYaw !== moveYaw) this.heading += dh * Math.min(1, dt * turnRate);
+  const mx = -Math.sin(moveYaw), mz = -Math.cos(moveYaw);
+  let nx = this.pos.x + mx * this.speed * dt;
+  let nz = this.pos.z + mz * this.speed * dt;
+  if(collide){ const r = collide(nx, nz, PLAYER_R); nx = r.x; nz = r.z; }
+  this.pos.x = nx; this.pos.z = nz;
+  this.phase += this.speed * dt * 2.1;
+  // signed speed for the animation: walking backwards while aiming plays the cycle in reverse
+  this.animSpeed = Math.cos(moveYaw - this.heading) < -0.3 ? -this.speed : this.speed;
+  return this;
+};
+// strafing / backpedalling while aiming is slower than walking forward
+function strafeK(moveYaw, faceYaw){ const c = Math.cos(moveYaw - faceYaw); return c > 0.3 ? 1 : c > -0.3 ? 0.8 : 0.62; }
+
 function clamp(v){ return v < -1 ? -1 : v > 1 ? 1 : v; }
 
 // distance helper used for interaction prompts

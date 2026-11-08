@@ -9,6 +9,8 @@ export function createControls(opts = {}){
   const held = { left:false, right:false, gas:false, brake:false, nitro:false, handbrake:false, fire:false, run:false, aim:false };
   let aimToggle = false;             // touch AIM button toggles; keyboard/mouse is hold
   const joy = { x:0, y:0, id:null };
+  // free-look: accumulated pixel deltas since the last consumeLook() (touch drag, mouse drag, pointer lock)
+  const look = { dx:0, dy:0, id:null, lx:0, ly:0, active:false };
   let mode = 'drive';          // drive | drag | foot
   let shiftQueued = false, actionQueued = false, cycleQueued = false, fireEdge = false, gearUpQ = false, gearDownQ = false;
   let attached = false;
@@ -73,6 +75,28 @@ export function createControls(opts = {}){
       base.removeEventListener('pointerup', up);
       base.removeEventListener('pointercancel', up);
     });
+  }
+
+  // drag anywhere that isn't a button to swing the camera (foot mode). Multi-touch safe: one look finger.
+  function bindLook(el){
+    if(!el) return;
+    const toGame = (sx, sy) => isRotated() ? [sy, -sx] : [sx, sy];
+    const down = e => {
+      if(look.id !== null) return;
+      e.preventDefault();
+      look.id = e.pointerId; look.lx = e.clientX; look.ly = e.clientY; look.active = true;
+      try{ el.setPointerCapture(e.pointerId); }catch(_){}
+    };
+    const move = e => {
+      if(e.pointerId !== look.id) return;
+      const [dx, dy] = toGame(e.clientX - look.lx, e.clientY - look.ly);
+      look.lx = e.clientX; look.ly = e.clientY;
+      look.dx += dx; look.dy += dy;
+    };
+    const up = e => { if(e.pointerId !== look.id) return; look.id = null; look.active = false; };
+    el.addEventListener('pointerdown', down); el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+    unbind.push(() => { el.removeEventListener('pointerdown', down); el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up); });
   }
 
   function bindTap(el, fn){
@@ -171,9 +195,30 @@ export function createControls(opts = {}){
     if(k === 'Shift' || k === 'f' || k === 'F'){ held.nitro = false; sync(); }
     if(k === 'r' || k === 'R'){ held.aim = false; sync(); }
   }
-  // right mouse button = aim (desktop)
-  function onMouseDown(e){ if(e.button === 2){ held.aim = true; sync(); } }
-  function onMouseUp(e){ if(e.button === 2){ held.aim = false; sync(); } }
+  // desktop on foot: click the game to grab the mouse (pointer lock) — then the mouse swings the camera,
+  // left button fires, right button aims. Esc gives the mouse back. Without the lock, drag to look.
+  const locked = () => typeof document !== 'undefined' && !!document.pointerLockElement;
+  const gameCanvas = () => document.querySelector('#game-container canvas');
+  let dragLook = false;
+  function onMouseDown(e){
+    if(e.button === 2){ held.aim = true; sync(); return; }
+    if(mode !== 'foot' || e.button !== 0) return;
+    const c = gameCanvas();
+    if(locked()){ if(!held.fire) fireEdge = true; held.fire = true; sync(); return; }
+    if(c && e.target === c){
+      dragLook = true; look.lx = e.clientX; look.ly = e.clientY;
+      if(c.requestPointerLock && !('ontouchstart' in window)){ try{ const r = c.requestPointerLock(); if(r && r.catch) r.catch(() => {}); }catch(_){} }
+    }
+  }
+  function onMouseUp(e){
+    if(e.button === 2){ held.aim = false; sync(); }
+    if(e.button === 0){ dragLook = false; if(held.fire && mode === 'foot'){ held.fire = false; sync(); } }
+  }
+  function onMouseMove(e){
+    if(mode !== 'foot') return;
+    if(locked()){ look.dx += e.movementX || 0; look.dy += e.movementY || 0; }
+    else if(dragLook){ look.dx += e.clientX - look.lx; look.dy += e.clientY - look.ly; look.lx = e.clientX; look.ly = e.clientY; }
+  }
 
   function setMode(m){
     mode = (m === 'drag' || m === 'foot') ? m : 'drive';
@@ -183,6 +228,9 @@ export function createControls(opts = {}){
     show('btn-shift', mode === 'drag');
     show('joystick', mode === 'foot');
     show('foot-zone', mode === 'foot');
+    show('look-zone', mode === 'foot');
+    look.id = null; look.active = false; look.dx = look.dy = 0;
+    if(mode !== 'foot' && typeof document !== 'undefined' && document.pointerLockElement && document.exitPointerLock) document.exitPointerLock();
     for(const k in held) held[k] = false;
     aimToggle = false; { const b = $('btn-aim'); if(b) b.classList.remove('on'); }
     joy.id = null; joy.x = 0; joy.y = 0;
@@ -211,7 +259,9 @@ export function createControls(opts = {}){
     bindTap($('btn-gear-down'), () => { gearDownQ = true; });
     window.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mouseup', onMouseUp);
-    unbind.push(() => { window.removeEventListener('mousedown', onMouseDown); window.removeEventListener('mouseup', onMouseUp); });
+    window.addEventListener('mousemove', onMouseMove);
+    unbind.push(() => { window.removeEventListener('mousedown', onMouseDown); window.removeEventListener('mouseup', onMouseUp); window.removeEventListener('mousemove', onMouseMove); });
+    bindLook($('look-zone'));
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
     unbind.push(() => {
@@ -248,6 +298,9 @@ export function createControls(opts = {}){
     case 'gdown':  v = gearDownQ;    gearDownQ = false;    return v;
   } };
 
-  return { input, consumeShift, consumeAction:take('action'), consumeCycle:take('cycle'),
+  // pixel deltas of camera drag since last call (game space, +x = right, +y = down)
+  function consumeLook(){ const r = { dx:look.dx, dy:look.dy, active:look.active || locked() || dragLook }; look.dx = look.dy = 0; return r; }
+
+  return { input, consumeShift, consumeLook, consumeAction:take('action'), consumeCycle:take('cycle'),
     consumeFireEdge:take('fire'), consumeGearUp:take('gup'), consumeGearDown:take('gdown'), setMode, attach, detach, get mode(){ return mode; } };
 }

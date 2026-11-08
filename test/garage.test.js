@@ -112,4 +112,33 @@ describe('loadSave / saveSave', () => {
     assert.equal(back.cash, 12345);
     assert.ok(back.owned.includes('super'));
   });
+
+  it('new saves carry a zeroed taxi career block', () => {
+    localStorage._clear();
+    const s = loadSave();
+    assert.deepEqual(s.taxi, { rides: 0, earned: 0, bestStreak: 0, ratingSum: 0, ratingCount: 0 });
+  });
+
+  it('old saves without a taxi block get one, bad values read as 0', () => {
+    localStorage.setItem('citydriver_save_v1', JSON.stringify({
+      cash: 5000, currentCar: 'sport', owned: ['sport'],
+      upgrades: { sport: { engine: 0, turbo: 0, tires: 0, suspension: 0, nitro: 0 } },
+      paint: { sport: 0xd7263d }, wheels: { sport: 0 },
+      taxi: { rides: 7, earned: 'lots', bestStreak: -2, ratingSum: 30, ratingCount: 7 },
+    }));
+    const s = loadSave();
+    assert.equal(s.taxi.rides, 7);
+    assert.equal(s.taxi.earned, 0);
+    assert.equal(s.taxi.bestStreak, 0);
+    assert.equal(s.taxi.ratingSum, 30);
+    assert.equal(s.taxi.ratingCount, 7);
+  });
+
+  it('taxi career round-trips through saveSave', () => {
+    localStorage._clear();
+    const s = loadSave();
+    s.taxi = { rides: 3, earned: 1200, bestStreak: 3, ratingSum: 14, ratingCount: 3 };
+    saveSave(s);
+    assert.deepEqual(loadSave().taxi, s.taxi);
+  });
 });

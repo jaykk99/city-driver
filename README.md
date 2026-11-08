@@ -1,3 +1,5 @@
+Live: https://jaykk99.github.io/city-driver/
+
 # CITY DRIVER 🚗💨
 
 Open-world 3D driving game for mobile browsers. Built with Three.js — no app store, just open the URL and drive.
@@ -6,8 +8,31 @@ Open-world 3D driving game for mobile browsers. Built with Three.js — no app s
 
 ## What's in the game
 
+- **Forge 3D models** — every car (yours, traffic, police, drag rivals, other players) is built by the
+  [Forge 3D](https://github.com/jaykk99/forge3d) car designer: lofted clearcoat bodies with real wheel arches,
+  glass, hinged hood, interior, lights and Forge rims/tires, generated from a written description per car
+  (`js/forgecars.js`, Forge code vendored in `js/forge/`). Parked cars use the same Forge silhouettes,
+  and the street/park trees are Forge's elm, birch and pine kit. Add `?classic` to the URL for the old models.
+
+- **Hero cars (Forge 3D, high detail)** — five new cars built by Forge from design numbers: **Brawler GT** (V8 muscle
+  fastback), **Kaze RS** (twin-turbo straight-six coupe), **Vanta V10** (mid-engine supercar), **Sidewinder R4** (AWD turbo
+  rally hatch) and **Badlands Prerunner** (long-travel desert truck). Every Forge car now gets a high-detail pass
+  (`js/forge/builders/cardetail.js`): projector headlight clusters with LED strips, honeycomb grilles and intakes,
+  light-pipe tail lights that flare when you brake, diffusers, side skirts, door shut lines, belt moldings, wipers,
+  fuel doors, antennas and real plates — all computed from each body's own shell
+- **People** — sculpted, jointed characters (`js/character.js`): shaped torso and limbs, faces, hands, sneakers; knees and
+  elbows bend when they walk and run; aiming tracks up/down; reaction poses and a buckle-and-fall death
+- **Free aim** — no auto-aim. On foot, drag anywhere on the screen (or move the mouse — click the game to lock it) to
+  swing the camera any way, including up and down; you walk where the camera points, and the gun hits exactly what's
+  under the crosshair. Head shots do extra damage
+- **Pedestrians act like people** — gunfire makes them flinch and look, then each one runs, drops and covers their head,
+  or freezes with their hands up; point a gun at someone and they put their hands up and back away; the wounded clutch
+  their side and limp off
+- **Sound** — per-engine voices (crossplane V8 lope, turbo straight-six whistle + blow-off, V10 scream, rally anti-lag
+  bangs), gunshots with a crack and a street echo, screams, footsteps, crash crunch, city ambience and birds
 - **Free roam** — drive a full 3D city: 5×5 blocks, 82 buildings, streetlights, trees, day lighting with follow-shadows
-- **6 driveable cars** — Falcon S (sports), Vortex GT (supercar), Brute 500 (muscle), Ranger XLT (pickup), Titan SUV, Ghost R (track). All procedurally modeled in code, distinct handling/top speed
+- **Traffic that panics** — working traffic lights and AI drivers that stop, keep gaps and brake for you — until gunfire goes off nearby, when every driver in earshot floors it and runs the red lights to get away
+- **16 driveable cars** — from the Apex S starter to the Aurora Hyper, plus the five hero cars above. All modeled in code by Forge, distinct handling/top speed
 - **Arcade physics** — acceleration, braking, speed-sensitive steering, handbrake drifts, nitro boost
 - **Garage** — upgrade engine, turbo, tires, suspension, nitro (5 levels each), paint shop (8 colors), 3 wheel styles. Upgrades change real stats. Progress saved in localStorage
 - **Huge map** — 3.4 km across: downtown Winnipeg in the middle of suburbs, the Perimeter Highway, farmland, lakes, forest, an airport and the off-road park. Tap the radar (or press M) for the full map + GPS waypoint
@@ -29,7 +54,7 @@ Open-world 3D driving game for mobile browsers. Built with Three.js — no app s
 - **Shooting range** — behind the gun store; knock down targets for cash
 - **Minimap** — north-up radar with store markers and your parked car
 - **Landscape on phones** — goes fullscreen + locks landscape where the browser allows (Android); otherwise the game rotates itself so it always plays sideways
-- **Touch controls** — steer/gas/brake/nitro/handbrake in the car; joystick/fire/run/weapon on foot. Desktop: WASD, Space (handbrake/fire), Shift (nitro/run), E (get in/out, shop), Q (switch gun)
+- **Touch controls** — steer/gas/brake/nitro/handbrake in the car; joystick/fire/run/weapon on foot. Desktop: WASD, Space (handbrake/fire), Shift (nitro/run), E (get in/out, shop), Q (switch gun); on foot click the game to grab the mouse — mouse looks, left click fires, right click aims, Esc releases
 
 ## Run locally
 
@@ -42,6 +67,7 @@ npx serve .
 npm install   # once (esbuild, dev only)
 npm run build # → js/bundle.js (three.js + game, zero CDN requests)
 ```
+> Vercel and the Pages workflow run `npm run build` on every deploy, so `js/bundle.js` is always fresh.
 > `index.html` loads only `js/bundle.js` — the game makes **no CDN requests**,
 > so a slow/down CDN can never hang the loading screen.
 

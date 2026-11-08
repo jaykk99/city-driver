@@ -1,15 +1,15 @@
 // CITY DRIVER — shooting: visible bullets, muzzle flash, impact sparks.
-// Aim is resolved with a 2D (XZ) ray at chest height so you always know what
-// you hit, but every shot fires a real glowing bullet with a tracer trail that
-// flies to that point — the hit (target knockdown, sparks) lands when the
-// bullet arrives. Light auto-aim helps on touch screens.
+// Free aim, no auto-aim: the game hands in the exact heading + pitch of the crosshair (ctx.aimH /
+// ctx.aimPitch) and bullets go there. Hits are resolved along the XZ ray, with the bullet's height at
+// that distance deciding whether it passes over/under a person (and head shots hurt more); shots
+// aimed at the street stop at the ground. Every shot fires a real glowing bullet with a tracer that
+// flies to that point — the hit lands when the bullet arrives.
 import * as THREE from 'three';
 import { weaponDef } from './shop.js';
 import { rayAABB, rayCircle } from './onfoot.js';
 import { PuffPool } from './particles.js';
 import { hitTarget } from './stores.js';
 
-const AIM_CONE = 0.22;   // rad — snap to a target inside this cone
 const SHOT_Y = 1.45;
 export const BULLET_SPEED = 85;    // m/s — slow enough to watch it fly
 const TRAIL = 4.5;                 // tracer length behind the bullet (m)
@@ -28,7 +28,8 @@ export function createWeapons(scene){
     const trail = new THREE.Mesh(trailGeo, new THREE.MeshBasicMaterial({ color:0xffb347, transparent:true, opacity:0.75, blending:THREE.AdditiveBlending, depthWrite:false, side:THREE.DoubleSide }));
     trail.visible = false; trail.frustumCulled = false;
     scene.add(slug, trail);
-    bullets.push({ slug, trail, live:false, x0:0, z0:0, dx:0, dz:0, dist:0, travel:0, hitT:null, onHit:null, wall:false });
+    slug.rotation.order = 'YXZ'; trail.rotation.order = 'YXZ';
+    bullets.push({ slug, trail, live:false, x0:0, z0:0, y0:SHOT_Y, dy:0, dx:0, dz:0, dist:0, travel:0, hitT:null, onHit:null, wall:false });
   }
   let bi = 0;
   const flash = new PuffPool(scene, 8, { color:0xffc860, opacity:0.95, blending:THREE.AdditiveBlending });
@@ -38,27 +39,28 @@ export function createWeapons(scene){
 
   // launch a bullet from (x0,z0) along (dx,dz) that stops after `dist` m.
   // hitT: target it will knock down on arrival; wall: sparks on arrival.
-  function fire(x0, z0, dx, dz, dist, hitT, wall, onHit, onArrive){
+  // slope: rise per horizontal metre (aiming up/down); y0: launch height
+  function fire(x0, z0, dx, dz, dist, hitT, wall, onHit, onArrive, slope = 0, y0 = SHOT_Y){
     const b = bullets[bi]; bi = (bi + 1) % bullets.length;
-    Object.assign(b, { live:true, x0, z0, dx, dz, dist:Math.max(0.5, dist), travel:0, hitT, wall, onHit, onArrive:onArrive || null });
+    Object.assign(b, { live:true, x0, z0, y0, dy:slope, dx, dz, dist:Math.max(0.5, dist), travel:0, hitT, wall, onHit, onArrive:onArrive || null });
     b.slug.visible = true; b.trail.visible = true;
-    b.slug.rotation.y = Math.atan2(dx, dz);
+    b.slug.rotation.set(-Math.atan(slope), Math.atan2(dx, dz), 0);
     place(b);
   }
   function place(b){
     const d = Math.min(b.travel, b.dist);
     const hx = b.x0 + b.dx * d, hz = b.z0 + b.dz * d;
-    b.slug.position.set(hx, SHOT_Y, hz);
-    setTrail(b, hx, hz, Math.min(TRAIL, d));
+    b.slug.position.set(hx, b.y0 + b.dy * d, hz);
+    setTrail(b, hx, hz, Math.min(TRAIL, d), d);
   }
   // trail mesh points backwards (+local z) from the bullet head, length len
-  function setTrail(b, hx, hz, len){
-    b.trail.position.set(hx, SHOT_Y, hz);
-    b.trail.rotation.y = Math.atan2(-b.dx, -b.dz);
+  function setTrail(b, hx, hz, len, d){
+    b.trail.position.set(hx, b.y0 + b.dy * d, hz);
+    b.trail.rotation.set(Math.atan(b.dy), Math.atan2(-b.dx, -b.dz), 0);
     b.trail.scale.set(1, 1, Math.max(0.01, len));
   }
   function impact(b){
-    const ex = b.x0 + b.dx * b.dist, ez = b.z0 + b.dz * b.dist;
+    const ex = b.x0 + b.dx * b.dist, ez = b.z0 + b.dz * b.dist, SHOT_Y = b.y0 + b.dy * b.dist;
     if(b.onArrive){ const f = b.onArrive; b.onArrive = null; f(); return; }
     if(b.hitT){
       if(hitTarget(b.hitT) && b.onHit) b.onHit(b.hitT);
@@ -77,7 +79,7 @@ export function createWeapons(scene){
         // let the trail catch up and vanish into the impact point
         if(b.travel - b.dist >= TRAIL){ b.live = false; b.trail.visible = false; continue; }
         const ex = b.x0 + b.dx * b.dist, ez = b.z0 + b.dz * b.dist, back = TRAIL - (b.travel - b.dist);
-        setTrail(b, ex, ez, Math.min(back, b.dist));
+        setTrail(b, ex, ez, Math.min(back, b.dist), b.dist);
         continue;
       }
       place(b);
@@ -112,28 +114,8 @@ export function createWeapons(scene){
     ctx.save.ammo[id]--;
     cooldown = w.rate;
 
-    // auto-aim: pick the standing target nearest the crosshair inside the cone
-    let aimH = ctx.heading, best = AIM_CONE;
-    for(const t of ctx.targets){
-      if(!t.up) continue;
-      const dx = t.x - ctx.pos.x, dz = t.z - ctx.pos.z;
-      const d = Math.hypot(dx, dz);
-      if(d > w.range || d < 0.5) continue;
-      const h = Math.atan2(-dx, -dz);                  // heading convention: 0 = -Z
-      let diff = Math.atan2(Math.sin(h - ctx.heading), Math.cos(h - ctx.heading));
-      if(Math.abs(diff) < best){ best = Math.abs(diff); aimH = h; }
-    }
-
-    if(ctx.hitables) for(const lst of ctx.hitables) for(const t of lst){
-      if(t.ref && t.ref.kind === 'ped') continue;          // only snap to hostiles / players
-      const dx = t.x - ctx.pos.x, dz = t.z - ctx.pos.z;
-      const d = Math.hypot(dx, dz);
-      if(d > w.range || d < 0.5) continue;
-      const h = Math.atan2(-dx, -dz);
-      const diff = Math.abs(Math.atan2(Math.sin(h - ctx.heading), Math.cos(h - ctx.heading)));
-      if(diff < best){ best = diff; aimH = h; }
-    }
-    if(ctx.lock){ aimH = Math.atan2(-(ctx.lock.x - ctx.pos.x), -(ctx.lock.z - ctx.pos.z)); }
+    // free aim: straight down the crosshair (no snapping). Fallback: where the character faces.
+    const aimH = ctx.aimH != null ? ctx.aimH : ctx.heading, aimP = ctx.aimPitch || 0;
     const fx = -Math.sin(ctx.heading), fz = -Math.cos(ctx.heading);
     const rx = Math.cos(ctx.heading), rz = -Math.sin(ctx.heading);
     const mx = ctx.pos.x + fx * 0.95 + rx * 0.3, mz = ctx.pos.z + fz * 0.95 + rz * 0.3;
@@ -143,28 +125,34 @@ export function createWeapons(scene){
     const shots = [];
     for(let p = 0; p < w.pellets; p++){
       const h = aimH + (Math.random() - 0.5) * 2 * w.spread;
+      const slope = Math.tan(Math.max(-1.2, Math.min(1.2, aimP + (Math.random() - 0.5) * 1.4 * w.spread)));
       const dx = -Math.sin(h), dz = -Math.cos(h);
-      let tBest = w.range, hitT = null;
+      const yAt = t => SHOT_Y + slope * t;
+      let tBest = w.range, hitT = null, ground = false;
+      if(slope < -1e-3){ const tg = SHOT_Y / -slope; if(tg < tBest){ tBest = tg; ground = true; } }          // into the street
       for(const c of ctx.colliders){
         const d = rayAABB(mx, mz, dx, dz, c, tBest);
-        if(d < tBest){ tBest = d; hitT = null; }
+        if(d < tBest && yAt(d) < (c.h || 40)){ tBest = d; hitT = null; ground = false; }
       }
       for(const t of ctx.targets){
         if(!t.up) continue;
         const d = rayCircle(mx, mz, dx, dz, t.x, t.z, t.r, tBest);
-        if(d < tBest){ tBest = d; hitT = t; }
+        if(d < tBest && yAt(d) > 0.2 && yAt(d) < 2.4){ tBest = d; hitT = t; ground = false; }
       }
-      // people, enemies, other players: { x, z, r, ref }
-      let hitP = null;
+      // people, enemies, other players: { x, z, r, ref } — only if the bullet is at body height there
+      let hitP = null, head = false;
       if(ctx.hitables) for(const lst of ctx.hitables) for(const t of lst){
         const d = rayCircle(mx, mz, dx, dz, t.x, t.z, t.r, tBest);
-        if(d < tBest){ tBest = d; hitP = t.ref; hitT = null; }
+        if(d >= tBest) continue;
+        const y = yAt(d);
+        if(y < 0.05 || y > 1.92) continue;                 // over their head / into the ground first
+        tBest = d; hitP = t.ref; hitT = null; ground = false; head = y > 1.55;
       }
       if(hitT || hitP) hits++;
       if(hitP){
-        const dmg = w.dmg || 20, ddx = dx, ddz = dz;
-        fire(mx, mz, dx, dz, tBest, null, false, null, () => ctx.onPersonHit && ctx.onPersonHit(hitP, dmg, ddx, ddz));
-      }else fire(mx, mz, dx, dz, tBest, hitT, tBest < w.range, ctx.onTargetHit);
+        const dmg = (w.dmg || 20) * (head ? 2.5 : 1), ddx = dx, ddz = dz, hd = head;
+        fire(mx, mz, dx, dz, tBest, null, false, null, () => ctx.onPersonHit && ctx.onPersonHit(hitP, dmg, ddx, ddz, hd), slope);
+      }else fire(mx, mz, dx, dz, tBest, hitT, tBest < w.range || ground, ctx.onTargetHit, null, slope);
       if(p < 3) shots.push([mx, mz, mx + dx * tBest, mz + dz * tBest]);
     }
     if(ctx.onShot) ctx.onShot(shots);

@@ -7,12 +7,20 @@
 // Export: buildCity(scene, reservedLots) -> { colliders, buildings, spawn, dragStrip, update, setGlow, sun, hemi, roadLines }
 import * as THREE from 'three';
 import { buildOutskirts } from './outskirts.js';
-import { buildCar } from './cars.js';
+import { buildCar, USE_FORGE } from './cars.js';
+import { natureKit } from './forge/builders/nature.js';
+import { forgeParkedGeometry } from './forgecars.js';
 import { mergeGeometries as _merge } from 'three/addons/utils/BufferGeometryUtils.js';
 // merge any mix of indexed / non-indexed geometries
 const mergeGeometries = list => _merge(list.map(g => g.index ? g.toNonIndexed() : g));
 import { BLOCKS, BLOCK, ROAD_W, PITCH, GRID_HALF, LINES, LANE, blockCenter, RED_RIVER, ASSINIBOINE, BRIDGE_Z, BRIDGE_HALF,
   STRIP_X, STRIP_HALF, SPECIAL, isSpecialBlock, districtOf, MAIN_X, PORTAGE_Z, NS_NAMES, EW_NAMES, OFFROAD, MUD_PITS, ROCKS, WORLD_HALF, RIVER_ZN, RIVER_ZS, ASSINI_XW } from './world.js';
+import { STATIONS } from './fuel.js';
+import { stationLayout, buildFuelStationMeshes } from './fuelstations.js';
+import { REPAIR_SHOPS } from './repairshop.js';
+import { shopLayout, buildRepairShopMeshes } from './repairshop.js';
+import { TIRE_SHOPS } from './tireshop.js';
+import { tireShopLayout, buildTireShopMeshes } from './tireshop.js';
 
 const SEED = 20481;
 function mulberry32(a){
@@ -188,6 +196,35 @@ function hitsReserved(reserved, minX, maxX, minZ, maxZ){
   return false;
 }
 
+
+// ---------- Forge 3D tree shapes (falls back to the classic elm if the kit can't build) ----------
+function stripGeo(g){
+  g = g.index ? g.toNonIndexed() : g.clone();
+  for(const k of Object.keys(g.attributes)) if(k !== 'position' && k !== 'normal') g.deleteAttribute(k);
+  return g;
+}
+function forgeTreeKinds(){
+  const classic = () => [{ trunk:new THREE.CylinderGeometry(0.2, 0.32, 3.4, 6).translate(0, 1.7, 0), crown:mergeGeometries([
+      new THREE.IcosahedronGeometry(2.4, 1).translate(0, 5.2, 0).toNonIndexed(),
+      new THREE.IcosahedronGeometry(1.8, 1).translate(1.5, 4.4, 0.6).toNonIndexed(),
+      new THREE.IcosahedronGeometry(1.7, 1).translate(-1.3, 4.6, -0.7).toNonIndexed(),
+      new THREE.IcosahedronGeometry(1.5, 1).translate(0.2, 6.6, 0.3).toNonIndexed(),
+    ]), hue:0.24, light:0.26 }];
+  if(!USE_FORGE) return classic();
+  try{
+    const out = [];
+    for(const [kind, hue, light, birch] of [['trees', 0.24, 0.26, false], ['birch', 0.2, 0.34, true], ['pines', 0.3, 0.18, false]]){
+      const parts = natureKit(kind);
+      const trunk = parts.find(p => !p[2]), crown = parts.find(p => p[2]);
+      if(!trunk || !crown) continue;
+      // the game's elms are a touch bigger than Forge's park trees
+      const sc = kind === 'trees' ? 1.25 : 1.05;
+      out.push({ trunk:stripGeo(trunk[0]).scale(sc, sc, sc), crown:stripGeo(crown[0]).scale(sc, sc, sc), hue, light, birch });
+    }
+    return out.length ? out : classic();
+  }catch(e){ console.warn('Forge trees failed, using classic elms', e); return classic(); }
+}
+
 export function buildCity(scene, reserved = []){
   const rand = mulberry32(SEED);
   const colliders = [];
@@ -337,7 +374,16 @@ export function buildCity(scene, reserved = []){
     landmarkBank(scene, px, pz, addCol, buildingInfo);
     pmLots.push({ minX:px - 14, maxX:px + 14, minZ:pz - 13, maxZ:pz + 13 });
   }
-  const allReserved = reserved.concat(pmLots);
+  // gas-station forecourts: reserved like the Portage & Main lots, so no
+  // building, tree, parked car or furniture spawns on a pad or its pumps
+  const stationLayouts = STATIONS.map(stationLayout);
+  // repair-shop lots: same treatment, so no building, tree, parked car or
+  // furniture spawns on a pad, a bay or a lift
+  const repairLayouts = REPAIR_SHOPS.map(shopLayout);
+  // tire-shop lots: same treatment, so no building, tree, parked car or
+  // furniture spawns on a pad, a bay or a tire stack
+  const tireLayouts = TIRE_SHOPS.map(tireShopLayout);
+  const allReserved = reserved.concat(pmLots, stationLayouts.map(l => l.lot), repairLayouts.map(l => l.lot), tireLayouts.map(l => l.lot));
 
   // ---- regular blocks ----
   const inset = 4;
@@ -479,27 +525,35 @@ export function buildCity(scene, reserved = []){
     }
     for(let i = 0; i < 70; i++){ const x = -GRID_HALF + rand() * (GRID_HALF + RED_RIVER.minX); spots.push([x, GRID_HALF + 4 + rand() * 9, 0.9 + rand() * 0.5]); spots.push([x, -GRID_HALF - 6 - rand() * 30, 0.9 + rand() * 0.5]); }
     for(const p of LM.parkTrees || []) spots.push(p);
-    const trunkGeo = new THREE.CylinderGeometry(0.2, 0.32, 3.4, 6).translate(0, 1.7, 0);
-    const canopyGeo = mergeGeometries([
-      new THREE.IcosahedronGeometry(2.4, 1).translate(0, 5.2, 0),
-      new THREE.IcosahedronGeometry(1.8, 1).translate(1.5, 4.4, 0.6),
-      new THREE.IcosahedronGeometry(1.7, 1).translate(-1.3, 4.6, -0.7),
-      new THREE.IcosahedronGeometry(1.5, 1).translate(0.2, 6.6, 0.3),
-    ]);
-    const trunks = new THREE.InstancedMesh(trunkGeo, new THREE.MeshStandardMaterial({ color:0x5b4331, roughness:0.95 }), spots.length);
+    // Forge 3D vegetation kit: lumpy multi-lobe elm crowns, birches and pines (instanced, game materials + wind)
+    const kinds = forgeTreeKinds();
+    const byKind = kinds.map(() => []);
+    spots.forEach((p, i) => {
+      // curb + park trees stay elms; riverbank / outskirts mix in birch and pine
+      const far = Math.abs(p[0]) > GRID_HALF || Math.abs(p[1]) > GRID_HALF;
+      const k = far && kinds.length > 1 ? (i % 5 === 0 ? 2 : i % 3 === 0 ? 1 : 0) % kinds.length : 0;
+      byKind[k].push(p);
+    });
+    const leaf = new THREE.Color();
+    const barkMat = new THREE.MeshStandardMaterial({ color:0x5b4331, roughness:0.95 });
+    const birchMat = new THREE.MeshStandardMaterial({ color:0xe6e1d8, roughness:0.85 });
     const cMat = new THREE.MeshStandardMaterial({ color:0xffffff, roughness:0.9, flatShading:true });
     addWind(cMat, 0.06); // v4: canopies sway in the wind
-    const canopies = new THREE.InstancedMesh(canopyGeo, cMat, spots.length);
-    const leaf = new THREE.Color();
-    spots.forEach(([x, z, s], i) => {
-      setInst(trunks, i, x, 0.12, z, rand() * 6.28, s, s, s);
-      setInst(canopies, i, x, 0.12, z, rand() * 6.28, s, s * (0.9 + rand() * 0.25), s);
-      leaf.setHSL(0.24 + rand() * 0.06, 0.45 + rand() * 0.15, 0.26 + rand() * 0.08);
-      canopies.setColorAt(i, leaf);
+    kinds.forEach((kind, k) => {
+      const list = byKind[k]; if(!list.length) return;
+      const trunks = new THREE.InstancedMesh(kind.trunk, kind.birch ? birchMat : barkMat, list.length);
+      const canopies = new THREE.InstancedMesh(kind.crown, cMat, list.length);
+      list.forEach(([x, z, s], i) => {
+        const ry = rand() * 6.28;
+        setInst(trunks, i, x, 0.12, z, ry, s, s, s);
+        setInst(canopies, i, x, 0.12, z, ry, s, s * (0.9 + rand() * 0.25), s);
+        leaf.setHSL(kind.hue + rand() * 0.06, 0.45 + rand() * 0.15, kind.light + rand() * 0.08);
+        canopies.setColorAt(i, leaf);
+      });
+      trunks.instanceMatrix.needsUpdate = true; canopies.instanceMatrix.needsUpdate = true; canopies.instanceColor.needsUpdate = true;
+      canopies.castShadow = true; trunks.castShadow = true;
+      scene.add(trunks, canopies);
     });
-    trunks.instanceMatrix.needsUpdate = true; canopies.instanceMatrix.needsUpdate = true; canopies.instanceColor.needsUpdate = true;
-    canopies.castShadow = true; trunks.castShadow = true;
-    scene.add(trunks, canopies);
   }
 
   // ---------- street lights ----------
@@ -552,6 +606,49 @@ export function buildCity(scene, reserved = []){
 
   // ---------- street furniture: bus shelters, benches, hydrants, bins ----------
   buildFurniture(LM, blocks, allReserved);
+
+  // ---------- gas stations: canopy, pumps and sign on each forecourt ----------
+  // (the fuel system refills at these points; now the player can see them)
+  {
+    const gasTex = makeCanvas(256, 144, (g, w, h) => {
+      g.fillStyle = '#ffc21a'; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#c8102e'; g.font = 'bold 84px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText('GAS', w / 2, h / 2 + 4);
+    });
+    for(const L of stationLayouts){
+      scene.add(buildFuelStationMeshes(THREE, L, { signTexture: gasTex }));
+      for(const c of L.colliders) addCol(c.minX, c.maxX, c.minZ, c.maxZ);
+    }
+  }
+
+  // ---------- repair shops: canopy, bays, lifts and sign on each lot ----------
+  // (the damage system repairs at these points; now the player can see them)
+  {
+    const repairTex = makeCanvas(256, 144, (g, w, h) => {
+      g.fillStyle = '#e8730c'; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#0b0f1a'; g.font = 'bold 52px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText('REPAIR', w / 2, h / 2 + 4);
+    });
+    for(const L of repairLayouts){
+      scene.add(buildRepairShopMeshes(THREE, L, { signTexture: repairTex }));
+      for(const c of L.colliders) addCol(c.minX, c.maxX, c.minZ, c.maxZ);
+    }
+  }
+
+  // ---------- tire shops: canopy, bays, tire stacks and sign on each lot ----------
+  // (the tire system wears with distance; now the player can see where a
+  // fresh set goes on)
+  {
+    const tireTex = makeCanvas(256, 144, (g, w, h) => {
+      g.fillStyle = '#1e40af'; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#f2f3f5'; g.font = 'bold 52px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText('TIRES', w / 2, h / 2 + 4);
+    });
+    for(const L of tireLayouts){
+      scene.add(buildTireShopMeshes(THREE, L, { signTexture: tireTex }));
+      for(const c of L.colliders) addCol(c.minX, c.maxX, c.minZ, c.maxZ);
+    }
+  }
 
   // ---------- street-name signs at intersections along Portage and Main ----------
   buildStreetSigns(LM);
@@ -977,6 +1074,15 @@ function buildParkedCars(LM, reserved){
   const wheels = [];
   for(const sx of [-0.82, 0.82]) for(const sz of [-1.38, 1.38]) wheels.push(new THREE.CylinderGeometry(0.33, 0.33, 0.24, 14).rotateZ(Math.PI / 2).translate(sx, 0.33, sz));
   const dark = mergeGeometries([glass, ...wheels]);
+  // Forge 3D parked cars: three real body styles (sedan / SUV / coupe) instead of one extruded silhouette
+  const shapes = [{ body, dark }];
+  if(USE_FORGE){
+    for(const id of ['sedan', 'suv', 'sport']){
+      const g = forgeParkedGeometry(id);
+      if(g && g.paint && g.dark) shapes.push({ body:g.paint, dark:g.dark });
+    }
+    if(shapes.length > 1) shapes.shift();          // drop the classic silhouette when Forge built fine
+  }
   const spots = [];
   const roadLen = BLOCKS * PITCH + ROAD_W;
   for(const c of LINES){
@@ -991,20 +1097,26 @@ function buildParkedCars(LM, reserved){
     }
   }
   const keep = spots.filter(([x, z]) => !hitsReserved(reserved, x - 3, x + 3, z - 3, z + 3) && !(Math.abs(x - (LINES[5] + LANE)) < 8 && z > 60 && z < 200));
-  const bodyMat = new THREE.MeshPhysicalMaterial({ color:0xffffff, metalness:0.55, roughness:0.32, clearcoat:1, clearcoatRoughness:0.1 });
-  const bodies = new THREE.InstancedMesh(body, bodyMat, keep.length);
-  const darks = new THREE.InstancedMesh(dark, new THREE.MeshStandardMaterial({ color:0x111418, metalness:0.6, roughness:0.25 }), keep.length);
+  const bodyMat = new THREE.MeshPhysicalMaterial({ color:0xffffff, metalness:0.55, roughness:0.32, clearcoat:1, clearcoatRoughness:0.1, side:THREE.DoubleSide });
+  const darkMat = new THREE.MeshStandardMaterial({ color:0x111418, metalness:0.6, roughness:0.25, side:THREE.DoubleSide });
   const cols = [0xc01818, 0x1a5fd0, 0xf2f2f2, 0x14161c, 0x6b7280, 0x2d6a4f, 0xc7a008, 0x7a1010, 0xd9d9d9, 0x0d2a6b];
   const col = new THREE.Color();
-  keep.forEach(([x, z, r], i) => {
-    setInst(bodies, i, x, 0, z, r, 1, 1, 1); setInst(darks, i, x, 0, z, r, 1, 1, 1);
-    col.setHex(cols[(rand() * cols.length) | 0]); bodies.setColorAt(i, col);
-    const along = Math.abs(Math.sin(r)) > 0.5;           // rotated to run along x
-    if(along) LM.addCol(x - 2.3, x + 2.3, z - 1, z + 1); else LM.addCol(x - 1, x + 1, z - 2.3, z + 2.3);
+  const byShape = shapes.map(() => []);
+  keep.forEach((k, i) => byShape[(rand() * shapes.length) | 0].push(k));
+  shapes.forEach((sh, si) => {
+    const list = byShape[si]; if(!list.length) return;
+    const bodies = new THREE.InstancedMesh(sh.body, bodyMat, list.length);
+    const darks = new THREE.InstancedMesh(sh.dark, darkMat, list.length);
+    list.forEach(([x, z, r], i) => {
+      setInst(bodies, i, x, 0, z, r, 1, 1, 1); setInst(darks, i, x, 0, z, r, 1, 1, 1);
+      col.setHex(cols[(rand() * cols.length) | 0]); bodies.setColorAt(i, col);
+      const along = Math.abs(Math.sin(r)) > 0.5;           // rotated to run along x
+      if(along) LM.addCol(x - 2.3, x + 2.3, z - 1, z + 1); else LM.addCol(x - 1, x + 1, z - 2.3, z + 2.3);
+    });
+    bodies.instanceMatrix.needsUpdate = true; darks.instanceMatrix.needsUpdate = true; bodies.instanceColor.needsUpdate = true;
+    bodies.castShadow = true; bodies.receiveShadow = true;
+    scene.add(bodies, darks);
   });
-  bodies.instanceMatrix.needsUpdate = true; darks.instanceMatrix.needsUpdate = true; bodies.instanceColor.needsUpdate = true;
-  bodies.castShadow = true; bodies.receiveShadow = true;
-  scene.add(bodies, darks);
 }
 
 function buildFurniture(LM, blocks, reserved){

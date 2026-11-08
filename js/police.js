@@ -307,6 +307,7 @@ export function createPolice(deps){
       const f = footCops[i];
       if(f.dead){                       // slumped body lingers, then fades away
         f.deadT -= dt;
+        if(deps.animateDeath) deps.animateDeath(f.person, 2.5 - f.deadT);
         if(f.deadT <= 0) removeFootCop(i);
         continue;
       }
@@ -332,10 +333,10 @@ export function createPolice(deps){
     f.hp -= dmg;
     if(deps.blood) deps.blood(f.x, 1.2, f.z, 0, 0, 1.1);
     f.grabT = 0;
-    if(f.hp > 0){ crime('copShot', f.x, f.z, true); return 'hit'; }
+    if(f.hp > 0){ if(deps.kickHit) deps.kickHit(f.person, -Math.sin(f.heading), -Math.cos(f.heading)); crime('copShot', f.x, f.z, true); return 'hit'; }
     f.dead = true; f.deadT = 2.5;
-    f.person.rotation.x = -Math.PI / 2;             // slumped on the pavement
-    if(f.person.position) f.person.position.y = 0.25;
+    if(deps.startDeath) deps.startDeath(f.person, Math.sin(f.heading), Math.cos(f.heading));   // falls backwards
+    else { f.person.rotation.x = -Math.PI / 2; if(f.person.position) f.person.position.y = 0.25; }
     crime('copKill', f.x, f.z, true);
     return 'killed';
   }
@@ -563,6 +564,7 @@ export function createPolice(deps){
         if(closing > 7){
           ramCool = 0.8;
           deps.damagePlayer && deps.damagePlayer(Math.min(24, 6 + closing * 0.7), c.x, c.z);
+          if(deps.damageCar) deps.damageCar(closing);   // the ram dents your car too
           deps.spark && deps.spark((c.x + p.x) / 2, (c.z + p.z) / 2);
           heat.crime('copRam', true, clock);
           c.speed *= 0.35; c.ramT = 0.5;
