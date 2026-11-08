@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {
   TAXI_BASE_FARE, TAXI_PER_METRE, TAXI_TIP_RATE, PICKUP_RADIUS, DROPOFF_RADIUS,
   HAIL_PATIENCE, MIN_TRIP, STREAK_BONUS_RATE, STREAK_BONUS_CAP,
+  VIP_CHANCE, VIP_FARE_MULT, VIP_PAR_SCALE, VIP_HAIL_PATIENCE, BAIL_MULT, VIP_BAIL_MULT,
   SURGE_RATES, fareFor, parTimeFor, tipFor, isTaxiCar, streakBonusFor, ratingFor,
   surgeMultiplierFor, surgeLabelFor,
   hailPointNear, destinationFar, createTaxiJob,
@@ -118,8 +119,8 @@ describe('surge pricing', () => {
   it('a night fare pays 1.5x end to end: fare, tip and total', () => {
     const { hail, pickup, drop } = driveSurgeFare(1.5);
     const trip = tripOf(hail, pickup);
-    assert.equal(drop.fare, fareFor(trip, 1.5), 'payout fare is the surged meter fare');
-    assert.equal(pickup.fareEstimate, fareFor(trip, 1.5), 'the meter quote matches the payout');
+    assert.equal(drop.fare, fareFor(trip, 1.5, hail.vip), 'payout fare is the surged meter fare (VIP doubles it)');
+    assert.equal(pickup.fareEstimate, fareFor(trip, 1.5, hail.vip), 'the meter quote matches the payout');
     assert.ok(drop.fare > fareFor(trip, 1), 'the same trip at night pays more than in the day');
     assert.equal(drop.surge, 1.5);
     assert.equal(drop.tip, tipFor(drop.fare, 0.1, pickup.parSeconds, 0), 'tip scales off the surged fare');
@@ -129,10 +130,10 @@ describe('surge pricing', () => {
   it('a sunset fare pays 1.25x, a day fare pays the plain meter', () => {
     const sunset = driveSurgeFare(1.25);
     assert.equal(sunset.drop.surge, 1.25);
-    assert.equal(sunset.drop.fare, fareFor(tripOf(sunset.hail, sunset.pickup), 1.25));
+    assert.equal(sunset.drop.fare, fareFor(tripOf(sunset.hail, sunset.pickup), 1.25, sunset.hail.vip));
     const day = driveSurgeFare(1);
     assert.equal(day.drop.surge, 1);
-    assert.equal(day.drop.fare, fareFor(tripOf(day.hail, day.pickup), 1));
+    assert.equal(day.drop.fare, fareFor(tripOf(day.hail, day.pickup), 1, day.hail.vip));
   });
 
   it('the surge locks at pickup: the sky changing mid-ride never reprices the fare', () => {
@@ -142,7 +143,7 @@ describe('surge pricing', () => {
     for(let k = 0; k < 30 && !hail; k++){ const evs = job.update(5, at(0, 0, 0, 100, 1.5)); hail = evs.find(e => e.type === 'hail'); }
     assert.ok(hail);
     const pickup = job.update(0.1, at(hail.point.x, hail.point.z, 0, 100, 1.5));
-    assert.equal(pickup[0].fareEstimate, fareFor(Math.hypot(pickup[0].dest.x - hail.point.x, pickup[0].dest.z - hail.point.z), 1.5));
+    assert.equal(pickup[0].fareEstimate, fareFor(Math.hypot(pickup[0].dest.x - hail.point.x, pickup[0].dest.z - hail.point.z), 1.5, hail.vip));
     // Dawn breaks mid-ride: the meter stays at the night rate.
     const d = pickup[0].dest;
     const drop = job.update(0.1, at(d.x, d.z, 0, 100, 1));
@@ -404,5 +405,155 @@ describe('streak bonus + passenger rating', () => {
     const none = createTaxiJob(cyclingRng());
     none.loadCareer(null);
     assert.equal(none.ratingCount, 0);
+  });
+});
+
+describe('VIP rush fares + impatient passengers', () => {
+  // Wait for a hail on `job`, then stop at the hailer: returns hail + pickup.
+  function hailAndPickup(job){
+    let hail = null;
+    for(let k = 0; k < 60 && !hail; k++){ const evs = job.update(5, at(0, 0)); hail = evs.find(e => e.type === 'hail'); }
+    assert.ok(hail, 'a hail arrives');
+    const pickup = job.update(0.1, at(hail.point.x, hail.point.z, 0));
+    assert.equal(pickup[0].type, 'pickup');
+    return { hail, pickup: pickup[0] };
+  }
+  const tripOf = (hail, pickup) => Math.hypot(pickup.dest.x - hail.point.x, pickup.dest.z - hail.point.z);
+
+  it('a VIP fare pays double the meter, surge and VIP compose', () => {
+    const plain = TAXI_BASE_FARE + Math.round(TAXI_PER_METRE * 600);
+    assert.equal(fareFor(600, 1, true), Math.round(plain * VIP_FARE_MULT));
+    assert.equal(fareFor(600, 1.5, true), Math.round(plain * 1.5 * VIP_FARE_MULT), 'a night VIP pays 3x end to end');
+    assert.equal(fareFor(600, 1, false), plain);
+    assert.equal(fareFor(600), plain, 'a regular fare is unchanged');
+  });
+
+  it('a VIP par time is tighter than a regular one on the same trip', () => {
+    assert.equal(parTimeFor(600, true), Math.round((600 / 11 + 15) * VIP_PAR_SCALE));
+    assert.ok(parTimeFor(600, true) < parTimeFor(600, false));
+    assert.equal(parTimeFor(220), Math.round(220 / 11 + 15), 'a regular par time is unchanged');
+  });
+
+  it('vipChance forces the roll: 1 is always VIP, 0 never is', () => {
+    const vipJob = createTaxiJob(cyclingRng(), undefined, { vipChance: 1 });
+    vipJob.setInCab(true);
+    const { hail, pickup } = hailAndPickup(vipJob);
+    assert.equal(hail.vip, true);
+    assert.equal(vipJob.vip, true, 'the HUD reads VIP while the fare is live');
+    assert.equal(pickup.vip, true);
+    const plainJob = createTaxiJob(cyclingRng(), undefined, { vipChance: 0 });
+    plainJob.setInCab(true);
+    const plain = hailAndPickup(plainJob);
+    assert.equal(plain.hail.vip, false);
+    assert.equal(plainJob.vip, false);
+    assert.equal(plain.pickup.vip, false);
+    assert.equal(VIP_CHANCE, 0.15, 'production rolls one VIP hail in seven');
+  });
+
+  it('a VIP hail waits less long than a regular one, then walks off', () => {
+    const vipJob = createTaxiJob(cyclingRng(), undefined, { vipChance: 1 });
+    vipJob.setInCab(true);
+    let hail = null;
+    for(let k = 0; k < 60 && !hail; k++){ const evs = vipJob.update(5, at(0, 0)); hail = evs.find(e => e.type === 'hail'); }
+    assert.ok(hail && hail.vip);
+    assert.deepEqual(vipJob.update(VIP_HAIL_PATIENCE - 5, at(0, 0)), [], 'a VIP still waits inside their shorter patience');
+    const expired = vipJob.update(6, at(0, 0));
+    assert.equal(expired[0].type, 'hailExpired');
+    assert.equal(vipJob.vip, false, 'no stale VIP once the hail is gone');
+    const plainJob = createTaxiJob(cyclingRng(), undefined, { vipChance: 0 });
+    plainJob.setInCab(true);
+    let plain = null;
+    for(let k = 0; k < 60 && !plain; k++){ const evs = plainJob.update(5, at(0, 0)); plain = evs.find(e => e.type === 'hail'); }
+    assert.ok(plain && !plain.vip);
+    assert.deepEqual(plainJob.update(VIP_HAIL_PATIENCE + 1, at(0, 0)), [], 'a regular hailer outwaits a VIP');
+    assert.equal(plainJob.update(HAIL_PATIENCE - VIP_HAIL_PATIENCE, at(0, 0))[0].type, 'hailExpired');
+  });
+
+  it('a VIP ride pays double with a tighter clock, and still earns its rating', () => {
+    const job = createTaxiJob(cyclingRng(), undefined, { vipChance: 1 });
+    job.setInCab(true);
+    const { hail, pickup } = hailAndPickup(job);
+    const trip = tripOf(hail, pickup);
+    assert.equal(pickup.parSeconds, parTimeFor(trip, true), 'the VIP meter quotes the tighter par');
+    assert.equal(pickup.fareEstimate, fareFor(trip, 1, true));
+    const d = pickup.dest;
+    const drop = job.update(0.1, at(d.x, d.z, 0));
+    assert.equal(drop[0].type, 'dropoff');
+    assert.equal(drop[0].vip, true);
+    assert.equal(drop[0].fare, fareFor(trip, 1, true), 'the payout is the doubled meter fare');
+    assert.equal(drop[0].tip, tipFor(drop[0].fare, 0.1, pickup.parSeconds, 0), 'the tip scales off the doubled fare');
+    assert.equal(drop[0].total, drop[0].fare + drop[0].tip + drop[0].streakBonus);
+    assert.equal(drop[0].rating, 5);
+    assert.equal(job.vip, false, 'no stale VIP after dropoff');
+    assert.equal(job.earned, drop[0].total);
+  });
+
+  it('a passenger bails past twice par time: no pay, streak dies', () => {
+    const job = createTaxiJob(cyclingRng(), undefined, { vipChance: 0 });
+    job.setInCab(true);
+    const { pickup } = hailAndPickup(job);
+    const par = pickup.parSeconds;
+    // Still riding at exactly twice par — the bail is past, not at, the line.
+    assert.deepEqual(job.update(par * 2, at(0, 0)), []);
+    assert.equal(job.state, 'ride');
+    const failed = job.update(0.1, at(0, 0));
+    assert.equal(failed[0].type, 'rideFailed');
+    assert.equal(failed[0].reason, 'impatient');
+    assert.equal(job.state, 'cooldown');
+    assert.equal(job.earned, 0, 'an impatient passenger pays nothing');
+    assert.equal(job.rides, 0);
+    assert.equal(job.streak, 0);
+    assert.equal(job.vip, false);
+  });
+
+  it('a VIP bails sooner than a regular on the same clock', () => {
+    const vipJob = createTaxiJob(cyclingRng(), undefined, { vipChance: 1 });
+    vipJob.setInCab(true);
+    const vip = hailAndPickup(vipJob);
+    const vipPar = vip.pickup.parSeconds;
+    // A VIP bails past 1.5x their (already tighter) par.
+    assert.deepEqual(vipJob.update(vipPar * VIP_BAIL_MULT, at(0, 0)), []);
+    assert.equal(vipJob.state, 'ride');
+    assert.equal(vipJob.update(0.1, at(0, 0))[0].reason, 'impatient');
+    const plainJob = createTaxiJob(cyclingRng(), undefined, { vipChance: 0 });
+    plainJob.setInCab(true);
+    const plain = hailAndPickup(plainJob);
+    const plainPar = plain.pickup.parSeconds;
+    // A regular at the same multiple of their par is still riding.
+    assert.deepEqual(plainJob.update(plainPar * VIP_BAIL_MULT, at(0, 0)), []);
+    assert.equal(plainJob.state, 'ride');
+    assert.deepEqual(plainJob.update(plainPar * (BAIL_MULT - VIP_BAIL_MULT), at(0, 0)), []);
+    assert.equal(plainJob.state, 'ride', 'still riding at exactly twice par');
+    assert.equal(plainJob.update(0.1, at(0, 0))[0].reason, 'impatient');
+  });
+
+  it('a fare finished at the last moment still pays, late and tipless', () => {
+    const job = createTaxiJob(cyclingRng(), undefined, { vipChance: 0 });
+    job.setInCab(true);
+    const { pickup } = hailAndPickup(job);
+    const par = pickup.parSeconds;
+    const d = pickup.dest;
+    // Arrive just inside twice par: late, so no tip — but the fare pays.
+    job.update(par * 2 - 0.5, at(0, 0));
+    const drop = job.update(0.1, at(d.x, d.z, 0));
+    assert.equal(drop[0].type, 'dropoff');
+    assert.ok(drop[0].fare > 0);
+    assert.equal(drop[0].tip, 0, 'a late ride earns no tip');
+    assert.equal(job.rides, 1);
+  });
+
+  it('an impatient passenger ends the streak like a wreck does', () => {
+    const job = createTaxiJob(cyclingRng(), undefined, { vipChance: 0 });
+    job.setInCab(true);
+    const first = hailAndPickup(job);
+    assert.equal(job.update(0.1, at(first.pickup.dest.x, first.pickup.dest.z, 0))[0].type, 'dropoff');
+    assert.equal(job.streak, 1);
+    assert.equal(job.bestStreak, 1);
+    const second = hailAndPickup(job);
+    const par = second.pickup.parSeconds;
+    job.update(par * BAIL_MULT + 1, at(0, 0));
+    assert.equal(job.streak, 0, 'the bail ends the streak');
+    assert.equal(job.bestStreak, 1, 'best streak survives the bail');
+    assert.equal(job.rides, 1, 'the bailed ride never counted');
   });
 });

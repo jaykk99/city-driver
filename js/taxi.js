@@ -10,7 +10,9 @@
 // rides lose the tip, a wrecked cab loses the passenger). Fares surge
 // with the time of day: sunset rush pays +25%, night pays +50%, locked
 // in when the passenger boards so the sky changing mid-ride never
-// reprices a fare already running.
+// reprices a fare already running. One hail in seven is a VIP rush fare
+// (gold marker, double pay, tighter clock), and any passenger bails if
+// the ride drags far past par time — a VIP sooner than a regular.
 //
 // Pure state machine + fare math, no THREE and no document, so the whole
 // loop is unit-testable in node. main.js owns the beacon, the hailer ped,
@@ -39,6 +41,12 @@ export const STREAK_BONUS_CAP = 0.50;  // streak bonus tops out at +50%
 export const PICKUP_RADIUS = 7;        // m: stop this close to the hailer to board
 export const DROPOFF_RADIUS = 7;       // m: stop this close to the destination to pay
 export const HAIL_PATIENCE = 45;       // s: a hailer waits this long, then walks off
+export const VIP_CHANCE = 0.15;        // share of hails that are VIP rush fares
+export const VIP_FARE_MULT = 2;        // a VIP fare pays double the meter
+export const VIP_PAR_SCALE = 0.75;     // a VIP is in a hurry: par time is 25% tighter
+export const VIP_HAIL_PATIENCE = 30;   // s: a VIP waits less long than a regular hailer
+export const BAIL_MULT = 2;            // a passenger bails past this multiple of par time
+export const VIP_BAIL_MULT = 1.5;      // a VIP bails sooner: less patient on top of a tighter par
 export const HAIL_DELAY_MIN = 8;       // s between fares (short end)
 export const HAIL_DELAY_MAX = 20;      // s between fares (long end)
 export const FARE_COOLDOWN = 6;        // s after a fare ends before the next hail
@@ -51,18 +59,21 @@ const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 // A fare of `distM` metres pays the base plus distance, times the surge
-// in effect when the passenger boards (1 in the day, 1.5 at night).
+// in effect when the passenger boards (1 in the day, 1.5 at night) and
+// times the VIP multiplier when the passenger is a rush fare (2x).
 // The tip and streak bonus are computed off the surged fare, so the
-// whole meter scales — a night fare pays 1.5x end to end.
-export function fareFor(distM, surge = 1){
+// whole meter scales — a night VIP fare pays 3x end to end.
+export function fareFor(distM, surge = 1, vip = false){
   const s = (typeof surge === 'number' && isFinite(surge) && surge > 0) ? surge : 1;
-  return Math.round((TAXI_BASE_FARE + Math.round(TAXI_PER_METRE * distM)) * s);
+  const v = vip ? VIP_FARE_MULT : 1;
+  return Math.round((TAXI_BASE_FARE + Math.round(TAXI_PER_METRE * distM)) * s * v);
 }
 
 // Par time for a trip: city pace ~11 m/s (the deliver missions' base pace)
-// plus a grace window for lights and traffic.
-export function parTimeFor(distM){
-  return Math.round(distM / 11 + 15);
+// plus a grace window for lights and traffic. A VIP is in a hurry, so
+// their par time is tighter — and they bail sooner on top of that.
+export function parTimeFor(distM, vip = false){
+  return Math.round((distM / 11 + 15) * (vip ? VIP_PAR_SCALE : 1));
 }
 
 // Tip: half the fare for an on-time, undamaged ride. Late rides get
@@ -205,14 +216,19 @@ export function customMapPickers(map, offset = { x:0, z:0 }){
 // States: off (not in a cab) -> idle (in a cab, waiting for a hail) ->
 // hail (a fare is waiting) -> ride (passenger aboard) -> cooldown ->
 // idle. Events are returned from update() for main.js to toast/pay on.
+// `opts.vipChance` overrides the share of VIP rush fares (tests force
+// 0 or 1); production uses VIP_CHANCE.
 const MAIN_CITY_PICKERS = { hailNear: hailPointNear, destFar: destinationFar };
-export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
+export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS, opts = {}){
+  const vipChance = (opts && typeof opts.vipChance === 'number' && isFinite(opts.vipChance))
+    ? Math.max(0, Math.min(1, opts.vipChance)) : VIP_CHANCE;
   let state = 'off';
   let inCab = false;
   let activePickers = pickers || MAIN_CITY_PICKERS;
   let timer = 0;                 // idle: until next hail; hail: patience left
   let hailPoint = null, dest = null, pickupPoint = null;
   let parSeconds = 0, rideSeconds = 0, hpStart = 0, maxHp = 100;
+  let isVip = false;             // the current hail / ride is a VIP rush fare
   // Streak + rating: the streak is this shift only (a wreck or a walk-away
   // ends it); the career totals persist in the save via loadCareer/career.
   let streak = 0, bestStreak = 0, rides = 0, earned = 0;
@@ -236,6 +252,9 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
     // Consecutive completed fares this shift (0 until the first dropoff).
     get streak(){ return streak; },
     get bestStreak(){ return bestStreak; },
+    // True while the live hail / ride is a VIP rush fare (false otherwise,
+    // so the HUD and beacon never show a stale VIP after the fare ends).
+    get vip(){ return (state === 'hail' || state === 'ride') ? isVip : false; },
     get rides(){ return rides; },
     get earned(){ return earned; },
     get ratingCount(){ return ratingCount; },
@@ -267,7 +286,7 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
       if(v === inCab) return null;
       inCab = v;
       if(v){ if(state === 'off'){ state = 'idle'; timer = nextDelay(); } return null; }
-      streak = 0;
+      streak = 0; isVip = false;
       if(state === 'hail' || state === 'ride'){
         state = 'off'; hailPoint = dest = pickupPoint = null; return 'abandoned';
       }
@@ -278,7 +297,7 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
     // Returns true when a fare was actually live. The cooldown only
     // applies when the cab is still the car (setInCab(true) re-arms idle).
     abandon(){
-      streak = 0;   // leaving the scene ends the shift (an expired hail does not)
+      streak = 0; isVip = false;   // leaving the scene ends the shift (an expired hail does not)
       if(state !== 'hail' && state !== 'ride') return false;
       state = inCab ? 'cooldown' : 'off'; timer = FARE_COOLDOWN;
       hailPoint = dest = pickupPoint = null; return true;
@@ -297,8 +316,12 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
           hailPoint = activePickers.hailNear(ctx.x, ctx.z, rng);
           if(!hailPoint){ timer = HAIL_RETRY; }
           else{
-            state = 'hail'; timer = HAIL_PATIENCE;
-            events.push({ type:'hail', point:{ ...hailPoint }, surge: curSurge });
+            // A VIP rush fare is rolled per hail: double pay, tighter par,
+            // and less patience — the hail carries the flag so the beacon
+            // and toast can show gold before the cab even arrives.
+            isVip = rng() < vipChance;
+            state = 'hail'; timer = isVip ? VIP_HAIL_PATIENCE : HAIL_PATIENCE;
+            events.push({ type:'hail', point:{ ...hailPoint }, surge: curSurge, vip: isVip });
           }
         }
       }else if(state === 'hail'){
@@ -308,30 +331,30 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
           dest = activePickers.destFar(pickupPoint, rng);
           if(!dest){
             // Nowhere worth driving to from here: the fare falls through.
-            state = 'cooldown'; timer = FARE_COOLDOWN; hailPoint = pickupPoint = null;
+            state = 'cooldown'; timer = FARE_COOLDOWN; hailPoint = pickupPoint = null; isVip = false;
             events.push({ type:'hailExpired' });
           }else{
             const trip = dist(pickupPoint, dest);
             rideSurge = curSurge;   // the meter is fixed at pickup
-            parSeconds = parTimeFor(trip); rideSeconds = 0;
+            parSeconds = parTimeFor(trip, isVip); rideSeconds = 0;
             hpStart = ctx.hp; maxHp = ctx.maxHp || 100;
             state = 'ride';
             events.push({ type:'pickup', dest:{ ...dest }, parSeconds,
-              fareEstimate:fareFor(trip, rideSurge), surge: rideSurge });
+              fareEstimate:fareFor(trip, rideSurge, isVip), surge: rideSurge, vip: isVip });
           }
         }else if(timer <= 0){
-          state = 'cooldown'; timer = FARE_COOLDOWN; hailPoint = null;
+          state = 'cooldown'; timer = FARE_COOLDOWN; hailPoint = null; isVip = false;
           events.push({ type:'hailExpired' });
         }
       }else if(state === 'ride'){
         rideSeconds += dt;
         if(ctx.hp <= 0){
           streak = 0;   // the passenger bails and the streak dies with the cab
-          state = 'cooldown'; timer = FARE_COOLDOWN; dest = pickupPoint = null;
+          state = 'cooldown'; timer = FARE_COOLDOWN; dest = pickupPoint = null; isVip = false;
           events.push({ type:'rideFailed', reason:'wrecked' });
         }else if(dist(ctx, dest) < DROPOFF_RADIUS && Math.abs(ctx.speed) < 1){
           const trip = dist(pickupPoint, dest);
-          const fare = fareFor(trip, rideSurge);
+          const fare = fareFor(trip, rideSurge, isVip);
           const damageFrac = maxHp > 0 ? (hpStart - ctx.hp) / maxHp : 0;
           const tip = tipFor(fare, rideSeconds, parSeconds, damageFrac);
           streak++;
@@ -343,8 +366,18 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS){
           earned += total;
           state = 'cooldown'; timer = FARE_COOLDOWN; dest = pickupPoint = null;
           events.push({ type:'dropoff', fare, tip, streakBonus, streak, rating,
-            surge: rideSurge,
+            surge: rideSurge, vip: isVip,
             ratingAvg: ratingCount ? ratingSum / ratingCount : 0, total });
+          isVip = false;
+        }else if(rideSeconds > parSeconds * (isVip ? VIP_BAIL_MULT : BAIL_MULT)){
+          // Impatience: a passenger who has waited far past par time gets
+          // out and walks — no pay, and the streak dies like a wreck.
+          // The dropoff check above wins when the cab arrives in the same
+          // tick, so a fare completed at the last moment still pays.
+          streak = 0;
+          state = 'cooldown'; timer = FARE_COOLDOWN; dest = pickupPoint = null;
+          events.push({ type:'rideFailed', reason:'impatient', vip: isVip });
+          isVip = false;
         }
       }else if(state === 'cooldown'){
         timer -= dt;
