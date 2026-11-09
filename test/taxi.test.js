@@ -7,11 +7,12 @@ import {
   TAXI_BASE_FARE, TAXI_PER_METRE, TAXI_TIP_RATE, PICKUP_RADIUS, DROPOFF_RADIUS,
   HAIL_PATIENCE, MIN_TRIP, STREAK_BONUS_RATE, STREAK_BONUS_CAP,
   VIP_CHANCE, VIP_FARE_MULT, VIP_PAR_SCALE, VIP_HAIL_PATIENCE, BAIL_MULT, VIP_BAIL_MULT,
+  AIRPORT_TERMINAL, AIRPORT_CHANCE, AIRPORT_FLAT, AIRPORT_NEAR,
   SURGE_RATES, fareFor, parTimeFor, tipFor, isTaxiCar, streakBonusFor, ratingFor,
   surgeMultiplierFor, surgeLabelFor,
   hailPointNear, destinationFar, createTaxiJob,
 } from '../js/taxi.js';
-import { GRID_HALF } from '../js/world.js';
+import { GRID_HALF, AIRPORT, surfaceAt } from '../js/world.js';
 
 // Deterministic rng cycling through varied values, so retries in the
 // point pickers actually explore instead of repeating one draw.
@@ -119,8 +120,8 @@ describe('surge pricing', () => {
   it('a night fare pays 1.5x end to end: fare, tip and total', () => {
     const { hail, pickup, drop } = driveSurgeFare(1.5);
     const trip = tripOf(hail, pickup);
-    assert.equal(drop.fare, fareFor(trip, 1.5, hail.vip), 'payout fare is the surged meter fare (VIP doubles it)');
-    assert.equal(pickup.fareEstimate, fareFor(trip, 1.5, hail.vip), 'the meter quote matches the payout');
+    assert.equal(drop.fare, fareFor(trip, 1.5, hail.vip, hail.airport), 'payout fare is the surged meter fare (VIP doubles it, airport adds the flat fee)');
+    assert.equal(pickup.fareEstimate, fareFor(trip, 1.5, hail.vip, hail.airport), 'the meter quote matches the payout');
     assert.ok(drop.fare > fareFor(trip, 1), 'the same trip at night pays more than in the day');
     assert.equal(drop.surge, 1.5);
     assert.equal(drop.tip, tipFor(drop.fare, 0.1, pickup.parSeconds, 0), 'tip scales off the surged fare');
@@ -130,10 +131,10 @@ describe('surge pricing', () => {
   it('a sunset fare pays 1.25x, a day fare pays the plain meter', () => {
     const sunset = driveSurgeFare(1.25);
     assert.equal(sunset.drop.surge, 1.25);
-    assert.equal(sunset.drop.fare, fareFor(tripOf(sunset.hail, sunset.pickup), 1.25, sunset.hail.vip));
+    assert.equal(sunset.drop.fare, fareFor(tripOf(sunset.hail, sunset.pickup), 1.25, sunset.hail.vip, sunset.hail.airport));
     const day = driveSurgeFare(1);
     assert.equal(day.drop.surge, 1);
-    assert.equal(day.drop.fare, fareFor(tripOf(day.hail, day.pickup), 1, day.hail.vip));
+    assert.equal(day.drop.fare, fareFor(tripOf(day.hail, day.pickup), 1, day.hail.vip, day.hail.airport));
   });
 
   it('the surge locks at pickup: the sky changing mid-ride never reprices the fare', () => {
@@ -143,7 +144,7 @@ describe('surge pricing', () => {
     for(let k = 0; k < 30 && !hail; k++){ const evs = job.update(5, at(0, 0, 0, 100, 1.5)); hail = evs.find(e => e.type === 'hail'); }
     assert.ok(hail);
     const pickup = job.update(0.1, at(hail.point.x, hail.point.z, 0, 100, 1.5));
-    assert.equal(pickup[0].fareEstimate, fareFor(Math.hypot(pickup[0].dest.x - hail.point.x, pickup[0].dest.z - hail.point.z), 1.5, hail.vip));
+    assert.equal(pickup[0].fareEstimate, fareFor(Math.hypot(pickup[0].dest.x - hail.point.x, pickup[0].dest.z - hail.point.z), 1.5, hail.vip, hail.airport));
     // Dawn breaks mid-ride: the meter stays at the night rate.
     const d = pickup[0].dest;
     const drop = job.update(0.1, at(d.x, d.z, 0, 100, 1));
@@ -475,12 +476,12 @@ describe('VIP rush fares + impatient passengers', () => {
     const { hail, pickup } = hailAndPickup(job);
     const trip = tripOf(hail, pickup);
     assert.equal(pickup.parSeconds, parTimeFor(trip, true), 'the VIP meter quotes the tighter par');
-    assert.equal(pickup.fareEstimate, fareFor(trip, 1, true));
+    assert.equal(pickup.fareEstimate, fareFor(trip, 1, true, hail.airport));
     const d = pickup.dest;
     const drop = job.update(0.1, at(d.x, d.z, 0));
     assert.equal(drop[0].type, 'dropoff');
     assert.equal(drop[0].vip, true);
-    assert.equal(drop[0].fare, fareFor(trip, 1, true), 'the payout is the doubled meter fare');
+    assert.equal(drop[0].fare, fareFor(trip, 1, true, hail.airport), 'the payout is the doubled meter fare');
     assert.equal(drop[0].tip, tipFor(drop[0].fare, 0.1, pickup.parSeconds, 0), 'the tip scales off the doubled fare');
     assert.equal(drop[0].total, drop[0].fare + drop[0].tip + drop[0].streakBonus);
     assert.equal(drop[0].rating, 5);
@@ -555,5 +556,125 @@ describe('VIP rush fares + impatient passengers', () => {
     assert.equal(job.streak, 0, 'the bail ends the streak');
     assert.equal(job.bestStreak, 1, 'best streak survives the bail');
     assert.equal(job.rides, 1, 'the bailed ride never counted');
+  });
+});
+
+describe('airport runs', () => {
+  // Wait for a hail with the cab at (x, z), then stop at the hailer.
+  function hailAndPickup(job, x = 0, z = 0){
+    let hail = null;
+    for(let k = 0; k < 60 && !hail; k++){ const evs = job.update(5, at(x, z)); hail = evs.find(e => e.type === 'hail'); }
+    assert.ok(hail, 'a hail arrives');
+    const pickup = job.update(0.1, at(hail.point.x, hail.point.z, 0));
+    assert.equal(pickup[0].type, 'pickup');
+    return { hail, pickup: pickup[0] };
+  }
+  const tripOf = (hail, pickup) => Math.hypot(pickup.dest.x - hail.point.x, pickup.dest.z - hail.point.z);
+
+  it('the airport fee is flat: added on top, never multiplied by surge or VIP', () => {
+    const plain = TAXI_BASE_FARE + Math.round(TAXI_PER_METRE * 600);
+    assert.equal(fareFor(600, 1, false, true), plain + AIRPORT_FLAT);
+    assert.equal(fareFor(600, 1.5, true, true), Math.round(plain * 1.5 * VIP_FARE_MULT) + AIRPORT_FLAT,
+      'a night VIP airport run pays 3x the meter plus the flat fee');
+    assert.equal(fareFor(600, 1, false, false), plain, 'a regular fare never carries the fee');
+    assert.equal(fareFor(600), plain, 'the fee is opt-in, never the default');
+    assert.equal(AIRPORT_FLAT, 120);
+    assert.equal(AIRPORT_CHANCE, 0.12, 'production rolls one airport hail in eight');
+  });
+
+  it('the terminal curb is paved airport ground, clear of the building', () => {
+    assert.ok(AIRPORT_TERMINAL.x >= AIRPORT.minX && AIRPORT_TERMINAL.x <= AIRPORT.maxX, 'curb sits on the runway apron');
+    assert.ok(AIRPORT_TERMINAL.z >= AIRPORT.minZ && AIRPORT_TERMINAL.z <= AIRPORT.maxZ);
+    assert.equal(surfaceAt(AIRPORT_TERMINAL.x, AIRPORT_TERMINAL.z), 'road', 'the cab drives on pavement to the curb');
+    const door = { x: AIRPORT.terminal.x - 20, z: AIRPORT.terminal.z };
+    assert.ok(Math.hypot(AIRPORT_TERMINAL.x - door.x, AIRPORT_TERMINAL.z - door.z) > 20,
+      'the curb stands off the terminal doors, outside the building');
+  });
+
+  it('airportChance forces the roll: 1 is always an airport run, 0 never is', () => {
+    const airJob = createTaxiJob(cyclingRng(), undefined, { airportChance: 1, vipChance: 0 });
+    airJob.setInCab(true);
+    const air = hailAndPickup(airJob);
+    assert.equal(air.hail.airport, true);
+    assert.equal(air.hail.airportDir, 'to', 'a city cab hails a run TO the airport');
+    assert.equal(airJob.airport, true, 'the HUD reads airport while the fare is live');
+    assert.equal(airJob.airportDir, 'to');
+    assert.equal(air.pickup.airport, true);
+    const plainJob = createTaxiJob(cyclingRng(), undefined, { airportChance: 0, vipChance: 0 });
+    plainJob.setInCab(true);
+    const plain = hailAndPickup(plainJob);
+    assert.equal(plain.hail.airport, false);
+    assert.equal(plainJob.airport, false);
+    assert.equal(plain.pickup.airport, false);
+  });
+
+  it('a city hail to the airport ends at the terminal and pays the fee', () => {
+    const job = createTaxiJob(cyclingRng(), undefined, { airportChance: 1, vipChance: 0 });
+    job.setInCab(true);
+    const { hail, pickup } = hailAndPickup(job);
+    assert.deepEqual(pickup.dest, AIRPORT_TERMINAL, 'the destination is the terminal curb');
+    const trip = tripOf(hail, pickup);
+    assert.ok(trip >= MIN_TRIP, 'an airport trip is a long one');
+    assert.equal(pickup.parSeconds, parTimeFor(trip, false), 'the airport run keeps the regular par time');
+    assert.equal(pickup.fareEstimate, fareFor(trip, 1, false, true), 'the meter quotes the fare plus the fee');
+    const drop = job.update(0.1, at(pickup.dest.x, pickup.dest.z, 0));
+    assert.equal(drop[0].type, 'dropoff');
+    assert.equal(drop[0].airport, true);
+    assert.equal(drop[0].airportDir, 'to');
+    assert.equal(drop[0].fare, pickup.fareEstimate, 'the payout is the quoted meter fare');
+    assert.ok(drop[0].fare >= fareFor(trip, 1, false, false) + AIRPORT_FLAT);
+    assert.equal(drop[0].total, drop[0].fare + drop[0].tip + drop[0].streakBonus);
+    assert.equal(job.airport, false, 'no stale airport run after dropoff');
+    assert.equal(job.airportDir, null);
+    assert.equal(job.earned, drop[0].total);
+  });
+
+  it('a cab already at the terminal hails FROM the airport back into town', () => {
+    const job = createTaxiJob(cyclingRng(), undefined, { airportChance: 1, vipChance: 0 });
+    job.setInCab(true);
+    // The cab waits at arrivals, inside AIRPORT_NEAR of the terminal.
+    assert.ok(Math.hypot(-1050 - AIRPORT_TERMINAL.x, -700 - AIRPORT_TERMINAL.z) <= AIRPORT_NEAR);
+    const { hail, pickup } = hailAndPickup(job, -1050, -700);
+    assert.equal(hail.airport, true);
+    assert.equal(hail.airportDir, 'from');
+    assert.deepEqual(hail.point, AIRPORT_TERMINAL, 'the hailer waits at the terminal curb');
+    assert.equal(pickup.airportDir, 'from');
+    assert.ok(Math.abs(pickup.dest.x) <= GRID_HALF && Math.abs(pickup.dest.z) <= GRID_HALF,
+      'the return fare heads back into the city grid');
+    assert.ok(tripOf(hail, pickup) >= MIN_TRIP, 'the return trip is a real trip');
+    const drop = job.update(0.1, at(pickup.dest.x, pickup.dest.z, 0));
+    assert.equal(drop[0].type, 'dropoff');
+    assert.equal(drop[0].airportDir, 'from');
+    assert.equal(drop[0].fare, fareFor(tripOf(hail, pickup), 1, false, true), 'the return run pays the fee too');
+  });
+
+  it('no airport runs on custom streets, by construction or by swap', () => {
+    const stub = { hailNear: () => ({ x: 10, z: 10 }), destFar: () => ({ x: 300, z: 300 }) };
+    const built = createTaxiJob(cyclingRng(), stub, { airportChance: 1, vipChance: 0 });
+    built.setInCab(true);
+    const first = hailAndPickup(built, 10, 10);
+    assert.equal(first.hail.airport, false, 'a job built on custom pickers never rolls airport');
+    // Production swaps pickers when entering a custom map: the flag follows.
+    const swapped = createTaxiJob(cyclingRng(), undefined, { airportChance: 1, vipChance: 0 });
+    swapped.setInCab(true);
+    swapped.setPickers(stub);
+    const second = hailAndPickup(swapped, 10, 10);
+    assert.equal(second.hail.airport, false, 'swapping to custom streets turns airport runs off');
+    swapped.setPickers(null);
+    const third = hailAndPickup(swapped, 10, 10);
+    assert.equal(third.hail.airport, true, 'back on the main grid, airport runs resume');
+  });
+
+  it('an airport hail that expires clears the flag', () => {
+    const job = createTaxiJob(cyclingRng(), undefined, { airportChance: 1, vipChance: 0 });
+    job.setInCab(true);
+    let hail = null;
+    for(let k = 0; k < 60 && !hail; k++){ const evs = job.update(5, at(0, 0)); hail = evs.find(e => e.type === 'hail'); }
+    assert.ok(hail && hail.airport);
+    assert.equal(job.airport, true);
+    const expired = job.update(HAIL_PATIENCE + 1, at(0, 0));
+    assert.equal(expired[0].type, 'hailExpired');
+    assert.equal(job.airport, false, 'no stale airport run once the hail is gone');
+    assert.equal(job.airportDir, null);
   });
 });

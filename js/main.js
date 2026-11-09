@@ -979,9 +979,9 @@ function updateMissionHud(){
 }
 
 // ---------------- taxi fares: beacon + HUD (logic lives in taxi.js) ----------------
-// The beacon is yellow for a regular fare, gold for a VIP rush fare —
-// the colour is the tell before the cab even arrives.
-function setTaxiBeacon(p, vip){
+// The beacon is yellow for a regular fare, blue for an airport run, gold
+// for a VIP rush fare — the colour is the tell before the cab even arrives.
+function setTaxiBeacon(p, vip, airport){
   if(!p){ if(taxiBeacon) taxiBeacon.visible = false; return; }
   if(!taxiBeacon){
     const ringMat = new THREE.MeshBasicMaterial({ color:0xffc400, transparent:true, opacity:0.85, depthWrite:false, side:THREE.DoubleSide });
@@ -991,9 +991,10 @@ function setTaxiBeacon(p, vip){
     taxiBeacon.add(new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 30, 24, 1, true).translate(0, 15, 0), beamMat));
     scene.add(taxiBeacon);
   }
-  taxiBeacon.children[0].material.color.set(vip ? 0xffd700 : 0xffc400);
-  taxiBeacon.children[1].material.color.set(vip ? 0xffd700 : 0xffc400);
-  taxiBeacon.children[1].material.opacity = vip ? 0.35 : 0.2;
+  const col = vip ? 0xffd700 : airport ? 0x38bdf8 : 0xffc400;
+  taxiBeacon.children[0].material.color.set(col);
+  taxiBeacon.children[1].material.color.set(col);
+  taxiBeacon.children[1].material.opacity = vip ? 0.35 : airport ? 0.3 : 0.2;
   taxiBeacon.visible = true; taxiBeacon.position.set(p.x, 0, p.z);
 }
 // The hailer is a person, not just a marker: a waving ped standing on the
@@ -1033,9 +1034,11 @@ function updateTaxiHud(){
   el.classList.remove('hidden');
   const px = physics.pos.x, pz = physics.pos.z, h = physics.heading, tg = taxi.target;
   $('tx-obj').textContent = taxi.state === 'hail'
-    ? (taxi.vip ? 'Pick up the VIP fare' : 'Pick up the fare')
-    : (taxi.vip ? 'Drop off the VIP — hurry!' : 'Drop off the passenger');
+    ? (taxi.airport ? 'Pick up the airport fare ✈️' : taxi.vip ? 'Pick up the VIP fare' : 'Pick up the fare')
+    : (taxi.airport ? (taxi.airportDir === 'to' ? 'Drop off at the airport ✈️' : 'Drop off the airport pickup ✈️')
+      : taxi.vip ? 'Drop off the VIP — hurry!' : 'Drop off the passenger');
   el.classList.toggle('vip', taxi.vip);
+  el.classList.toggle('airport', taxi.airport);
   const tl = taxi.timeLeft;
   $('tx-time').textContent = taxi.state === 'hail' ? '⏱ ' + Math.ceil(tl) + 's'
     : (tl >= 0 ? '⏱ ' + Math.ceil(tl) + 's' : '⏱ LATE');
@@ -1045,6 +1048,7 @@ function updateTaxiHud(){
   const st = $('tx-streak');
   if(st){
     const bits = [];
+    if(taxi.airport) bits.push('✈️ Airport run · +$120 flat');
     if(taxi.vip) bits.push('🌟 VIP ×2 — in a hurry');
     if(taxi.surge > 1) bits.push((taxi.surge >= 1.5 ? '🌙 ' : '🌇 ') + surgeLabelFor(taxi.surge) + ' ×' + taxi.surge);
     if(taxi.streak > 1) bits.push('🔥 Streak x' + taxi.streak + ' (+' + Math.min(10 * (taxi.streak - 1), 50) + '%)');
@@ -1799,27 +1803,31 @@ function frame(now){
     // Fares surge with the time of day (sunset +25%, night +50%), locked
     // in at pickup — the meter follows the sky, not the clock mid-ride.
     // One hail in seven is a VIP rush fare (gold beacon, double pay,
-    // tighter clock); any passenger bails if the ride drags far past par.
+    // tighter clock); one hail in eight is an airport run (blue beacon,
+    // city -> terminal or terminal -> city, flat $120 on the meter); any
+    // passenger bails if the ride drags far past par.
     // The pickers follow the world: main-city grid at home, custom streets
     // on a custom map (swapped in playCustom/exitCustom).
     if(taxi.setInCab(isTaxiCar(carDef)) === 'abandoned'){ hideTaxiPed(); toast('🚕 Fare abandoned — you switched cars', 2000); }
     for(const ev of taxi.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100, surge:surgeMultiplierFor(PRESET_ORDER[todIdx]) })){
-      if(ev.type === 'hail'){ setTaxiBeacon(ev.point, ev.vip); setTaxiPed(ev.point, ev.vip);
-        toast(ev.vip ? '🌟 VIP fare hailing — in a hurry, pays double' + (ev.surge > 1 ? ' · ' + surgeLabelFor(ev.surge) + ' ×' + ev.surge : '')
+      if(ev.type === 'hail'){ setTaxiBeacon(ev.point, ev.vip, ev.airport); setTaxiPed(ev.point, ev.vip);
+        toast(ev.airport ? '✈️ Airport run hailing — ' + (ev.airportDir === 'to' ? 'needs a ride to the terminal' : 'waiting at arrivals') + (ev.vip ? ' · VIP ×2' : '') + (ev.surge > 1 ? ' · ' + surgeLabelFor(ev.surge) + ' ×' + ev.surge : '')
+          : ev.vip ? '🌟 VIP fare hailing — in a hurry, pays double' + (ev.surge > 1 ? ' · ' + surgeLabelFor(ev.surge) + ' ×' + ev.surge : '')
           : (ev.surge > 1 ? '🚕 Fare hailing nearby — ' + surgeLabelFor(ev.surge) + ' ×' + ev.surge : '🚕 Fare hailing nearby — drive to the yellow marker'), 2600); }
       else if(ev.type === 'hailExpired'){ setTaxiBeacon(null); hideTaxiPed(); toast('🚕 Fare gave up waiting', 2000); }
-      else if(ev.type === 'pickup'){ setTaxiBeacon(ev.dest, ev.vip); hideTaxiPed(); audio.beep(880, 0.08);
-        toast((ev.vip ? '🌟 VIP aboard — $' : '🚕 Passenger aboard — $') + ev.fareEstimate.toLocaleString() + ' on the meter' + (ev.vip ? ' · pays double' : '') + (ev.surge > 1 ? ' (' + surgeLabelFor(ev.surge) + ' ×' + ev.surge + ')' : ''), 2600); }
+      else if(ev.type === 'pickup'){ setTaxiBeacon(ev.dest, ev.vip, ev.airport); hideTaxiPed(); audio.beep(880, 0.08);
+        toast((ev.airport ? '✈️ Airport run aboard — $' : ev.vip ? '🌟 VIP aboard — $' : '🚕 Passenger aboard — $') + ev.fareEstimate.toLocaleString() + ' on the meter' + (ev.airport ? ' · +$120 airport fee' : '') + (ev.vip ? ' · pays double' : '') + (ev.surge > 1 ? ' (' + surgeLabelFor(ev.surge) + ' ×' + ev.surge + ')' : ''), 2600); }
       else if(ev.type === 'dropoff'){ addCash(ev.total); setTaxiBeacon(null); hideTaxiPed();
         save.taxi = taxi.career; saveSave(save);   // career (rides, best streak, rating) persists
         const stars = '★'.repeat(ev.rating) + '☆'.repeat(5 - ev.rating);
-        let msg = (ev.vip ? '🌟 VIP paid — $' : '🚕 Fare paid — $') + ev.fare.toLocaleString();
+        let msg = (ev.airport ? '✈️ Airport run paid — $' : ev.vip ? '🌟 VIP paid — $' : '🚕 Fare paid — $') + ev.fare.toLocaleString();
+        if(ev.airport) msg += ' · +$120 airport fee';
         if(ev.tip > 0) msg += ' + $' + ev.tip.toLocaleString() + ' tip';
         if(ev.streakBonus > 0) msg += ' + $' + ev.streakBonus.toLocaleString() + ' streak x' + ev.streak;
         if(ev.surge > 1) msg += ' · ' + surgeLabelFor(ev.surge) + ' ×' + ev.surge;
         msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';
         toast(msg, 3200); }
-      else if(ev.type === 'rideFailed'){ setTaxiBeacon(null); hideTaxiPed(); toast(ev.reason === 'impatient' ? '🚕 Passenger bailed — took too long' : '🚕 Passenger bailed — wrecked cab', 2400); }
+      else if(ev.type === 'rideFailed'){ setTaxiBeacon(null); hideTaxiPed(); toast(ev.reason === 'impatient' ? (ev.airport ? '✈️ Airport passenger bailed — took too long' : '🚕 Passenger bailed — took too long') : (ev.airport ? '✈️ Airport passenger bailed — wrecked cab' : '🚕 Passenger bailed — wrecked cab'), 2400); }
     }
     updateTaxiPed(dt);
     if(frameN % 3 === 0) updateTaxiHud();
