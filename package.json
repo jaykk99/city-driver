@@ -5,8 +5,8 @@
   "main": "index.js",
   "scripts": {
     "test": "node --test",
-    "build": "esbuild js/main.js --bundle --minify --format=iife --outfile=js/bundle.js",
-    "build:dev": "esbuild js/main.js --bundle --format=iife --outfile=js/bundle.js --sourcemap"
+    "build": "esbuild js/main.js --bundle --minify --format=iife --outfile=js/bundle.js && esbuild js/brawl/main.js --bundle --minify --format=iife --outfile=js/brawl.bundle.js",
+    "build:dev": "esbuild js/main.js --bundle --format=iife --outfile=js/bundle.js --sourcemap && esbuild js/brawl/main.js --bundle --format=iife --outfile=js/brawl.bundle.js --sourcemap"
   },
   "repository": {
     "type": "git",
