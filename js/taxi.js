@@ -7,7 +7,9 @@
 // hail nearby. Pull up to the yellow marker and stop to pick up, then
 // follow it to the destination and stop again to get paid — base fare
 // plus distance, with a tip for a quick, clean ride (late or battered
-// rides lose the tip, a wrecked cab loses the passenger). Fares surge
+// rides lose the tip, a wrecked cab loses the passenger). The tip follows
+// the driver's career rating: 4.5+ stars earns +25%, 4.0+ earns +10%,
+// under 3.0 the tip is halved — once at least 3 rides are rated. Fares surge
 // with the time of day: sunset rush pays +25%, night pays +50%, locked
 // in when the passenger boards so the sky changing mid-ride never
 // reprices a fare already running. One hail in seven is a VIP rush fare
@@ -95,9 +97,33 @@ export function parTimeFor(distM, vip = false){
 // Tip: half the fare for an on-time, undamaged ride. Late rides get
 // nothing, and damage taken during the ride eats the tip proportionally
 // (a ride that wrecks the cab never reaches this — the passenger bails).
-export function tipFor(fare, seconds, parSeconds, damageFrac){
+// The tip also follows the driver's reputation: after at least
+// RATING_TIP_MIN_RIDES rated rides, a 4.5+ average earns generous tips
+// (+25%), 4.0+ earns +10%, and under 3.0 the passengers stiff the driver
+// (tips halved). The reputation is the one earned BEFORE this ride — a
+// ride cannot tip itself — so callers pass the pre-ride average/count.
+export const RATING_TIP_MIN_RIDES = 3; // a reputation needs this many rated rides
+export const TIP_MULT_HIGH = 1.25;     // 4.5+ stars: generous tips
+export const TIP_MULT_GOOD = 1.1;      // 4.0+ stars: good tips
+export const TIP_MULT_LOW = 0.5;       // under 3.0 stars: passengers stiff the driver
+export function tipMultiplierFor(ratingAvg, ratingCount){
+  if(typeof ratingCount !== 'number' || !isFinite(ratingCount) || ratingCount < RATING_TIP_MIN_RIDES) return 1;
+  if(typeof ratingAvg !== 'number' || !isFinite(ratingAvg) || ratingAvg <= 0) return 1;
+  if(ratingAvg >= 4.5) return TIP_MULT_HIGH;
+  if(ratingAvg >= 4.0) return TIP_MULT_GOOD;
+  if(ratingAvg < 3.0) return TIP_MULT_LOW;
+  return 1;
+}
+// Human label for a tip multiplier, for toasts and the HUD; '' at the plain rate.
+export function tipLabelFor(mult){
+  if(mult >= TIP_MULT_HIGH) return 'Generous tips +25%';
+  if(mult > 1) return 'Good tips +10%';
+  if(mult < 1) return 'Low rating — tips halved';
+  return '';
+}
+export function tipFor(fare, seconds, parSeconds, damageFrac, ratingAvg = 0, ratingCount = 0){
   if(seconds > parSeconds) return 0;
-  return Math.round(fare * TAXI_TIP_RATE * (1 - clamp(damageFrac, 0, 1)));
+  return Math.round(fare * TAXI_TIP_RATE * (1 - clamp(damageFrac, 0, 1)) * tipMultiplierFor(ratingAvg, ratingCount));
 }
 
 // Streak bonus: consecutive completed fares pay more — +10% of the
@@ -287,6 +313,9 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS, op
     get ratingCount(){ return ratingCount; },
     // Lifetime passenger rating, 1-5; 0 until the first rated ride.
     get ratingAvg(){ return ratingCount ? ratingSum / ratingCount : 0; },
+    // Tip multiplier the next dropoff pays at, from the reputation
+    // earned so far (1 until 3 rides are rated). The HUD reads this.
+    get tipMult(){ return tipMultiplierFor(ratingCount ? ratingSum / ratingCount : 0, ratingCount); },
     // Surge in effect: the locked-in rate during a ride, the live rate
     // otherwise (1 in the day, 1.5 at night). The HUD reads this.
     get surge(){ return state === 'ride' ? rideSurge : curSurge; },
@@ -405,7 +434,13 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS, op
           const trip = dist(pickupPoint, dest);
           const fare = fareFor(trip, rideSurge, isVip, isAirport);
           const damageFrac = maxHp > 0 ? (hpStart - ctx.hp) / maxHp : 0;
-          const tip = tipFor(fare, rideSeconds, parSeconds, damageFrac);
+          // The tip follows the reputation earned BEFORE this ride: the
+          // pre-ride average/count, so this ride's own stars cannot tip
+          // themselves. The streak bonus below is computed off fare + tip,
+          // so a boosted tip boosts the bonus too.
+          const ratingAvgBefore = ratingCount ? ratingSum / ratingCount : 0;
+          const tipMult = tipMultiplierFor(ratingAvgBefore, ratingCount);
+          const tip = tipFor(fare, rideSeconds, parSeconds, damageFrac, ratingAvgBefore, ratingCount);
           streak++;
           bestStreak = Math.max(bestStreak, streak);
           const streakBonus = streakBonusFor(streak, fare, tip);
@@ -414,7 +449,7 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS, op
           const total = fare + tip + streakBonus;
           earned += total;
           state = 'cooldown'; timer = FARE_COOLDOWN; dest = pickupPoint = null;
-          events.push({ type:'dropoff', fare, tip, streakBonus, streak, rating,
+          events.push({ type:'dropoff', fare, tip, tipMult, streakBonus, streak, rating,
             surge: rideSurge, vip: isVip, airport: isAirport, airportDir,
             ratingAvg: ratingCount ? ratingSum / ratingCount : 0, total });
           isVip = false; isAirport = false; airportDir = null;

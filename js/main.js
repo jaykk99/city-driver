@@ -44,7 +44,7 @@ import { nearestBay, nearestRepairShop, REPAIR_RADIUS, REPAIR_RATE, BAY_REPAIR_D
 import { TireWear, WORN_WARN, WORN_BAD } from './tires.js';
 import { nearestTireBay, nearestTireShop, TIRE_RADIUS, TIRE_RATE, BAY_TIRE_DIST } from './tireshop.js';
 import { FuelTruckRun, buildFuelTruckMeshes } from './fueltruck.js';
-import { createTaxiJob, isTaxiCar, customMapPickers, surgeMultiplierFor, surgeLabelFor } from './taxi.js';
+import { createTaxiJob, isTaxiCar, customMapPickers, surgeMultiplierFor, surgeLabelFor, tipLabelFor } from './taxi.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
 
@@ -1053,7 +1053,7 @@ function updateTaxiHud(){
     if(taxi.surge > 1) bits.push((taxi.surge >= 1.5 ? '🌙 ' : '🌇 ') + surgeLabelFor(taxi.surge) + ' ×' + taxi.surge);
     if(taxi.streak > 1) bits.push('🔥 Streak x' + taxi.streak + ' (+' + Math.min(10 * (taxi.streak - 1), 50) + '%)');
     else if(taxi.streak === 1) bits.push('🔥 Streak x1');
-    if(taxi.ratingCount > 0) bits.push('★ ' + taxi.ratingAvg.toFixed(1) + ' (' + taxi.ratingCount + ' rides)');
+    if(taxi.ratingCount > 0) bits.push('★ ' + taxi.ratingAvg.toFixed(1) + ' (' + taxi.ratingCount + ' rides)' + (taxi.tipMult !== 1 ? ' · ' + tipLabelFor(taxi.tipMult) : ''));
     st.textContent = bits.join(' · ');
   }
   if(tg && !inside){
@@ -1799,7 +1799,9 @@ function frame(now){
     // Taxi fares: driving the Peg City Cab turns free roam into a shift —
     // fares hail nearby, pay base + distance, tip for a quick clean ride,
     // and earn a streak bonus (+10% per consecutive fare, cap +50%) plus a
-    // passenger star rating that follows the driver across sessions.
+    // passenger star rating that follows the driver across sessions — and
+    // the rating sets the tip: 4.5+ stars earns +25%, 4.0+ earns +10%,
+    // under 3.0 the tip is halved, once 3 rides are rated.
     // Fares surge with the time of day (sunset +25%, night +50%), locked
     // in at pickup — the meter follows the sky, not the clock mid-ride.
     // One hail in seven is a VIP rush fare (gold beacon, double pay,
@@ -1823,6 +1825,7 @@ function frame(now){
         let msg = (ev.airport ? '✈️ Airport run paid — $' : ev.vip ? '🌟 VIP paid — $' : '🚕 Fare paid — $') + ev.fare.toLocaleString();
         if(ev.airport) msg += ' · +$120 airport fee';
         if(ev.tip > 0) msg += ' + $' + ev.tip.toLocaleString() + ' tip';
+        if(ev.tipMult && ev.tipMult !== 1) msg += ' (' + tipLabelFor(ev.tipMult) + ')';
         if(ev.streakBonus > 0) msg += ' + $' + ev.streakBonus.toLocaleString() + ' streak x' + ev.streak;
         if(ev.surge > 1) msg += ' · ' + surgeLabelFor(ev.surge) + ' ×' + ev.surge;
         msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';

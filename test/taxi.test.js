@@ -8,6 +8,8 @@ import {
   HAIL_PATIENCE, MIN_TRIP, STREAK_BONUS_RATE, STREAK_BONUS_CAP,
   VIP_CHANCE, VIP_FARE_MULT, VIP_PAR_SCALE, VIP_HAIL_PATIENCE, BAIL_MULT, VIP_BAIL_MULT,
   AIRPORT_TERMINAL, AIRPORT_CHANCE, AIRPORT_FLAT, AIRPORT_NEAR,
+  RATING_TIP_MIN_RIDES, TIP_MULT_HIGH, TIP_MULT_GOOD, TIP_MULT_LOW,
+  tipMultiplierFor, tipLabelFor,
   SURGE_RATES, fareFor, parTimeFor, tipFor, isTaxiCar, streakBonusFor, ratingFor,
   surgeMultiplierFor, surgeLabelFor,
   hailPointNear, destinationFar, createTaxiJob,
@@ -676,5 +678,133 @@ describe('airport runs', () => {
     assert.equal(expired[0].type, 'hailExpired');
     assert.equal(job.airport, false, 'no stale airport run once the hail is gone');
     assert.equal(job.airportDir, null);
+  });
+});
+
+describe('passenger rating affects tips', () => {
+  // Drive one full fare on `job` and return the dropoff event.
+  function driveFare(job){
+    let hail = null;
+    for(let k = 0; k < 60 && !hail; k++){ const evs = job.update(5, at(0, 0)); hail = evs.find(e => e.type === 'hail'); }
+    assert.ok(hail, 'a hail arrives');
+    const pickup = job.update(0.1, at(hail.point.x, hail.point.z, 0));
+    assert.equal(pickup[0].type, 'pickup');
+    const d = pickup[0].dest;
+    const drop = job.update(0.1, at(d.x, d.z, 0));
+    assert.equal(drop[0].type, 'dropoff');
+    return drop[0];
+  }
+  // A seeded job: plain meter, no VIP, no airport, `ratingSum`/`ratingCount` career.
+  function seededJob(ratingSum, ratingCount){
+    const job = createTaxiJob(cyclingRng(), undefined, { airportChance: 0, vipChance: 0 });
+    job.loadCareer({ rides: ratingCount, earned: 0, bestStreak: 0, ratingSum, ratingCount });
+    job.setInCab(true);
+    return job;
+  }
+
+  it('the tip multiplier follows the career average, with thresholds', () => {
+    assert.equal(RATING_TIP_MIN_RIDES, 3, 'a reputation needs 3 rated rides');
+    assert.equal(tipMultiplierFor(5, 10), TIP_MULT_HIGH);
+    assert.equal(tipMultiplierFor(4.5, 10), TIP_MULT_HIGH);
+    assert.equal(tipMultiplierFor(4.49, 10), TIP_MULT_GOOD, 'just under 4.5 is the good tier, not generous');
+    assert.equal(tipMultiplierFor(4.0, 10), TIP_MULT_GOOD);
+    assert.equal(tipMultiplierFor(3.99, 10), 1, 'just under 4.0 pays the plain tip');
+    assert.equal(tipMultiplierFor(3.0, 10), 1);
+    assert.equal(tipMultiplierFor(2.99, 10), TIP_MULT_LOW, 'just under 3.0 halves the tip');
+    assert.equal(tipMultiplierFor(1, 10), TIP_MULT_LOW);
+    assert.equal(TIP_MULT_HIGH, 1.25);
+    assert.equal(TIP_MULT_GOOD, 1.1);
+    assert.equal(TIP_MULT_LOW, 0.5);
+  });
+
+  it('under 3 rated rides there is no reputation yet: the plain tip pays', () => {
+    assert.equal(tipMultiplierFor(5, 0), 1, 'a brand-new driver has no reputation');
+    assert.equal(tipMultiplierFor(5, 1), 1);
+    assert.equal(tipMultiplierFor(5, 2), 1);
+    assert.equal(tipMultiplierFor(1, 2), 1, 'even a terrible 2-ride record cannot halve tips yet');
+    assert.equal(tipMultiplierFor(5, 3), TIP_MULT_HIGH, 'the third rated ride earns the reputation');
+    assert.equal(tipMultiplierFor(0, 0), 1, 'no history at all pays plain');
+    assert.equal(tipMultiplierFor(NaN, 10), 1, 'a garbage average never moves the tip');
+    assert.equal(tipMultiplierFor(-1, 10), 1);
+    assert.equal(tipMultiplierFor(5, NaN), 1);
+  });
+
+  it('labels name the tip tier, and there is none at the plain rate', () => {
+    assert.equal(tipLabelFor(1.25), 'Generous tips +25%');
+    assert.equal(tipLabelFor(1.1), 'Good tips +10%');
+    assert.equal(tipLabelFor(0.5), 'Low rating — tips halved');
+    assert.equal(tipLabelFor(1), '');
+    assert.equal(tipLabelFor(0), 'Low rating — tips halved');
+  });
+
+  it('tipFor scales the tip by the pre-ride reputation, late and damage still rule', () => {
+    const fare = 200, par = 60;
+    assert.equal(tipFor(fare, 30, par, 0), Math.round(fare * TAXI_TIP_RATE), 'four args still pay the plain tip');
+    assert.equal(tipFor(fare, 30, par, 0, 4.5, 10), Math.round(fare * TAXI_TIP_RATE * 1.25));
+    assert.equal(tipFor(fare, 30, par, 0, 4.0, 10), Math.round(fare * TAXI_TIP_RATE * 1.1));
+    assert.equal(tipFor(fare, 30, par, 0, 2.0, 10), Math.round(fare * TAXI_TIP_RATE * 0.5));
+    assert.equal(tipFor(fare, 30, par, 0, 5, 2), Math.round(fare * TAXI_TIP_RATE), 'too few rides: plain tip despite a 5.0 average');
+    assert.equal(tipFor(fare, 61, par, 0, 5, 10), 0, 'a late ride earns no tip, however beloved the driver');
+    assert.equal(tipFor(fare, 30, par, 0.5, 5, 10), Math.round(fare * TAXI_TIP_RATE * 0.5 * 1.25),
+      'damage still eats the tip first, then the reputation scales what is left');
+    assert.equal(tipFor(fare, 30, par, 1, 5, 10), 0, 'a fully battered ride tips nothing');
+  });
+
+  it('a 4.5-star driver earns a generous tip on the dropoff', () => {
+    const job = seededJob(45, 10);   // 4.5 average over 10 rides
+    assert.equal(job.ratingAvg, 4.5);
+    assert.equal(job.tipMult, 1.25, 'the HUD reads the generous tier before the ride');
+    const drop = driveFare(job);
+    assert.equal(drop.tipMult, 1.25);
+    assert.equal(drop.tip, Math.round(drop.fare * TAXI_TIP_RATE * 1.25), 'the tip is the plain tip plus 25%');
+    assert.equal(drop.total, drop.fare + drop.tip + drop.streakBonus);
+    assert.equal(job.tipMult, 1.25, 'a 5-star ride keeps the generous tier');
+  });
+
+  it('a 4.0-star driver earns the good tier, a sub-3.0 driver gets half tips', () => {
+    const good = seededJob(40, 10);  // 4.0 average
+    const goodDrop = driveFare(good);
+    assert.equal(goodDrop.tipMult, 1.1);
+    assert.equal(goodDrop.tip, Math.round(goodDrop.fare * TAXI_TIP_RATE * 1.1));
+    const bad = seededJob(20, 10);   // 2.0 average
+    assert.equal(bad.tipMult, 0.5);
+    const badDrop = driveFare(bad);
+    assert.equal(badDrop.tipMult, 0.5);
+    assert.equal(badDrop.tip, Math.round(badDrop.fare * TAXI_TIP_RATE * 0.5), 'the tip is halved, never zeroed');
+    assert.ok(badDrop.tip > 0, 'a halved tip on a quick clean ride still pays something');
+    assert.equal(badDrop.total, badDrop.fare + badDrop.tip + badDrop.streakBonus);
+  });
+
+  it('the tip uses the pre-ride reputation: a ride cannot tip itself', () => {
+    // Two 5.0 rides on the books — no reputation yet, so the next ride
+    // pays the plain tip even though the average is perfect.
+    const job = seededJob(10, 2);
+    assert.equal(job.ratingAvg, 5);
+    assert.equal(job.tipMult, 1, 'two rides is not a reputation');
+    const first = driveFare(job);
+    assert.equal(first.tipMult, 1, 'the first dropoff pays the plain tip');
+    assert.equal(first.tip, Math.round(first.fare * TAXI_TIP_RATE));
+    assert.equal(first.rating, 5, 'the quick clean ride earns 5 stars');
+    // Now 3 rated rides at a 5.0 average: the reputation kicks in.
+    assert.equal(job.ratingCount, 3);
+    assert.equal(job.ratingAvg, 5);
+    assert.equal(job.tipMult, 1.25);
+    const second = driveFare(job);
+    assert.equal(second.tipMult, 1.25, 'the next ride earns the generous tip');
+    assert.equal(second.tip, Math.round(second.fare * TAXI_TIP_RATE * 1.25));
+  });
+
+  it('a boosted tip boosts the streak bonus too', () => {
+    const job = seededJob(45, 10);   // 4.5 average: generous tips
+    const first = driveFare(job);
+    assert.equal(first.streakBonus, 0, 'first fare of a streak earns no bonus');
+    const second = driveFare(job);
+    assert.equal(second.streak, 2);
+    assert.equal(second.tip, Math.round(second.fare * TAXI_TIP_RATE * 1.25), 'the second tip is generous too');
+    assert.equal(second.streakBonus, streakBonusFor(2, second.fare, second.tip),
+      'the bonus is computed off fare + the boosted tip');
+    assert.ok(second.streakBonus > streakBonusFor(2, second.fare, Math.round(second.fare * TAXI_TIP_RATE)),
+      'the bonus beats what a plain tip would pay');
+    assert.equal(second.total, second.fare + second.tip + second.streakBonus);
   });
 });
