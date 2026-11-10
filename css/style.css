@@ -392,3 +392,13 @@ body.compact #wp-hud{top:calc(152px + env(safe-area-inset-top))}
 .me-btns{display:flex;gap:8px}.me-btns .mbtn{flex:1}
 .me-panel .mbtn{padding:11px 14px;font-size:14px}
 body.compact .me-tile span{font-size:10px}
+
+/* Paint the Town Red */
+#paint-btn{position:absolute;left:62px;top:calc(100px + env(safe-area-inset-top));font-size:20px;pointer-events:auto;cursor:pointer;background:rgba(20,28,55,.7);width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.12)}
+#paint-btn.on{background:rgba(200,16,30,.85);border-color:#ff6b6b;box-shadow:0 0 14px rgba(255,40,60,.7)}
+#paint-btn:active{transform:scale(.92)}
+#paint-hud{position:absolute;left:50%;transform:translateX(-50%);top:calc(10px + env(safe-area-inset-top));background:rgba(40,4,8,.78);border:1px solid rgba(255,80,90,.55);border-radius:12px;padding:5px 12px;min-width:170px;text-align:center;color:#fff;font-size:12px;pointer-events:none}
+#paint-hud b{display:block;letter-spacing:.5px;color:#ffd0d4}
+#paint-hud small{opacity:.8}
+.paint-bar{height:6px;background:rgba(255,255,255,.15);border-radius:3px;margin:4px 0 2px;overflow:hidden}
+#paint-fill{height:100%;width:0;background:linear-gradient(90deg,#ff2a3d,#c8101e)}

@@ -43,6 +43,7 @@ Open-world 3D driving game for mobile browsers. Built with Three.js — no app s
   - *Off-road:* lowered → 6" lift, 33"–40" tires (bigger tires need more lift), 4x4, bull bar, winch, snorkel, roof rack, LED light bar, fender flares, skid plates, drag wing, wheelie bars — all shown on the car
   - *Tune:* boost PSI, final drive, wheel offset sliders · *Dyno:* HP/torque curve, 0-60, 60 ft, ¼-mile ET + trap
   - Power vs traction is real: too much power on street tires spins; turbos lag, blowers don't; mud/grass/dirt slow cars that aren't built for it (Prairie Off-Road Park west of downtown)
+- **Paint the Town Red** — tap 🖌️ (or press P): your wheels lay a trail of red paint and every building you drive past floods red. A TOWN RED meter tracks streets + buildings painted, you earn cash for every block and big bonuses at 10/25/50/75/100%, and your paint job is saved. 🧽 WASH THE TOWN in the pause menu starts over
 - **Drag racing** — quarter-mile strip, Christmas-tree lights, reaction-time launch, 5-gear shift-timing minigame, AI opponent, cash payouts
 - **Live multiplayer** — everyone who opens the game shares one city over Supabase Realtime (no game server). Other players show up as their car or on foot with their skin, name tag and gun, and you see their bullets fly. Online count on the menu + HUD, players on the minimap
 - **Free skin editor** — any car paint color, rims, racing stripes, underglow, window tint; driver shirt/pants/skin tone/hair/hat (incl. crown + helmet) and your online name. All free

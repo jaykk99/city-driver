@@ -29,7 +29,7 @@ import { createBlood } from './blood.js';
 import { createPeople } from './npcs.js';
 import { createTraffic } from './traffic.js';
 import { createPolice, POLICE_STATION, WITNESS_RADIUS, WITNESS_LOUD_RADIUS } from './police.js';
-import { HOSPITAL_SPAWN, GRID_HALF, surfaceAt, surfaceGrip, WATER_DEPTH, isWet } from './world.js';
+import { HOSPITAL_SPAWN, GRID_HALF, ROAD_W, surfaceAt, surfaceGrip, WATER_DEPTH, isWet } from './world.js';
 import { createWheelFX } from './fx.js';
 import { buildCustomMap, OFFSET } from './mapbuilder.js';
 import { createMapEditor } from './mapeditor.js';
@@ -44,6 +44,8 @@ import { nearestBay, nearestRepairShop, REPAIR_RADIUS, REPAIR_RATE, BAY_REPAIR_D
 import { TireWear, WORN_WARN, WORN_BAD } from './tires.js';
 import { nearestTireBay, nearestTireShop, TIRE_RADIUS, TIRE_RATE, BAY_TIRE_DIST } from './tireshop.js';
 import { FuelTruckRun, buildFuelTruckMeshes } from './fueltruck.js';
+import { PaintTown, MILESTONES as PAINT_MILESTONES } from './painttown.js';
+import { createPaintFX } from './paintfx.js';
 import { createTaxiJob, isTaxiCar, customMapPickers, surgeMultiplierFor, surgeLabelFor, tipLabelFor } from './taxi.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
@@ -108,6 +110,7 @@ let fuelTruck=null, fuelTruckMesh=null, fuelTruckCost=0;   // visible delivery r
 let taxi=createTaxiJob(), taxiBeacon=null, taxiPed=null, taxiPedPhase=0;   // cab fares: beacon + hailer ped + state live here, logic in taxi.js
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
 let missions=null, boardOpen=false, lastGear=0;
+let paintTown=null, paintFX=null, paintPay=0, paintPayT=0, paintSaveT=0, paintDirty=false, paintBuildToastT=0, paintBuildRun=0;   // Paint the Town Red
 // engine character per car: cylinders, idle, redline
 const ENGINES={ sport:{cyl:6,red:7200}, muscle:{cyl:8,red:6200,idle:750}, super:{cyl:10,red:8500}, suv:{cyl:6,red:6000},
   truck:{cyl:8,red:5600,idle:700}, track:{cyl:4,red:8800,idle:1100}, sedan:{cyl:4,red:6500}, taxi:{cyl:4,red:6200},
@@ -1188,6 +1191,59 @@ function gearFor(mph){
   if(mph<125) return '5';
   return '6';
 }
+// ---------------- Paint the Town Red ----------------
+function syncPaintHud(){
+  const on=!!(paintTown && paintTown.active), h=$('paint-hud'), b=$('paint-btn');
+  if(b) b.classList.toggle('on', on);
+  if(!h) return;
+  h.classList.toggle('hidden', !on);
+  if(on){
+    // slide down out of the way of the mission / taxi cards (same top-centre slot)
+    const mis=!$('mission-hud').classList.contains('hidden'), cab=!$('taxi-hud').classList.contains('hidden');
+    h.style.marginTop=(cab?190:mis?100:0)+'px';
+    const pct=paintTown.progress*100;
+    $('paint-pct').textContent=(pct>=99.95?100:pct<10?pct.toFixed(1):Math.floor(pct))+'%';
+    $('paint-fill').style.width=pct.toFixed(1)+'%';
+    $('paint-bld').textContent=paintTown.buildingCount+'/'+paintTown.buildings.length;
+  }
+}
+function togglePaint(){
+  if(!paintTown) return;
+  paintTown.active=!paintTown.active;
+  save.paintTown=Object.assign(paintTown.serialize(), { on:paintTown.active }); saveSave(save);
+  audio.beep(paintTown.active?880:440, 0.07);
+  if(paintTown.active) toast(customMap ? '🖌️ Paint mode is for the city — head back to Winnipeg' : '🖌️ PAINT THE TOWN RED — your wheels lay red paint and every building you brush past turns red. Cash for all of it!', 3600);
+  else toast('🖌️ Paint off — your work stays red', 1800);
+  syncPaintHud();
+}
+function washTown(){
+  if(!paintTown) return;
+  paintFX.clear(); paintTown.reset();
+  save.paintTown=Object.assign(paintTown.serialize(), { on:paintTown.active }); saveSave(save);
+  syncPaintHud(); toast('🧽 Town washed clean', 1800);
+}
+function updatePaint(dt, x, z, heading, speed, inCar){
+  if(!paintTown) return;
+  const live=paintTown.active && !customMap && !inside && mode!=='tdm';
+  const ev=live ? paintTown.update(x, z, !inCar) : null;
+  paintFX.update(dt, x, z, heading, speed, inCar, ev, live);
+  paintBuildToastT=Math.max(0, paintBuildToastT-dt);
+  if(ev && (ev.cells || ev.buildings.length || ev.milestone)){
+    paintDirty=true; paintPay+=ev.pay;
+    if(ev.buildings.length){
+      paintBuildRun+=ev.buildings.length;
+      audio.beep(980+Math.random()*200, 0.05);
+      if(!paintBuildToastT){ toast('🎨 '+(paintBuildRun>1?paintBuildRun+' buildings':'Building')+' painted red', 1200); paintBuildToastT=1.2; paintBuildRun=0; }
+    }
+    if(ev.milestone){ toast(ev.milestone.msg+' · +$'+ev.milestone.pay.toLocaleString(), 4200); audio.beep(1320,0.12); }
+  }
+  // batch the cash + save so painting doesn't hit localStorage every frame
+  paintPayT+=dt; paintSaveT+=dt;
+  if(paintPay>0 && paintPayT>0.75){ addCash(paintPay); paintPay=0; paintPayT=0; }
+  if(paintDirty && paintSaveT>3){ save.paintTown=Object.assign(paintTown.serialize(), { on:paintTown.active }); saveSave(save); paintDirty=false; paintSaveT=0; }
+  if((frameN&7)===0) syncPaintHud();
+}
+
 function updateHUD(){
   const mph=Math.abs(tele.speed)*2.2;
   $('speed-val').textContent=Math.round(mph);
@@ -1324,6 +1380,8 @@ function openPause(){
   paused=true;
   setAction(null,null,'');
   hideOverlays();
+  $('p-paint').textContent=paintTown&&paintTown.active?'🖌️ PAINT THE TOWN RED: ON':'🖌️ PAINT THE TOWN RED: OFF';
+  $('p-wash').classList.toggle('hidden', !(paintTown && (paintTown.paintedB.size || paintTown.paintedC.size)));
   $('pause-menu').classList.remove('hidden');
 }
 function closePause(){ paused=false; hideOverlays(); }
@@ -1653,6 +1711,7 @@ function frame(now){
   }else if(playing && onFoot){
     updateFoot(dt);
     city.update(dt, foot.pos);
+    updatePaint(dt, foot.pos.x, foot.pos.z, foot.heading, foot.speed||0, false);
     shops.update(dt);
     interiors.update(dt, inside && inside.room);
     smoke.update(dt); exhaust.update(dt);
@@ -1860,6 +1919,7 @@ function frame(now){
     if(award>0){ addCash(award); toast('DRIFT +$'+award.toLocaleString()); }
     cityPos.x=physics.pos.x; cityPos.z=physics.pos.z;
     city.update(dt, cityPos);
+    updatePaint(dt, physics.pos.x, physics.pos.z, physics.heading, tele.speed, true);
     syncCarTransform(dt);
     updateCamera(dt);
     updateHUD();
@@ -1994,6 +2054,10 @@ function wireUI(){
     toast(save.manual?'Manual: shift with ▲/▼ GEAR (G / B keys). Watch the rev bar!':'Automatic gearbox', 2600); };
   $('m-trans').onclick=toggleTrans; $('p-trans').onclick=toggleTrans;
   $('mission-btn').onclick=()=>{ audio.beep(650,0.05); openBoard(); };
+  $('paint-btn').onclick=()=>togglePaint();
+  $('p-paint').onclick=()=>{ togglePaint(); $('p-paint').textContent=paintTown&&paintTown.active?'🖌️ PAINT THE TOWN RED: ON':'🖌️ PAINT THE TOWN RED: OFF'; };
+  $('p-wash').onclick=()=>{ audio.beep(500,0.05); washTown(); };
+  window.addEventListener('keydown', e=>{ if((e.key==='p'||e.key==='P') && state==='freeroam' && !paused) togglePaint(); });
   $('mb-start').onclick=()=>startMission();
   $('mb-close').onclick=()=>{ audio.beep(500,0.05); closeBoard(); };
   $('victory-ok').onclick=()=>{ $('victory').classList.add('hidden'); };
@@ -2054,6 +2118,9 @@ async function boot(){
       onPlayerHit:(d)=>hurtPlayer(d) });
     traffic=createTraffic({ scene, lines:city.roadLines, buildCar, applyCarSkin, CAR_DEFS });
     trafficHits=traffic.hitList();
+    paintTown=new PaintTown(city.buildings, city.roadLines, ROAD_W, GRID_HALF);
+    paintFX=createPaintFX(scene, city, paintTown);
+    if(save.paintTown){ paintTown.load(save.paintTown); paintTown.active=!!save.paintTown.on; paintFX.relay(); }
     police=createPolice({
       scene, buildCar,
       collide:(x,z,r)=>{ const res=collideR(x,z,r); if(traffic) traffic.collide(res, r); return res; },
@@ -2107,7 +2174,7 @@ async function boot(){
       play:(m)=>{ audio.unlock(); orient.goLandscape(); playCustom(m); } });
     syncPersonGear(); updateModeHUD();
     // test hook: ?debug exposes a teleport for automated smoke tests
-    if(/[?&]debug\b/.test(location.search)) window.__cd={ frames:()=>frameN, buildMap:m=>{ const t=performance.now(); const c=buildCustomMap(scene,m); const dt=performance.now()-t; c.dispose(); return dt; }, playCustom:m=>{ const t=performance.now(); playCustom(m); return performance.now()-t; }, tp:(x,z,h)=>{ if(onFoot){ foot.reset(x,z,h||0); snapFootCamera(); } else { physics.pos.x=x; physics.pos.z=z; physics.heading=h||0; syncCarTransform(0); snapCamera(); } }, save:()=>save, stores:()=>shops.stores,
+    if(/[?&]debug\b/.test(location.search)) window.__cd={ frames:()=>frameN, buildMap:m=>{ const t=performance.now(); const c=buildCustomMap(scene,m); const dt=performance.now()-t; c.dispose(); return dt; }, playCustom:m=>{ const t=performance.now(); playCustom(m); return performance.now()-t; }, tp:(x,z,h)=>{ if(onFoot){ foot.reset(x,z,h||0); snapFootCamera(); } else { physics.pos.x=x; physics.pos.z=z; physics.heading=h||0; syncCarTransform(0); snapCamera(); } }, save:()=>save, paint:()=>paintTown, stores:()=>shops.stores,
       buildings:()=>city.buildings, inside:()=>inside&&{id:inside.b.id, style:inside.room.style}, enter:b=>enterBuilding(b), exit:()=>exitBuilding(),
       getOut:()=>getOut(), tut:()=>tutorial&&{active:tutorial.active, step:tutorial.step}, finishTut:()=>finishTutorial(), pick:id=>pickCar(id),
       mp:()=>mp&&{status:mp.status,count:mp.count}, state:()=>({state,onFoot,editorOpen,pickOpen,cash:save.cash}),

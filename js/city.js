@@ -329,6 +329,7 @@ export function buildCity(scene, reserved = []){
   }
   const tint = new THREE.Color();
   const roofSpots = [];
+  const bRef = [];   // building id -> { mesh, i } for the instanced facades (Paint the Town Red recolours them)
   const PALETTES = {
     glass:     [[0.55, 0.6, 0.66], [0.32, 0.36, 0.42], [0.2, 0.22, 0.26], [0.62, 0.62, 0.6]],
     office:    [[0.78, 0.77, 0.73], [0.66, 0.65, 0.62], [0.82, 0.78, 0.68], [0.55, 0.56, 0.58]],
@@ -351,6 +352,7 @@ export function buildCity(scene, reserved = []){
       if(Math.abs(ox) > Math.abs(oz)) nx = ox >= 0 ? 1 : -1; else nz = oz >= 0 ? 1 : -1;
       door = { x:px + nx * (w / 2), z:pz + nz * (d / 2), nx, nz };
     }
+    bRef[buildingInfo.length] = { mesh, i, base:tint.clone() };
     buildingInfo.push({ id:buildingInfo.length, minX:px - w / 2, maxX:px + w / 2, minZ:pz - d / 2, maxZ:pz + d / 2, h, door });
   }
 
@@ -680,7 +682,19 @@ export function buildCity(scene, reserved = []){
   }
   update(0, spawn);
 
-  return { colliders, buildings:buildingInfo, spawn, dragStrip, update, setGlow, sun, hemi, roadLines:LINES };
+  // only the instanced city facades can be repainted; landmarks and outskirts keep their look
+  for(const b of buildingInfo) b.paintable = !!bRef[b.id];
+  const _bc = new THREE.Color();
+  // colour = THREE.Color to paint it, or null to restore the original facade
+  function setBuildingColor(id, color){
+    const r = bRef[id]; if(!r) return false;
+    r.mesh.setColorAt(r.i, color || r.base);
+    r.mesh.instanceColor.needsUpdate = true;
+    return true;
+  }
+  function buildingColor(id, out = _bc){ const r = bRef[id]; return r ? out.copy(r.base) : null; }
+
+  return { colliders, buildings:buildingInfo, spawn, dragStrip, update, setGlow, sun, hemi, roadLines:LINES, setBuildingColor, buildingColor };
 }
 
 // =====================================================================
