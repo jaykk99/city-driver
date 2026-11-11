@@ -45,6 +45,8 @@ Open-world 3D driving game for mobile browsers. Built with Three.js — no app s
   - Power vs traction is real: too much power on street tires spins; turbos lag, blowers don't; mud/grass/dirt slow cars that aren't built for it (Prairie Off-Road Park west of downtown)
 - **Paint the Town Red** — tap 🖌️ (or press P): your wheels lay a trail of red paint and every building you drive past floods red. A TOWN RED meter tracks streets + buildings painted, you earn cash for every block and big bonuses at 10/25/50/75/100%, and your paint job is saved. 🧽 WASH THE TOWN in the pause menu starts over
 - **Drag racing** — quarter-mile strip, Christmas-tree lights, reaction-time launch, 5-gear shift-timing minigame, AI opponent, cash payouts
+- **Taxi fares** — drive the Peg City Cab and fares hail nearby: base + distance, tips for quick clean rides, streak bonuses, passenger star ratings, night/sunset surge, VIP rush fares and airport runs
+- **Courier deliveries** — food delivery in any car but the cab: orders appear at restaurants, pay base + distance scaled by freshness, hard shunts spoil the food, and a second order can stack for a $50 batch bonus
 - **Live multiplayer** — everyone who opens the game shares one city over Supabase Realtime (no game server). Other players show up as their car or on foot with their skin, name tag and gun, and you see their bullets fly. Online count on the menu + HUD, players on the minimap
 - **Free skin editor** — any car paint color, rims, racing stripes, underglow, window tint; driver shirt/pants/skin tone/hair/hat (incl. crown + helmet) and your online name. All free
 - **Tutorial mission** — drive, drift, get out, enter a building, leave it. Pays **$100,000** once, then you pick **any car free**

@@ -47,6 +47,7 @@ import { FuelTruckRun, buildFuelTruckMeshes } from './fueltruck.js';
 import { PaintTown, MILESTONES as PAINT_MILESTONES } from './painttown.js';
 import { createPaintFX } from './paintfx.js';
 import { createTaxiJob, isTaxiCar, customMapPickers, surgeMultiplierFor, surgeLabelFor, tipLabelFor } from './taxi.js';
+import { createCourierJob } from './courier.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
 
@@ -108,6 +109,7 @@ let tireWarnedHalf=false, tireWarnedBald=false;   // worn-tire toasts, once per 
 let tireBaseGrip=null, tireStatsObj=null;   // fresh-stats grip, recaptured per stats object
 let fuelTruck=null, fuelTruckMesh=null, fuelTruckCost=0;   // visible delivery run, if one is out
 let taxi=createTaxiJob(), taxiBeacon=null, taxiPed=null, taxiPedPhase=0;   // cab fares: beacon + hailer ped + state live here, logic in taxi.js
+let courier=createCourierJob(), courierBeacon=null;   // courier shift: beacon + state live here, logic in courier.js
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
 let missions=null, boardOpen=false, lastGear=0;
 let paintTown=null, paintFX=null, paintPay=0, paintPayT=0, paintSaveT=0, paintDirty=false, paintBuildToastT=0, paintBuildRun=0;   // Paint the Town Red
@@ -794,7 +796,9 @@ function playCustom(map){
   customMap=buildCustomMap(scene, map); lastCustom=map;
   // A fare cannot follow you to another world: end it here, quietly.
   if(taxi.active){ taxi.abandon(); setTaxiBeacon(null); hideTaxiPed(); updateTaxiHud(); }
+  if(courier.active){ courier.abandon(); setCourierBeacon(null); updateCourierHud(); }
   taxi.setPickers(customMapPickers(map, OFFSET));   // cab fares run on custom streets too
+  courier.setPickers(customMapPickers(map, OFFSET));   // courier orders run on custom streets too
   weaponCtx.colliders=customMap.colliders; weaponCtx.targets=[];
   minimap.setCustom(customMap.painter); minimap.setWaypoint(null);
   setTimeOfDay((MAP_THEMES[map.theme]||MAP_THEMES.summer).sky, true);
@@ -808,7 +812,9 @@ function exitCustom(){
   if(!customMap) return;
   // Leaving the custom world ends a live fare, same as leaving the cab.
   if(taxi.active){ taxi.abandon(); setTaxiBeacon(null); hideTaxiPed(); updateTaxiHud(); }
+  if(courier.active){ courier.abandon(); setCourierBeacon(null); updateCourierHud(); }
   taxi.setPickers(null);   // back to the main-city grid
+  courier.setPickers(null);   // courier orders back to the main-city grid too
   customMap.dispose(); customMap=null;
   weaponCtx.colliders=city.colliders; weaponCtx.targets=shops.targets;
   minimap.setCustom(null);
@@ -1069,6 +1075,57 @@ function updateTaxiHud(){
   }else{ $('tx-arrow').classList.add('hidden'); $('tx-dist').textContent = ''; }
 }
 
+// ---------------- courier deliveries: beacon + HUD (logic lives in courier.js) ----------------
+// The beacon is orange for a delivery — restaurant while an order waits,
+// the customer once it is aboard — so it never reads as a taxi fare.
+function setCourierBeacon(p){
+  if(!p){ if(courierBeacon) courierBeacon.visible = false; return; }
+  if(!courierBeacon){
+    const ringMat = new THREE.MeshBasicMaterial({ color:0xfb923c, transparent:true, opacity:0.85, depthWrite:false, side:THREE.DoubleSide });
+    const beamMat = new THREE.MeshBasicMaterial({ color:0xfb923c, transparent:true, opacity:0.2, depthWrite:false, side:THREE.DoubleSide, blending:THREE.AdditiveBlending });
+    courierBeacon = new THREE.Group();
+    courierBeacon.add(new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 40).rotateX(-Math.PI / 2).translate(0, 0.1, 0), ringMat));
+    courierBeacon.add(new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 30, 24, 1, true).translate(0, 15, 0), beamMat));
+    scene.add(courierBeacon);
+  }
+  courierBeacon.visible = true; courierBeacon.position.set(p.x, 0, p.z);
+}
+function updateCourierHud(){
+  const el = $('courier-hud'); if(!el) return;
+  if(!courier.active){ el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  const px = physics.pos.x, pz = physics.pos.z, h = physics.heading, tg = courier.target;
+  const st = courier.state;
+  $('cv-obj').textContent = st === 'offer' ? 'Pick up the order'
+    : st === 'offer2' ? 'Second order waiting — pick it up or deliver first'
+    : courier.carriedCount > 1 ? 'Deliver ' + courier.carriedCount + ' orders'
+    : 'Deliver the order';
+  const tl = courier.timeLeft;
+  const timeEl = $('cv-time');
+  if(st === 'offer' || st === 'offer2'){ timeEl.textContent = '⏱ ' + Math.ceil(tl) + 's'; timeEl.classList.toggle('low', tl < 10); }
+  else{
+    // Freshness time: the clock runs against par, so past par reads COLD.
+    timeEl.textContent = tl >= 0 ? '🔥 ' + Math.ceil(tl) + 's' : '❄️ COLD';
+    timeEl.classList.toggle('low', tl < 10);
+  }
+  const info = $('cv-info');
+  if(info){
+    const bits = [];
+    if(courier.carriedCount){ bits.push(courier.carried.map(o => o.food + ' ' + Math.round(o.freshness * 100) + '%').join(' · ')); }
+    if(courier.carriedCount > 1) bits.push('stacked pair · +$50 on the last drop');
+    if(courier.deliveries > 0) bits.push(courier.deliveries + ' delivered · $' + courier.earned.toLocaleString());
+    info.textContent = bits.join(' · ');
+  }
+  if(tg && !inside){
+    const a = Math.atan2(-(tg.x - px), -(tg.z - pz));
+    const rel = Math.atan2(Math.sin(a - h), Math.cos(a - h));
+    const arrow = $('cv-arrow');
+    arrow.style.transform = 'rotate(' + (-rel).toFixed(3) + 'rad)';
+    arrow.classList.remove('hidden');
+    $('cv-dist').textContent = Math.round(Math.hypot(tg.x - px, tg.z - pz)) + ' m';
+  }else{ $('cv-arrow').classList.add('hidden'); $('cv-dist').textContent = ''; }
+}
+
 // ---------------- full map + GPS waypoint ----------------
 let bigMapOpen=false;
 function playerXZ(){ return onFoot ? { x:inside?inside.back.x:foot.pos.x, z:inside?inside.back.z:foot.pos.z, h:foot.heading } : { x:physics.pos.x, z:physics.pos.z, h:physics.heading }; }
@@ -1132,6 +1189,7 @@ function damageCar(impact){
   const before=carDamage.hp;
   const d=carDamage.hit(impact);
   if(d<=0) return 0;
+  if(courier && courier.noteImpact()) toast('🛵 Food spoiled — drive smoother!', 1800);
   if(audio.crash) audio.crash(Math.min(1, 0.25 + d / 30));
   syncCarHP();
   if(carDamage.wrecked) toast('🚛 WRECKED — tow truck incoming…', 2600);
@@ -1706,6 +1764,9 @@ function frame(now){
   if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && taxi.active){
     taxi.abandon(); setTaxiBeacon(null); hideTaxiPed(); updateTaxiHud(); toast('🚕 Fare abandoned — you left the cab', 2000);
   }
+  if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && courier.active){
+    courier.abandon(); setCourierBeacon(null); updateCourierHud(); toast('🛵 Delivery abandoned — order lost', 2000);
+  }
   if(editorOpen){
     updateEditorCamera(dt);
   }else if(playing && onFoot){
@@ -1870,6 +1931,8 @@ function frame(now){
     // The pickers follow the world: main-city grid at home, custom streets
     // on a custom map (swapped in playCustom/exitCustom).
     if(taxi.setInCab(isTaxiCar(carDef)) === 'abandoned'){ hideTaxiPed(); toast('🚕 Fare abandoned — you switched cars', 2000); }
+    if(isTaxiCar(carDef) && courier.active){ courier.abandon(); setCourierBeacon(null); updateCourierHud(); toast('🛵 Delivery abandoned — you switched to the cab', 2000); }
+    courier.setDriving(true);   // the courier shift runs in any car but the cab
     for(const ev of taxi.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100, surge:surgeMultiplierFor(PRESET_ORDER[todIdx]) })){
       if(ev.type === 'hail'){ setTaxiBeacon(ev.point, ev.vip, ev.airport); setTaxiPed(ev.point, ev.vip);
         toast(ev.airport ? '✈️ Airport run hailing — ' + (ev.airportDir === 'to' ? 'needs a ride to the terminal' : 'waiting at arrivals') + (ev.vip ? ' · VIP ×2' : '') + (ev.surge > 1 ? ' · ' + surgeLabelFor(ev.surge) + ' ×' + ev.surge : '')
@@ -1891,8 +1954,31 @@ function frame(now){
         toast(msg, 3200); }
       else if(ev.type === 'rideFailed'){ setTaxiBeacon(null); hideTaxiPed(); toast(ev.reason === 'impatient' ? (ev.airport ? '✈️ Airport passenger bailed — took too long' : '🚕 Passenger bailed — took too long') : (ev.airport ? '✈️ Airport passenger bailed — wrecked cab' : '🚕 Passenger bailed — wrecked cab'), 2400); }
     }
+    // Courier shift: food delivery in any car but the cab — orders appear
+    // at restaurants nearby, pay base + distance scaled by freshness, spoil
+    // on hard impacts (damageCar feeds noteImpact), and stack two at a time
+    // for a $50 batch bonus. The cab runs fares instead, so the courier
+    // waits while the taxi shift is live and never fights it for a beacon.
+    if(!isTaxiCar(carDef)){
+      for(const ev of courier.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100 })){
+        if(ev.type === 'offer'){ setCourierBeacon(ev.order.restPoint);
+          toast((ev.stacked ? '🛵 Second order — ' : '🛵 New order — ') + ev.order.food + ' from ' + ev.order.restaurant + ' — ~$' + ev.payEstimate.toLocaleString() + ' if hot' + (ev.stacked ? ' · stack it for +$50' : ''), 2800); }
+        else if(ev.type === 'offerExpired'){ setCourierBeacon(ev.stacked ? courier.target : null); toast(ev.stacked ? '🛵 Second order cancelled — first order still rides' : '🛵 Order cancelled — restaurant gave up waiting', 2000); }
+        else if(ev.type === 'pickup'){ setCourierBeacon(ev.order.dest); audio.beep(990, 0.08);
+          toast('🛵 ' + ev.order.food + ' collected — deliver hot for ~$' + ev.payEstimate.toLocaleString() + (ev.stacked ? ' · two orders aboard!' : ''), 2600); }
+        else if(ev.type === 'delivered'){ addCash(ev.total); setCourierBeacon(courier.target);
+          save.courier = courier.career; saveSave(save);   // career (deliveries, best stack, fresh drops) persists
+          const fresh = ev.order.freshness;
+          let msg = '🛵 Delivered — $' + ev.pay.toLocaleString() + (fresh >= 0.8 ? ' · still hot 🔥' : fresh > 0 ? ' · lukewarm' : ' · cold ❄️');
+          if(ev.batchBonus > 0) msg += ' + $' + ev.batchBonus.toLocaleString() + ' batch bonus';
+          if(ev.ordersLeft > 0) msg += ' · ' + ev.ordersLeft + ' order' + (ev.ordersLeft > 1 ? 's' : '') + ' still aboard';
+          else msg += ' · ' + ev.deliveries + ' deliveries · $' + ev.earned.toLocaleString() + ' earned';
+          toast(msg, 3200); }
+        else if(ev.type === 'ordersLost'){ setCourierBeacon(null); toast('🛵 Orders lost — the food went down with the car', 2400); }
+      }
+    }
     updateTaxiPed(dt);
-    if(frameN % 3 === 0) updateTaxiHud();
+    if(frameN % 3 === 0){ updateTaxiHud(); updateCourierHud(); }
     // crash detector: a one-frame speed collapse only comes from a shunt
     // (braking and drag bleed speed slowly). tele.speed lags collisions by
     // a frame, so this catches walls and traffic alike.
@@ -1926,7 +2012,7 @@ function frame(now){
     updateEffects(dt);
     shops.update(dt);
     weapons.update(dt, weaponCtx, false, false);   // let bullets finish flying
-    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null, mp, copBlips(), taxi.target);
+    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null, mp, copBlips(), taxi.target || courier.target);
     updateAction();
     if(controls.consumeAction()) doAction();
     if(qm) qm.update(dt);
@@ -2098,6 +2184,7 @@ async function boot(){
   try{
     save=ensureSkins(ensureArsenal(loadSave()));
     taxi.loadCareer(save.taxi);   // cab career (rides, earnings, rating) survives sessions
+    courier.loadCareer(save.courier);   // courier career (deliveries, earnings, best stack) survives sessions
     audio=createAudio();
     orient=initOrientation(onViewResize);
     await initScene();
