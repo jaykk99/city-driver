@@ -359,6 +359,8 @@ body.compact #tach{margin:3px auto 0}
 .boost-bar{width:110px;height:6px;border-radius:4px;background:rgba(255,255,255,.15);overflow:hidden;margin-top:3px}
 #boost-fill{height:100%;width:0;background:linear-gradient(90deg,#38bdf8,#a855f7)}
 #surface-hud{position:absolute;left:50%;transform:translateX(-50%);top:calc(64px + env(safe-area-inset-top));font-size:12px;font-weight:900;letter-spacing:1px;background:rgba(10,14,30,.75);padding:4px 10px;border-radius:999px;color:#fbbf24}
+#weather-hud{position:absolute;left:50%;transform:translateX(-50%);top:calc(92px + env(safe-area-inset-top));font-size:12px;font-weight:900;letter-spacing:1px;background:rgba(10,14,30,.75);padding:4px 10px;border-radius:999px;color:#7dd3fc}
+#storm-flash{position:fixed;inset:0;background:#fff;opacity:0;pointer-events:none;z-index:90}
 body.compact #boost-hud{left:auto;right:14px;bottom:calc(178px + env(safe-area-inset-bottom));text-align:right}
 body.compact #boost-hud .boost-bar{margin-left:auto}
 

@@ -31,6 +31,8 @@ Open-world 3D driving game for mobile browsers. Built with Three.js — no app s
 - **Sound** — per-engine voices (crossplane V8 lope, turbo straight-six whistle + blow-off, V10 scream, rally anti-lag
   bangs), gunshots with a crack and a street echo, screams, footsteps, crash crunch, city ambience and birds
 - **Free roam** — drive a full 3D city: 5×5 blocks, 82 buildings, streetlights, trees, day lighting with follow-shadows
+- **Weather** — clear skies roll into cloud, rain and full storms on their own clock: rain slicks the roads (less grip), dims the sun, turns the headlights on and pays cab fares a weather surge (rain +25%, storm +50%, stacking with the night surge); storms throw lightning, and fares finished in the wet count toward your career
+- **Taxi fares** — drive the Peg City Cab and fares hail nearby: base + distance, tips for quick clean rides, streak bonuses, passenger star ratings that set future tips, VIP rush fares, airport runs, and surge pricing at sunset and night
 - **Traffic that panics** — working traffic lights and AI drivers that stop, keep gaps and brake for you — until gunfire goes off nearby, when every driver in earshot floors it and runs the red lights to get away
 - **16 driveable cars** — from the Apex S starter to the Aurora Hyper, plus the five hero cars above. All modeled in code by Forge, distinct handling/top speed
 - **Arcade physics** — acceleration, braking, speed-sensitive steering, handbrake drifts, nitro boost

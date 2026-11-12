@@ -399,7 +399,7 @@ describe('streak bonus + passenger rating', () => {
     assert.equal(job.bestStreak, 4);
     assert.equal(job.ratingAvg, 4.5);
     assert.equal(job.streak, 0, 'a new session starts a new shift');
-    assert.deepEqual(job.career, { rides: 10, earned: 5000, bestStreak: 4, ratingSum: 45, ratingCount: 10 });
+    assert.deepEqual(job.career, { rides: 10, earned: 5000, bestStreak: 4, ratingSum: 45, ratingCount: 10, rainFares: 0, stormFares: 0 });
     const bad = createTaxiJob(cyclingRng());
     bad.loadCareer({ rides: 'many', earned: -5, ratingSum: NaN });
     assert.equal(bad.rides, 0);
@@ -806,5 +806,100 @@ describe('passenger rating affects tips', () => {
     assert.ok(second.streakBonus > streakBonusFor(2, second.fare, Math.round(second.fare * TAXI_TIP_RATE)),
       'the bonus beats what a plain tip would pay');
     assert.equal(second.total, second.fare + second.tip + second.streakBonus);
+  });
+});
+
+describe('weather surge + wet-shift career', () => {
+  // A ctx with the weather split main.js passes: combined surge plus its
+  // time-of-day and weather parts and the sky itself.
+  const atW = (x, z, weather = 'clear', timeSurge = 1, weatherSurge = weather === 'storm' ? 1.5 : weather === 'rain' ? 1.25 : 1, speed = 0) =>
+    ({ x, z, speed, hp: 100, maxHp: 100, surge: timeSurge * weatherSurge, timeSurge, weatherSurge, weather });
+  // Drive one full fare under a given sky; `midRide` optionally changes
+  // the sky after pickup, to prove the meter stays locked.
+  function driveWeatherFare(weather, midRide){
+    const job = createTaxiJob(cyclingRng(), undefined, { vipChance: 0, airportChance: 0 });
+    job.setInCab(true);
+    let hail = null;
+    for(let k = 0; k < 30 && !hail; k++){ const evs = job.update(5, atW(0, 0, weather)); hail = evs.find(e => e.type === 'hail'); }
+    assert.ok(hail, 'a hail arrives');
+    const pickup = job.update(0.1, atW(hail.point.x, hail.point.z, weather));
+    assert.equal(pickup[0].type, 'pickup');
+    const d = pickup[0].dest;
+    const dropCtx = midRide ? atW(d.x, d.z, midRide) : atW(d.x, d.z, weather);
+    const drop = job.update(0.1, dropCtx);
+    assert.equal(drop[0].type, 'dropoff');
+    return { job, hail, pickup: pickup[0], drop: drop[0] };
+  }
+
+  it('rain and storm fares count in the career, dry fares count as neither', () => {
+    const rain = driveWeatherFare('rain');
+    assert.equal(rain.job.rainFares, 1);
+    assert.equal(rain.job.stormFares, 0);
+    const storm = driveWeatherFare('storm');
+    assert.equal(storm.job.rainFares, 0);
+    assert.equal(storm.job.stormFares, 1);
+    const dry = driveWeatherFare('clear');
+    assert.equal(dry.job.rainFares, 0);
+    assert.equal(dry.job.stormFares, 0);
+    assert.equal(dry.job.career.rainFares, 0);
+    assert.equal(dry.job.career.stormFares, 0);
+    assert.equal(rain.job.career.rainFares, 1, 'the career snapshot carries the wet totals');
+    assert.equal(storm.job.career.stormFares, 1);
+  });
+
+  it('the career totals load back from a save', () => {
+    const job = createTaxiJob(cyclingRng());
+    job.loadCareer({ rides: 10, earned: 5000, bestStreak: 3, ratingSum: 45, ratingCount: 10, rainFares: 4, stormFares: 2 });
+    assert.equal(job.rainFares, 4);
+    assert.equal(job.stormFares, 2);
+    assert.equal(job.career.rainFares, 4);
+    assert.equal(job.career.stormFares, 2);
+    const fresh = createTaxiJob(cyclingRng());
+    fresh.loadCareer({ rides: 1 });   // missing wet totals read as 0, not NaN
+    assert.equal(fresh.rainFares, 0);
+    assert.equal(fresh.stormFares, 0);
+  });
+
+  it('hail, pickup and dropoff carry the surge split and the sky', () => {
+    const { hail, pickup, drop } = driveWeatherFare('storm', 'clear');
+    assert.equal(hail.weather, 'storm');
+    assert.equal(hail.timeSurge, 1);
+    assert.equal(hail.weatherSurge, 1.5);
+    assert.equal(pickup.weather, 'storm');
+    assert.equal(pickup.weatherSurge, 1.5);
+    // The sky cleared mid-ride: the meter stays locked at the storm rate.
+    assert.equal(drop.weather, 'storm', 'the dropoff reports the locked-in sky');
+    assert.equal(drop.weatherSurge, 1.5, 'the dropoff reports the locked-in surge');
+    assert.equal(drop.surge, 1.5);
+    assert.equal(drop.fare, pickup.fareEstimate, 'the fare never reprices mid-ride');
+  });
+
+  it('a night storm stacks both surges: 1.5 time x 1.5 weather', () => {
+    const { pickup, drop } = driveWeatherFare('storm');
+    assert.equal(pickup.surge, 1.5, 'day storm is just the weather surge');
+    const job = createTaxiJob(cyclingRng(), undefined, { vipChance: 0, airportChance: 0 });
+    job.setInCab(true);
+    let hail = null;
+    for(let k = 0; k < 30 && !hail; k++){ const evs = job.update(5, atW(0, 0, 'storm', 1.5, 1.5)); hail = evs.find(e => e.type === 'hail'); }
+    assert.ok(hail);
+    assert.equal(hail.surge, 2.25);
+    assert.equal(hail.timeSurge, 1.5);
+    assert.equal(hail.weatherSurge, 1.5);
+    const pk = job.update(0.1, atW(hail.point.x, hail.point.z, 'storm', 1.5, 1.5));
+    assert.equal(pk[0].surge, 2.25);
+    assert.equal(pk[0].fareEstimate, fareFor(Math.hypot(pk[0].dest.x - hail.point.x, pk[0].dest.z - hail.point.z), 2.25));
+    void pickup; void drop;
+  });
+
+  it('the live split follows the sky while idle, and clears after the fare', () => {
+    const job = createTaxiJob(cyclingRng());
+    job.setInCab(true);
+    job.update(1, atW(0, 0, 'rain', 1, 1.25));
+    assert.equal(job.weatherSurge, 1.25);
+    assert.equal(job.weather, 'rain');
+    assert.equal(job.timeSurge, 1);
+    job.update(1, atW(0, 0, 'clear', 1, 1));
+    assert.equal(job.weatherSurge, 1);
+    assert.equal(job.weather, 'clear');
   });
 });

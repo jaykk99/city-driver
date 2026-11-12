@@ -48,6 +48,7 @@ import { PaintTown, MILESTONES as PAINT_MILESTONES } from './painttown.js';
 import { createPaintFX } from './paintfx.js';
 import { createTaxiJob, isTaxiCar, customMapPickers, surgeMultiplierFor, surgeLabelFor, tipLabelFor } from './taxi.js';
 import { createCourierJob } from './courier.js';
+import { createWeather, weatherSurgeFor, weatherSurgeLabelFor } from './weather.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
 
@@ -110,6 +111,8 @@ let tireBaseGrip=null, tireStatsObj=null;   // fresh-stats grip, recaptured per 
 let fuelTruck=null, fuelTruckMesh=null, fuelTruckCost=0;   // visible delivery run, if one is out
 let taxi=createTaxiJob(), taxiBeacon=null, taxiPed=null, taxiPedPhase=0;   // cab fares: beacon + hailer ped + state live here, logic in taxi.js
 let courier=createCourierJob(), courierBeacon=null;   // courier shift: beacon + state live here, logic in courier.js
+let weather=createWeather();   // the sky: clear/cloudy/rain/storm, logic in weather.js
+let rainPts=null, lightningT=0, flashEl=null;   // rain streaks + storm flash, built in init()
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
 let missions=null, boardOpen=false, lastGear=0;
 let paintTown=null, paintFX=null, paintPay=0, paintPayT=0, paintSaveT=0, paintDirty=false, paintBuildToastT=0, paintBuildRun=0;   // Paint the Town Red
@@ -1037,6 +1040,71 @@ function updateTaxiPed(dt){
   taxiPedPhase += dt * 9;
   animateCharacter(taxiPed, taxiPedPhase, 0, false, dt, { wave:true });
 }
+// ---------------- weather: rain, storms, lightning (logic in weather.js) ----------------
+
+// Rain streaks fall around the car (or the walker, on foot) while the
+// sky is wet; drops that hit the ground or drift too far away respawn
+// above the player, so the rain follows the drive instead of pooling
+// where it started.
+function updateRain(dt){
+  if(!rainPts) return;
+  const w = weather.intensity;
+  rainPts.visible = w > 0.02;
+  if(!rainPts.visible) return;
+  rainPts.material.opacity = w * 0.55;
+  const pos = rainPts.geometry.attributes.position.array;
+  const px = onFoot ? foot.pos.x : physics.pos.x, pz = onFoot ? foot.pos.z : physics.pos.z;
+  const fall = (weather.state === 'storm' ? 38 : 28) * dt;
+  for(let i = 0; i < pos.length; i += 3){
+    let y = pos[i+1] - fall * (0.7 + ((i * 7) % 10) / 25);
+    if(y < 0 || Math.abs(pos[i] - px) > 40 || Math.abs(pos[i+2] - pz) > 40){
+      pos[i] = px + (Math.random()-0.5)*70; pos[i+2] = pz + (Math.random()-0.5)*70; y = 30 + Math.random()*5;
+    }
+    pos[i+1] = y;
+  }
+  rainPts.geometry.attributes.position.needsUpdate = true;
+}
+
+// A lightning strike: a white fullscreen flash that double-blinks out
+// over a third of a second. The div is built lazily, no index.html edit.
+function stormFlash(){
+  if(!flashEl){
+    flashEl = document.createElement('div');
+    flashEl.id = 'storm-flash';
+    document.body.appendChild(flashEl);
+  }
+  lightningT = 0.35;
+}
+
+function weatherToast(ev){
+  if(ev.to === 'storm') return '⛈️ Storm rolling in — grip down, fares pay +50%';
+  if(ev.to === 'rain') return '🌧️ Rain rolling in — roads slick, fares pay +25%';
+  if(ev.to === 'cloudy') return '☁️ Clouding over';
+  return '☀️ Skies clearing';
+}
+
+// The weather chip on the HUD: the sky, and what it does to the drive.
+// Hidden in clear skies — nothing to warn about.
+function updateWeatherHud(){
+  const el = $('weather-hud'); if(!el) return;
+  const w = weather.state;
+  const txt = w === 'storm' ? '⛈️ STORM · slick roads · fares ×1.5'
+    : w === 'rain' ? '🌧️ RAIN · slick roads · fares ×1.25'
+    : w === 'cloudy' ? '☁️ CLOUDY' : '';
+  el.textContent = txt;
+  el.classList.toggle('hidden', !txt);
+}
+
+// Surge label for a fare event: the time-of-day part and the weather
+// part named separately, so a night storm reads as two surges, not one
+// mystery multiplier.
+function fareSurgeText(ev){
+  const bits = [];
+  if(ev.timeSurge > 1) bits.push(surgeLabelFor(ev.timeSurge) + ' ×' + ev.timeSurge);
+  if(ev.weatherSurge > 1) bits.push(weatherSurgeLabelFor(ev.weather) + ' ×' + ev.weatherSurge);
+  return bits.join(' · ');
+}
+
 function updateTaxiHud(){
   const el = $('taxi-hud'); if(!el) return;
   if(!taxi.active){ el.classList.add('hidden'); return; }
@@ -1059,7 +1127,8 @@ function updateTaxiHud(){
     const bits = [];
     if(taxi.airport) bits.push('✈️ Airport run · +$120 flat');
     if(taxi.vip) bits.push('🌟 VIP ×2 — in a hurry');
-    if(taxi.surge > 1) bits.push((taxi.surge >= 1.5 ? '🌙 ' : '🌇 ') + surgeLabelFor(taxi.surge) + ' ×' + taxi.surge);
+    if(taxi.timeSurge > 1) bits.push((taxi.timeSurge >= 1.5 ? '🌙 ' : '🌇 ') + surgeLabelFor(taxi.timeSurge) + ' ×' + taxi.timeSurge);
+    if(taxi.weatherSurge > 1) bits.push((taxi.weather === 'storm' ? '⛈️ ' : '🌧️ ') + weatherSurgeLabelFor(taxi.weather) + ' ×' + taxi.weatherSurge);
     if(taxi.streak > 1) bits.push('🔥 Streak x' + taxi.streak + ' (+' + Math.min(10 * (taxi.streak - 1), 50) + '%)');
     else if(taxi.streak === 1) bits.push('🔥 Streak x1');
     if(taxi.ratingCount > 0) bits.push('★ ' + taxi.ratingAvg.toFixed(1) + ' (' + taxi.ratingCount + ' rides)' + (taxi.tipMult !== 1 ? ' · ' + tipLabelFor(taxi.tipMult) : ''));
@@ -1322,6 +1391,7 @@ function updateHUD(){
     const txt=(L[sf]||'')+(tele.spinning?(L[sf]?' · ':'')+'💨 WHEELSPIN':'')+(carDirt>0.5?' · 🟤 MUDDY':'');
     sh.textContent=txt; sh.classList.toggle('hidden', !txt);
   }
+  updateWeatherHud();
 }
 
 // ---------------- wanted level ----------------
@@ -1698,6 +1768,18 @@ async function initScene(){
   exhaust=new PuffPool(scene, 40, { color:0x777777, opacity:0.30, size:0.9 });
   skids=new SkidMarks(scene, 500);
 
+  // rain: 700 streaks in a box around the car, falling and recycling —
+  // invisible until the weather turns wet (opacity follows intensity)
+  {
+    const N = 700, pos = new Float32Array(N * 3);
+    for(let i = 0; i < N; i++){ pos[i*3] = (Math.random()-0.5)*70; pos[i*3+1] = Math.random()*35; pos[i*3+2] = (Math.random()-0.5)*70; }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    rainPts = new THREE.Points(g, new THREE.PointsMaterial({ color:0x9db8d6, size:0.35, transparent:true, opacity:0, depthWrite:false }));
+    rainPts.frustumCulled = false; rainPts.visible = false;
+    scene.add(rainPts);
+  }
+
   // player headlight (single shadowless spot, dusk/night only)
   headlight=new THREE.SpotLight(0xcfe4ff, 0, 60, 0.5, 0.45, 1.2);
   headlightTarget=new THREE.Object3D();
@@ -1726,7 +1808,7 @@ function setTimeOfDay(name, silent){
   if(typeof name==='string') todIdx=order.indexOf(name);
   if(todIdx<0) todIdx=0;
   const key=order[todIdx];
-  const p=applySkyPreset(skyEnv, key);
+  const p=applySkyPreset(skyEnv, key, weather.dim);   // rain/storms dim the sun
   const glowF = key==='day'?0 : key==='sunset'?0.45 : 1;
   if(city) city.setGlow(glowF);
   // v4: re-bake IBL for the new sky so reflections match the time of day
@@ -1737,7 +1819,7 @@ function setTimeOfDay(name, silent){
     if(old) old.dispose();
   }catch(e){ console.warn('env rebake off', e); }
   if(postfx) postfx.setBloomStrength(p.bloom);
-  headlightBase = key==='day' ? 0 : key==='sunset' ? 30 : 70;
+  headlightBase = key==='day' ? (weather.wet ? 25 : 0) : key==='sunset' ? 30 : 70;   // headlights on in the rain, even by day
   if(headlight && state!=='drag') headlight.intensity=headlightBase;
   const btn=$('tod-btn');
   if(btn) btn.textContent = key==='day' ? '☀️' : key==='sunset' ? '🌇' : '🌙';
@@ -1754,6 +1836,21 @@ function frame(now){
   if(dt>0.1) dt=0.1;                       // clamp
   frameN++;
   updateWindTime(now/1000);               // v4: tree canopy sway
+
+  // Weather rolls on its own clock while free-roaming (frozen on pause):
+  // a new sky re-applies the time-of-day preset with the new dimming,
+  // a storm strike flashes the sky, and the rain follows the player.
+  if(state==='freeroam' && !paused){
+    for(const ev of weather.update(dt)){
+      if(ev.type==='weatherChanged'){ setTimeOfDay(undefined, true); updateWeatherHud(); toast(weatherToast(ev), 2600); }
+      else if(ev.type==='lightning'){ stormFlash(); }
+    }
+    updateRain(dt);
+  }
+  if(lightningT > 0){
+    lightningT -= dt;
+    if(flashEl) flashEl.style.opacity = lightningT > 0.25 ? 0.5 : lightningT > 0.12 ? 0.12 : 0.35;
+  }else if(flashEl && flashEl.style.opacity !== '0'){ flashEl.style.opacity = 0; }
 
   const playing = state==='freeroam' && !paused && !garageOpen && !storeOpen && !editorOpen && !pickOpen && !dead && !boardOpen;
   // a fare only lives while you are driving the cab in free roam: leaving
@@ -1788,6 +1885,7 @@ function frame(now){
     syncFuel();    // hides the fuel bar while on foot
   }else if(playing){
     physics.surf=surfaceGrip(surfAt(physics.pos.x, physics.pos.z), carStats.offroad, carStats.snorkel);
+    physics.surf.grip*=weather.grip;   // rain and storms slick the roads
     // battered cars lose pace; a wrecked car stalls until the tow arrives;
     // an empty tank stalls just the same
     const dmgF=carDamage?carDamage.perfFactor():1;
@@ -1923,7 +2021,10 @@ function frame(now){
     // the rating sets the tip: 4.5+ stars earns +25%, 4.0+ earns +10%,
     // under 3.0 the tip is halved, once 3 rides are rated.
     // Fares surge with the time of day (sunset +25%, night +50%), locked
-    // in at pickup — the meter follows the sky, not the clock mid-ride.
+    // in at pickup — the meter follows the sky, not the clock mid-ride —
+    // and with the weather on top (rain +25%, storm +50%): a night storm
+    // pays 2.25x the meter. The two parts are passed separately so the
+    // toasts and HUD can name each one.
     // One hail in seven is a VIP rush fare (gold beacon, double pay,
     // tighter clock); one hail in eight is an airport run (blue beacon,
     // city -> terminal or terminal -> city, flat $120 on the meter); any
@@ -1933,23 +2034,28 @@ function frame(now){
     if(taxi.setInCab(isTaxiCar(carDef)) === 'abandoned'){ hideTaxiPed(); toast('🚕 Fare abandoned — you switched cars', 2000); }
     if(isTaxiCar(carDef) && courier.active){ courier.abandon(); setCourierBeacon(null); updateCourierHud(); toast('🛵 Delivery abandoned — you switched to the cab', 2000); }
     courier.setDriving(true);   // the courier shift runs in any car but the cab
-    for(const ev of taxi.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100, surge:surgeMultiplierFor(PRESET_ORDER[todIdx]) })){
+    const timeSurge = surgeMultiplierFor(PRESET_ORDER[todIdx]);
+    const wSurge = weatherSurgeFor(weather.state);
+    for(const ev of taxi.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100, surge:timeSurge*wSurge, timeSurge, weatherSurge:wSurge, weather:weather.state })){
+      const st = fareSurgeText(ev);   // 'Night surge ×1.5 · Storm surge ×1.5', or ''
       if(ev.type === 'hail'){ setTaxiBeacon(ev.point, ev.vip, ev.airport); setTaxiPed(ev.point, ev.vip);
-        toast(ev.airport ? '✈️ Airport run hailing — ' + (ev.airportDir === 'to' ? 'needs a ride to the terminal' : 'waiting at arrivals') + (ev.vip ? ' · VIP ×2' : '') + (ev.surge > 1 ? ' · ' + surgeLabelFor(ev.surge) + ' ×' + ev.surge : '')
-          : ev.vip ? '🌟 VIP fare hailing — in a hurry, pays double' + (ev.surge > 1 ? ' · ' + surgeLabelFor(ev.surge) + ' ×' + ev.surge : '')
-          : (ev.surge > 1 ? '🚕 Fare hailing nearby — ' + surgeLabelFor(ev.surge) + ' ×' + ev.surge : '🚕 Fare hailing nearby — drive to the yellow marker'), 2600); }
+        toast(ev.airport ? '✈️ Airport run hailing — ' + (ev.airportDir === 'to' ? 'needs a ride to the terminal' : 'waiting at arrivals') + (ev.vip ? ' · VIP ×2' : '') + (st ? ' · ' + st : '')
+          : ev.vip ? '🌟 VIP fare hailing — in a hurry, pays double' + (st ? ' · ' + st : '')
+          : (st ? '🚕 Fare hailing nearby — ' + st : '🚕 Fare hailing nearby — drive to the yellow marker'), 2600); }
       else if(ev.type === 'hailExpired'){ setTaxiBeacon(null); hideTaxiPed(); toast('🚕 Fare gave up waiting', 2000); }
       else if(ev.type === 'pickup'){ setTaxiBeacon(ev.dest, ev.vip, ev.airport); hideTaxiPed(); audio.beep(880, 0.08);
-        toast((ev.airport ? '✈️ Airport run aboard — $' : ev.vip ? '🌟 VIP aboard — $' : '🚕 Passenger aboard — $') + ev.fareEstimate.toLocaleString() + ' on the meter' + (ev.airport ? ' · +$120 airport fee' : '') + (ev.vip ? ' · pays double' : '') + (ev.surge > 1 ? ' (' + surgeLabelFor(ev.surge) + ' ×' + ev.surge + ')' : ''), 2600); }
+        toast((ev.airport ? '✈️ Airport run aboard — $' : ev.vip ? '🌟 VIP aboard — $' : '🚕 Passenger aboard — $') + ev.fareEstimate.toLocaleString() + ' on the meter' + (ev.airport ? ' · +$120 airport fee' : '') + (ev.vip ? ' · pays double' : '') + (st ? ' (' + st + ')' : ''), 2600); }
       else if(ev.type === 'dropoff'){ addCash(ev.total); setTaxiBeacon(null); hideTaxiPed();
-        save.taxi = taxi.career; saveSave(save);   // career (rides, best streak, rating) persists
+        save.taxi = taxi.career; saveSave(save);   // career (rides, best streak, rating, wet fares) persists
         const stars = '★'.repeat(ev.rating) + '☆'.repeat(5 - ev.rating);
         let msg = (ev.airport ? '✈️ Airport run paid — $' : ev.vip ? '🌟 VIP paid — $' : '🚕 Fare paid — $') + ev.fare.toLocaleString();
         if(ev.airport) msg += ' · +$120 airport fee';
         if(ev.tip > 0) msg += ' + $' + ev.tip.toLocaleString() + ' tip';
         if(ev.tipMult && ev.tipMult !== 1) msg += ' (' + tipLabelFor(ev.tipMult) + ')';
         if(ev.streakBonus > 0) msg += ' + $' + ev.streakBonus.toLocaleString() + ' streak x' + ev.streak;
-        if(ev.surge > 1) msg += ' · ' + surgeLabelFor(ev.surge) + ' ×' + ev.surge;
+        if(st) msg += ' · ' + st;
+        if(ev.weather === 'storm') msg += ' · ⛈️ storm fare';
+        else if(ev.weather === 'rain') msg += ' · 🌧️ rain fare';
         msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';
         toast(msg, 3200); }
       else if(ev.type === 'rideFailed'){ setTaxiBeacon(null); hideTaxiPed(); toast(ev.reason === 'impatient' ? (ev.airport ? '✈️ Airport passenger bailed — took too long' : '🚕 Passenger bailed — took too long') : (ev.airport ? '✈️ Airport passenger bailed — wrecked cab' : '🚕 Passenger bailed — wrecked cab'), 2400); }
