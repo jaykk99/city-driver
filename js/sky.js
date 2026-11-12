@@ -94,23 +94,28 @@ function sunDirFrom(elevDeg, azimDeg) {
 }
 
 // Applies a preset to sky uniforms, lights, fog, renderer. Returns the preset.
-export function applySkyPreset(env, name) {
+// `dim` (0..1, default 1) is the weather dimming: rain and storms leave
+// less of the sun, so the same preset gets darker and flatter under a
+// wet sky. main.js re-applies the current preset with the new dim
+// whenever the weather rolls.
+export function applySkyPreset(env, name, dim = 1){
   const p = SKY_PRESETS[name] || SKY_PRESETS.day;
+  const d = (typeof dim === 'number' && isFinite(dim)) ? Math.max(0, Math.min(1, dim)) : 1;
   const { uniforms, sun, hemi, scene, renderer } = env;
   uniforms.uTop.value.setHex(p.top);
   uniforms.uHorizon.value.setHex(p.horizon);
   uniforms.uSunColor.value.setHex(p.sunColor);
-  uniforms.uSunI.value = p.sunI;
+  uniforms.uSunI.value = p.sunI * d;
   uniforms.uStars.value = p.stars;
   const dir = sunDirFrom(p.elev, p.azim);
   uniforms.uSunDir.value.copy(dir);
   sun.color.setHex(p.sunColor);
-  sun.intensity = p.sunI;
+  sun.intensity = p.sunI * d;
   hemi.color.setHex(p.hemiSky);
   hemi.groundColor.setHex(p.hemiGround);
-  hemi.intensity = p.hemiI;
+  hemi.intensity = p.hemiI * (0.6 + 0.4 * d);
   scene.fog.color.setHex(p.fog);
-  if (renderer.toneMappingExposure !== undefined) renderer.toneMappingExposure = p.exposure;
+  if (renderer.toneMappingExposure !== undefined) renderer.toneMappingExposure = p.exposure * (1 - (1 - d) * 0.25);
   // shadow-casting sun follows preset elevation (offset scaled by elevation)
   env.sunElev = p.elev; env.sunAzim = p.azim; env.sunDir = dir;
   return p;

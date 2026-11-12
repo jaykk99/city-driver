@@ -29,7 +29,7 @@ import { createBlood } from './blood.js';
 import { createPeople } from './npcs.js';
 import { createTraffic } from './traffic.js';
 import { createPolice, POLICE_STATION, WITNESS_RADIUS, WITNESS_LOUD_RADIUS } from './police.js';
-import { HOSPITAL_SPAWN, GRID_HALF, surfaceAt, surfaceGrip, WATER_DEPTH, isWet } from './world.js';
+import { HOSPITAL_SPAWN, GRID_HALF, ROAD_W, surfaceAt, surfaceGrip, WATER_DEPTH, isWet } from './world.js';
 import { createWheelFX } from './fx.js';
 import { buildCustomMap, OFFSET } from './mapbuilder.js';
 import { createMapEditor } from './mapeditor.js';
@@ -44,7 +44,11 @@ import { nearestBay, nearestRepairShop, REPAIR_RADIUS, REPAIR_RATE, BAY_REPAIR_D
 import { TireWear, WORN_WARN, WORN_BAD } from './tires.js';
 import { nearestTireBay, nearestTireShop, TIRE_RADIUS, TIRE_RATE, BAY_TIRE_DIST } from './tireshop.js';
 import { FuelTruckRun, buildFuelTruckMeshes } from './fueltruck.js';
+import { PaintTown, MILESTONES as PAINT_MILESTONES } from './painttown.js';
+import { createPaintFX } from './paintfx.js';
 import { createTaxiJob, isTaxiCar, customMapPickers, surgeMultiplierFor, surgeLabelFor, tipLabelFor } from './taxi.js';
+import { createCourierJob } from './courier.js';
+import { createWeather, weatherSurgeFor, weatherSurgeLabelFor } from './weather.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
 
@@ -106,8 +110,12 @@ let tireWarnedHalf=false, tireWarnedBald=false;   // worn-tire toasts, once per 
 let tireBaseGrip=null, tireStatsObj=null;   // fresh-stats grip, recaptured per stats object
 let fuelTruck=null, fuelTruckMesh=null, fuelTruckCost=0;   // visible delivery run, if one is out
 let taxi=createTaxiJob(), taxiBeacon=null, taxiPed=null, taxiPedPhase=0;   // cab fares: beacon + hailer ped + state live here, logic in taxi.js
+let courier=createCourierJob(), courierBeacon=null;   // courier shift: beacon + state live here, logic in courier.js
+let weather=createWeather();   // the sky: clear/cloudy/rain/storm, logic in weather.js
+let rainPts=null, lightningT=0, flashEl=null;   // rain streaks + storm flash, built in init()
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
 let missions=null, boardOpen=false, lastGear=0;
+let paintTown=null, paintFX=null, paintPay=0, paintPayT=0, paintSaveT=0, paintDirty=false, paintBuildToastT=0, paintBuildRun=0;   // Paint the Town Red
 // engine character per car: cylinders, idle, redline
 const ENGINES={ sport:{cyl:6,red:7200}, muscle:{cyl:8,red:6200,idle:750}, super:{cyl:10,red:8500}, suv:{cyl:6,red:6000},
   truck:{cyl:8,red:5600,idle:700}, track:{cyl:4,red:8800,idle:1100}, sedan:{cyl:4,red:6500}, taxi:{cyl:4,red:6200},
@@ -791,7 +799,9 @@ function playCustom(map){
   customMap=buildCustomMap(scene, map); lastCustom=map;
   // A fare cannot follow you to another world: end it here, quietly.
   if(taxi.active){ taxi.abandon(); setTaxiBeacon(null); hideTaxiPed(); updateTaxiHud(); }
+  if(courier.active){ courier.abandon(); setCourierBeacon(null); updateCourierHud(); }
   taxi.setPickers(customMapPickers(map, OFFSET));   // cab fares run on custom streets too
+  courier.setPickers(customMapPickers(map, OFFSET));   // courier orders run on custom streets too
   weaponCtx.colliders=customMap.colliders; weaponCtx.targets=[];
   minimap.setCustom(customMap.painter); minimap.setWaypoint(null);
   setTimeOfDay((MAP_THEMES[map.theme]||MAP_THEMES.summer).sky, true);
@@ -805,7 +815,9 @@ function exitCustom(){
   if(!customMap) return;
   // Leaving the custom world ends a live fare, same as leaving the cab.
   if(taxi.active){ taxi.abandon(); setTaxiBeacon(null); hideTaxiPed(); updateTaxiHud(); }
+  if(courier.active){ courier.abandon(); setCourierBeacon(null); updateCourierHud(); }
   taxi.setPickers(null);   // back to the main-city grid
+  courier.setPickers(null);   // courier orders back to the main-city grid too
   customMap.dispose(); customMap=null;
   weaponCtx.colliders=city.colliders; weaponCtx.targets=shops.targets;
   minimap.setCustom(null);
@@ -1028,6 +1040,71 @@ function updateTaxiPed(dt){
   taxiPedPhase += dt * 9;
   animateCharacter(taxiPed, taxiPedPhase, 0, false, dt, { wave:true });
 }
+// ---------------- weather: rain, storms, lightning (logic in weather.js) ----------------
+
+// Rain streaks fall around the car (or the walker, on foot) while the
+// sky is wet; drops that hit the ground or drift too far away respawn
+// above the player, so the rain follows the drive instead of pooling
+// where it started.
+function updateRain(dt){
+  if(!rainPts) return;
+  const w = weather.intensity;
+  rainPts.visible = w > 0.02;
+  if(!rainPts.visible) return;
+  rainPts.material.opacity = w * 0.55;
+  const pos = rainPts.geometry.attributes.position.array;
+  const px = onFoot ? foot.pos.x : physics.pos.x, pz = onFoot ? foot.pos.z : physics.pos.z;
+  const fall = (weather.state === 'storm' ? 38 : 28) * dt;
+  for(let i = 0; i < pos.length; i += 3){
+    let y = pos[i+1] - fall * (0.7 + ((i * 7) % 10) / 25);
+    if(y < 0 || Math.abs(pos[i] - px) > 40 || Math.abs(pos[i+2] - pz) > 40){
+      pos[i] = px + (Math.random()-0.5)*70; pos[i+2] = pz + (Math.random()-0.5)*70; y = 30 + Math.random()*5;
+    }
+    pos[i+1] = y;
+  }
+  rainPts.geometry.attributes.position.needsUpdate = true;
+}
+
+// A lightning strike: a white fullscreen flash that double-blinks out
+// over a third of a second. The div is built lazily, no index.html edit.
+function stormFlash(){
+  if(!flashEl){
+    flashEl = document.createElement('div');
+    flashEl.id = 'storm-flash';
+    document.body.appendChild(flashEl);
+  }
+  lightningT = 0.35;
+}
+
+function weatherToast(ev){
+  if(ev.to === 'storm') return '⛈️ Storm rolling in — grip down, fares pay +50%';
+  if(ev.to === 'rain') return '🌧️ Rain rolling in — roads slick, fares pay +25%';
+  if(ev.to === 'cloudy') return '☁️ Clouding over';
+  return '☀️ Skies clearing';
+}
+
+// The weather chip on the HUD: the sky, and what it does to the drive.
+// Hidden in clear skies — nothing to warn about.
+function updateWeatherHud(){
+  const el = $('weather-hud'); if(!el) return;
+  const w = weather.state;
+  const txt = w === 'storm' ? '⛈️ STORM · slick roads · fares ×1.5'
+    : w === 'rain' ? '🌧️ RAIN · slick roads · fares ×1.25'
+    : w === 'cloudy' ? '☁️ CLOUDY' : '';
+  el.textContent = txt;
+  el.classList.toggle('hidden', !txt);
+}
+
+// Surge label for a fare event: the time-of-day part and the weather
+// part named separately, so a night storm reads as two surges, not one
+// mystery multiplier.
+function fareSurgeText(ev){
+  const bits = [];
+  if(ev.timeSurge > 1) bits.push(surgeLabelFor(ev.timeSurge) + ' ×' + ev.timeSurge);
+  if(ev.weatherSurge > 1) bits.push(weatherSurgeLabelFor(ev.weather) + ' ×' + ev.weatherSurge);
+  return bits.join(' · ');
+}
+
 function updateTaxiHud(){
   const el = $('taxi-hud'); if(!el) return;
   if(!taxi.active){ el.classList.add('hidden'); return; }
@@ -1050,7 +1127,8 @@ function updateTaxiHud(){
     const bits = [];
     if(taxi.airport) bits.push('✈️ Airport run · +$120 flat');
     if(taxi.vip) bits.push('🌟 VIP ×2 — in a hurry');
-    if(taxi.surge > 1) bits.push((taxi.surge >= 1.5 ? '🌙 ' : '🌇 ') + surgeLabelFor(taxi.surge) + ' ×' + taxi.surge);
+    if(taxi.timeSurge > 1) bits.push((taxi.timeSurge >= 1.5 ? '🌙 ' : '🌇 ') + surgeLabelFor(taxi.timeSurge) + ' ×' + taxi.timeSurge);
+    if(taxi.weatherSurge > 1) bits.push((taxi.weather === 'storm' ? '⛈️ ' : '🌧️ ') + weatherSurgeLabelFor(taxi.weather) + ' ×' + taxi.weatherSurge);
     if(taxi.streak > 1) bits.push('🔥 Streak x' + taxi.streak + ' (+' + Math.min(10 * (taxi.streak - 1), 50) + '%)');
     else if(taxi.streak === 1) bits.push('🔥 Streak x1');
     if(taxi.ratingCount > 0) bits.push('★ ' + taxi.ratingAvg.toFixed(1) + ' (' + taxi.ratingCount + ' rides)' + (taxi.tipMult !== 1 ? ' · ' + tipLabelFor(taxi.tipMult) : ''));
@@ -1064,6 +1142,57 @@ function updateTaxiHud(){
     arrow.classList.remove('hidden');
     $('tx-dist').textContent = Math.round(Math.hypot(tg.x - px, tg.z - pz)) + ' m';
   }else{ $('tx-arrow').classList.add('hidden'); $('tx-dist').textContent = ''; }
+}
+
+// ---------------- courier deliveries: beacon + HUD (logic lives in courier.js) ----------------
+// The beacon is orange for a delivery — restaurant while an order waits,
+// the customer once it is aboard — so it never reads as a taxi fare.
+function setCourierBeacon(p){
+  if(!p){ if(courierBeacon) courierBeacon.visible = false; return; }
+  if(!courierBeacon){
+    const ringMat = new THREE.MeshBasicMaterial({ color:0xfb923c, transparent:true, opacity:0.85, depthWrite:false, side:THREE.DoubleSide });
+    const beamMat = new THREE.MeshBasicMaterial({ color:0xfb923c, transparent:true, opacity:0.2, depthWrite:false, side:THREE.DoubleSide, blending:THREE.AdditiveBlending });
+    courierBeacon = new THREE.Group();
+    courierBeacon.add(new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 40).rotateX(-Math.PI / 2).translate(0, 0.1, 0), ringMat));
+    courierBeacon.add(new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 30, 24, 1, true).translate(0, 15, 0), beamMat));
+    scene.add(courierBeacon);
+  }
+  courierBeacon.visible = true; courierBeacon.position.set(p.x, 0, p.z);
+}
+function updateCourierHud(){
+  const el = $('courier-hud'); if(!el) return;
+  if(!courier.active){ el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  const px = physics.pos.x, pz = physics.pos.z, h = physics.heading, tg = courier.target;
+  const st = courier.state;
+  $('cv-obj').textContent = st === 'offer' ? 'Pick up the order'
+    : st === 'offer2' ? 'Second order waiting — pick it up or deliver first'
+    : courier.carriedCount > 1 ? 'Deliver ' + courier.carriedCount + ' orders'
+    : 'Deliver the order';
+  const tl = courier.timeLeft;
+  const timeEl = $('cv-time');
+  if(st === 'offer' || st === 'offer2'){ timeEl.textContent = '⏱ ' + Math.ceil(tl) + 's'; timeEl.classList.toggle('low', tl < 10); }
+  else{
+    // Freshness time: the clock runs against par, so past par reads COLD.
+    timeEl.textContent = tl >= 0 ? '🔥 ' + Math.ceil(tl) + 's' : '❄️ COLD';
+    timeEl.classList.toggle('low', tl < 10);
+  }
+  const info = $('cv-info');
+  if(info){
+    const bits = [];
+    if(courier.carriedCount){ bits.push(courier.carried.map(o => o.food + ' ' + Math.round(o.freshness * 100) + '%').join(' · ')); }
+    if(courier.carriedCount > 1) bits.push('stacked pair · +$50 on the last drop');
+    if(courier.deliveries > 0) bits.push(courier.deliveries + ' delivered · $' + courier.earned.toLocaleString());
+    info.textContent = bits.join(' · ');
+  }
+  if(tg && !inside){
+    const a = Math.atan2(-(tg.x - px), -(tg.z - pz));
+    const rel = Math.atan2(Math.sin(a - h), Math.cos(a - h));
+    const arrow = $('cv-arrow');
+    arrow.style.transform = 'rotate(' + (-rel).toFixed(3) + 'rad)';
+    arrow.classList.remove('hidden');
+    $('cv-dist').textContent = Math.round(Math.hypot(tg.x - px, tg.z - pz)) + ' m';
+  }else{ $('cv-arrow').classList.add('hidden'); $('cv-dist').textContent = ''; }
 }
 
 // ---------------- full map + GPS waypoint ----------------
@@ -1129,6 +1258,7 @@ function damageCar(impact){
   const before=carDamage.hp;
   const d=carDamage.hit(impact);
   if(d<=0) return 0;
+  if(courier && courier.noteImpact()) toast('🛵 Food spoiled — drive smoother!', 1800);
   if(audio.crash) audio.crash(Math.min(1, 0.25 + d / 30));
   syncCarHP();
   if(carDamage.wrecked) toast('🚛 WRECKED — tow truck incoming…', 2600);
@@ -1188,6 +1318,59 @@ function gearFor(mph){
   if(mph<125) return '5';
   return '6';
 }
+// ---------------- Paint the Town Red ----------------
+function syncPaintHud(){
+  const on=!!(paintTown && paintTown.active), h=$('paint-hud'), b=$('paint-btn');
+  if(b) b.classList.toggle('on', on);
+  if(!h) return;
+  h.classList.toggle('hidden', !on);
+  if(on){
+    // slide down out of the way of the mission / taxi cards (same top-centre slot)
+    const mis=!$('mission-hud').classList.contains('hidden'), cab=!$('taxi-hud').classList.contains('hidden');
+    h.style.marginTop=(cab?190:mis?100:0)+'px';
+    const pct=paintTown.progress*100;
+    $('paint-pct').textContent=(pct>=99.95?100:pct<10?pct.toFixed(1):Math.floor(pct))+'%';
+    $('paint-fill').style.width=pct.toFixed(1)+'%';
+    $('paint-bld').textContent=paintTown.buildingCount+'/'+paintTown.buildings.length;
+  }
+}
+function togglePaint(){
+  if(!paintTown) return;
+  paintTown.active=!paintTown.active;
+  save.paintTown=Object.assign(paintTown.serialize(), { on:paintTown.active }); saveSave(save);
+  audio.beep(paintTown.active?880:440, 0.07);
+  if(paintTown.active) toast(customMap ? '🖌️ Paint mode is for the city — head back to Winnipeg' : '🖌️ PAINT THE TOWN RED — your wheels lay red paint and every building you brush past turns red. Cash for all of it!', 3600);
+  else toast('🖌️ Paint off — your work stays red', 1800);
+  syncPaintHud();
+}
+function washTown(){
+  if(!paintTown) return;
+  paintFX.clear(); paintTown.reset();
+  save.paintTown=Object.assign(paintTown.serialize(), { on:paintTown.active }); saveSave(save);
+  syncPaintHud(); toast('🧽 Town washed clean', 1800);
+}
+function updatePaint(dt, x, z, heading, speed, inCar){
+  if(!paintTown) return;
+  const live=paintTown.active && !customMap && !inside && mode!=='tdm';
+  const ev=live ? paintTown.update(x, z, !inCar) : null;
+  paintFX.update(dt, x, z, heading, speed, inCar, ev, live);
+  paintBuildToastT=Math.max(0, paintBuildToastT-dt);
+  if(ev && (ev.cells || ev.buildings.length || ev.milestone)){
+    paintDirty=true; paintPay+=ev.pay;
+    if(ev.buildings.length){
+      paintBuildRun+=ev.buildings.length;
+      audio.beep(980+Math.random()*200, 0.05);
+      if(!paintBuildToastT){ toast('🎨 '+(paintBuildRun>1?paintBuildRun+' buildings':'Building')+' painted red', 1200); paintBuildToastT=1.2; paintBuildRun=0; }
+    }
+    if(ev.milestone){ toast(ev.milestone.msg+' · +$'+ev.milestone.pay.toLocaleString(), 4200); audio.beep(1320,0.12); }
+  }
+  // batch the cash + save so painting doesn't hit localStorage every frame
+  paintPayT+=dt; paintSaveT+=dt;
+  if(paintPay>0 && paintPayT>0.75){ addCash(paintPay); paintPay=0; paintPayT=0; }
+  if(paintDirty && paintSaveT>3){ save.paintTown=Object.assign(paintTown.serialize(), { on:paintTown.active }); saveSave(save); paintDirty=false; paintSaveT=0; }
+  if((frameN&7)===0) syncPaintHud();
+}
+
 function updateHUD(){
   const mph=Math.abs(tele.speed)*2.2;
   $('speed-val').textContent=Math.round(mph);
@@ -1208,6 +1391,7 @@ function updateHUD(){
     const txt=(L[sf]||'')+(tele.spinning?(L[sf]?' · ':'')+'💨 WHEELSPIN':'')+(carDirt>0.5?' · 🟤 MUDDY':'');
     sh.textContent=txt; sh.classList.toggle('hidden', !txt);
   }
+  updateWeatherHud();
 }
 
 // ---------------- wanted level ----------------
@@ -1324,6 +1508,8 @@ function openPause(){
   paused=true;
   setAction(null,null,'');
   hideOverlays();
+  $('p-paint').textContent=paintTown&&paintTown.active?'🖌️ PAINT THE TOWN RED: ON':'🖌️ PAINT THE TOWN RED: OFF';
+  $('p-wash').classList.toggle('hidden', !(paintTown && (paintTown.paintedB.size || paintTown.paintedC.size)));
   $('pause-menu').classList.remove('hidden');
 }
 function closePause(){ paused=false; hideOverlays(); }
@@ -1582,6 +1768,18 @@ async function initScene(){
   exhaust=new PuffPool(scene, 40, { color:0x777777, opacity:0.30, size:0.9 });
   skids=new SkidMarks(scene, 500);
 
+  // rain: 700 streaks in a box around the car, falling and recycling —
+  // invisible until the weather turns wet (opacity follows intensity)
+  {
+    const N = 700, pos = new Float32Array(N * 3);
+    for(let i = 0; i < N; i++){ pos[i*3] = (Math.random()-0.5)*70; pos[i*3+1] = Math.random()*35; pos[i*3+2] = (Math.random()-0.5)*70; }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    rainPts = new THREE.Points(g, new THREE.PointsMaterial({ color:0x9db8d6, size:0.35, transparent:true, opacity:0, depthWrite:false }));
+    rainPts.frustumCulled = false; rainPts.visible = false;
+    scene.add(rainPts);
+  }
+
   // player headlight (single shadowless spot, dusk/night only)
   headlight=new THREE.SpotLight(0xcfe4ff, 0, 60, 0.5, 0.45, 1.2);
   headlightTarget=new THREE.Object3D();
@@ -1610,7 +1808,7 @@ function setTimeOfDay(name, silent){
   if(typeof name==='string') todIdx=order.indexOf(name);
   if(todIdx<0) todIdx=0;
   const key=order[todIdx];
-  const p=applySkyPreset(skyEnv, key);
+  const p=applySkyPreset(skyEnv, key, weather.dim);   // rain/storms dim the sun
   const glowF = key==='day'?0 : key==='sunset'?0.45 : 1;
   if(city) city.setGlow(glowF);
   // v4: re-bake IBL for the new sky so reflections match the time of day
@@ -1621,7 +1819,7 @@ function setTimeOfDay(name, silent){
     if(old) old.dispose();
   }catch(e){ console.warn('env rebake off', e); }
   if(postfx) postfx.setBloomStrength(p.bloom);
-  headlightBase = key==='day' ? 0 : key==='sunset' ? 30 : 70;
+  headlightBase = key==='day' ? (weather.wet ? 25 : 0) : key==='sunset' ? 30 : 70;   // headlights on in the rain, even by day
   if(headlight && state!=='drag') headlight.intensity=headlightBase;
   const btn=$('tod-btn');
   if(btn) btn.textContent = key==='day' ? '☀️' : key==='sunset' ? '🌇' : '🌙';
@@ -1639,6 +1837,21 @@ function frame(now){
   frameN++;
   updateWindTime(now/1000);               // v4: tree canopy sway
 
+  // Weather rolls on its own clock while free-roaming (frozen on pause):
+  // a new sky re-applies the time-of-day preset with the new dimming,
+  // a storm strike flashes the sky, and the rain follows the player.
+  if(state==='freeroam' && !paused){
+    for(const ev of weather.update(dt)){
+      if(ev.type==='weatherChanged'){ setTimeOfDay(undefined, true); updateWeatherHud(); toast(weatherToast(ev), 2600); }
+      else if(ev.type==='lightning'){ stormFlash(); }
+    }
+    updateRain(dt);
+  }
+  if(lightningT > 0){
+    lightningT -= dt;
+    if(flashEl) flashEl.style.opacity = lightningT > 0.25 ? 0.5 : lightningT > 0.12 ? 0.12 : 0.35;
+  }else if(flashEl && flashEl.style.opacity !== '0'){ flashEl.style.opacity = 0; }
+
   const playing = state==='freeroam' && !paused && !garageOpen && !storeOpen && !editorOpen && !pickOpen && !dead && !boardOpen;
   // a fare only lives while you are driving the cab in free roam: leaving
   // the cab, the garage, a shop or the world itself ends it (the map and
@@ -1648,11 +1861,15 @@ function frame(now){
   if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && taxi.active){
     taxi.abandon(); setTaxiBeacon(null); hideTaxiPed(); updateTaxiHud(); toast('🚕 Fare abandoned — you left the cab', 2000);
   }
+  if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && courier.active){
+    courier.abandon(); setCourierBeacon(null); updateCourierHud(); toast('🛵 Delivery abandoned — order lost', 2000);
+  }
   if(editorOpen){
     updateEditorCamera(dt);
   }else if(playing && onFoot){
     updateFoot(dt);
     city.update(dt, foot.pos);
+    updatePaint(dt, foot.pos.x, foot.pos.z, foot.heading, foot.speed||0, false);
     shops.update(dt);
     interiors.update(dt, inside && inside.room);
     smoke.update(dt); exhaust.update(dt);
@@ -1668,6 +1885,7 @@ function frame(now){
     syncFuel();    // hides the fuel bar while on foot
   }else if(playing){
     physics.surf=surfaceGrip(surfAt(physics.pos.x, physics.pos.z), carStats.offroad, carStats.snorkel);
+    physics.surf.grip*=weather.grip;   // rain and storms slick the roads
     // battered cars lose pace; a wrecked car stalls until the tow arrives;
     // an empty tank stalls just the same
     const dmgF=carDamage?carDamage.perfFactor():1;
@@ -1803,7 +2021,10 @@ function frame(now){
     // the rating sets the tip: 4.5+ stars earns +25%, 4.0+ earns +10%,
     // under 3.0 the tip is halved, once 3 rides are rated.
     // Fares surge with the time of day (sunset +25%, night +50%), locked
-    // in at pickup — the meter follows the sky, not the clock mid-ride.
+    // in at pickup — the meter follows the sky, not the clock mid-ride —
+    // and with the weather on top (rain +25%, storm +50%): a night storm
+    // pays 2.25x the meter. The two parts are passed separately so the
+    // toasts and HUD can name each one.
     // One hail in seven is a VIP rush fare (gold beacon, double pay,
     // tighter clock); one hail in eight is an airport run (blue beacon,
     // city -> terminal or terminal -> city, flat $120 on the meter); any
@@ -1811,29 +2032,59 @@ function frame(now){
     // The pickers follow the world: main-city grid at home, custom streets
     // on a custom map (swapped in playCustom/exitCustom).
     if(taxi.setInCab(isTaxiCar(carDef)) === 'abandoned'){ hideTaxiPed(); toast('🚕 Fare abandoned — you switched cars', 2000); }
-    for(const ev of taxi.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100, surge:surgeMultiplierFor(PRESET_ORDER[todIdx]) })){
+    if(isTaxiCar(carDef) && courier.active){ courier.abandon(); setCourierBeacon(null); updateCourierHud(); toast('🛵 Delivery abandoned — you switched to the cab', 2000); }
+    courier.setDriving(true);   // the courier shift runs in any car but the cab
+    const timeSurge = surgeMultiplierFor(PRESET_ORDER[todIdx]);
+    const wSurge = weatherSurgeFor(weather.state);
+    for(const ev of taxi.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100, surge:timeSurge*wSurge, timeSurge, weatherSurge:wSurge, weather:weather.state })){
+      const st = fareSurgeText(ev);   // 'Night surge ×1.5 · Storm surge ×1.5', or ''
       if(ev.type === 'hail'){ setTaxiBeacon(ev.point, ev.vip, ev.airport); setTaxiPed(ev.point, ev.vip);
-        toast(ev.airport ? '✈️ Airport run hailing — ' + (ev.airportDir === 'to' ? 'needs a ride to the terminal' : 'waiting at arrivals') + (ev.vip ? ' · VIP ×2' : '') + (ev.surge > 1 ? ' · ' + surgeLabelFor(ev.surge) + ' ×' + ev.surge : '')
-          : ev.vip ? '🌟 VIP fare hailing — in a hurry, pays double' + (ev.surge > 1 ? ' · ' + surgeLabelFor(ev.surge) + ' ×' + ev.surge : '')
-          : (ev.surge > 1 ? '🚕 Fare hailing nearby — ' + surgeLabelFor(ev.surge) + ' ×' + ev.surge : '🚕 Fare hailing nearby — drive to the yellow marker'), 2600); }
+        toast(ev.airport ? '✈️ Airport run hailing — ' + (ev.airportDir === 'to' ? 'needs a ride to the terminal' : 'waiting at arrivals') + (ev.vip ? ' · VIP ×2' : '') + (st ? ' · ' + st : '')
+          : ev.vip ? '🌟 VIP fare hailing — in a hurry, pays double' + (st ? ' · ' + st : '')
+          : (st ? '🚕 Fare hailing nearby — ' + st : '🚕 Fare hailing nearby — drive to the yellow marker'), 2600); }
       else if(ev.type === 'hailExpired'){ setTaxiBeacon(null); hideTaxiPed(); toast('🚕 Fare gave up waiting', 2000); }
       else if(ev.type === 'pickup'){ setTaxiBeacon(ev.dest, ev.vip, ev.airport); hideTaxiPed(); audio.beep(880, 0.08);
-        toast((ev.airport ? '✈️ Airport run aboard — $' : ev.vip ? '🌟 VIP aboard — $' : '🚕 Passenger aboard — $') + ev.fareEstimate.toLocaleString() + ' on the meter' + (ev.airport ? ' · +$120 airport fee' : '') + (ev.vip ? ' · pays double' : '') + (ev.surge > 1 ? ' (' + surgeLabelFor(ev.surge) + ' ×' + ev.surge + ')' : ''), 2600); }
+        toast((ev.airport ? '✈️ Airport run aboard — $' : ev.vip ? '🌟 VIP aboard — $' : '🚕 Passenger aboard — $') + ev.fareEstimate.toLocaleString() + ' on the meter' + (ev.airport ? ' · +$120 airport fee' : '') + (ev.vip ? ' · pays double' : '') + (st ? ' (' + st + ')' : ''), 2600); }
       else if(ev.type === 'dropoff'){ addCash(ev.total); setTaxiBeacon(null); hideTaxiPed();
-        save.taxi = taxi.career; saveSave(save);   // career (rides, best streak, rating) persists
+        save.taxi = taxi.career; saveSave(save);   // career (rides, best streak, rating, wet fares) persists
         const stars = '★'.repeat(ev.rating) + '☆'.repeat(5 - ev.rating);
         let msg = (ev.airport ? '✈️ Airport run paid — $' : ev.vip ? '🌟 VIP paid — $' : '🚕 Fare paid — $') + ev.fare.toLocaleString();
         if(ev.airport) msg += ' · +$120 airport fee';
         if(ev.tip > 0) msg += ' + $' + ev.tip.toLocaleString() + ' tip';
         if(ev.tipMult && ev.tipMult !== 1) msg += ' (' + tipLabelFor(ev.tipMult) + ')';
         if(ev.streakBonus > 0) msg += ' + $' + ev.streakBonus.toLocaleString() + ' streak x' + ev.streak;
-        if(ev.surge > 1) msg += ' · ' + surgeLabelFor(ev.surge) + ' ×' + ev.surge;
+        if(st) msg += ' · ' + st;
+        if(ev.weather === 'storm') msg += ' · ⛈️ storm fare';
+        else if(ev.weather === 'rain') msg += ' · 🌧️ rain fare';
         msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';
         toast(msg, 3200); }
       else if(ev.type === 'rideFailed'){ setTaxiBeacon(null); hideTaxiPed(); toast(ev.reason === 'impatient' ? (ev.airport ? '✈️ Airport passenger bailed — took too long' : '🚕 Passenger bailed — took too long') : (ev.airport ? '✈️ Airport passenger bailed — wrecked cab' : '🚕 Passenger bailed — wrecked cab'), 2400); }
     }
+    // Courier shift: food delivery in any car but the cab — orders appear
+    // at restaurants nearby, pay base + distance scaled by freshness, spoil
+    // on hard impacts (damageCar feeds noteImpact), and stack two at a time
+    // for a $50 batch bonus. The cab runs fares instead, so the courier
+    // waits while the taxi shift is live and never fights it for a beacon.
+    if(!isTaxiCar(carDef)){
+      for(const ev of courier.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100 })){
+        if(ev.type === 'offer'){ setCourierBeacon(ev.order.restPoint);
+          toast((ev.stacked ? '🛵 Second order — ' : '🛵 New order — ') + ev.order.food + ' from ' + ev.order.restaurant + ' — ~$' + ev.payEstimate.toLocaleString() + ' if hot' + (ev.stacked ? ' · stack it for +$50' : ''), 2800); }
+        else if(ev.type === 'offerExpired'){ setCourierBeacon(ev.stacked ? courier.target : null); toast(ev.stacked ? '🛵 Second order cancelled — first order still rides' : '🛵 Order cancelled — restaurant gave up waiting', 2000); }
+        else if(ev.type === 'pickup'){ setCourierBeacon(ev.order.dest); audio.beep(990, 0.08);
+          toast('🛵 ' + ev.order.food + ' collected — deliver hot for ~$' + ev.payEstimate.toLocaleString() + (ev.stacked ? ' · two orders aboard!' : ''), 2600); }
+        else if(ev.type === 'delivered'){ addCash(ev.total); setCourierBeacon(courier.target);
+          save.courier = courier.career; saveSave(save);   // career (deliveries, best stack, fresh drops) persists
+          const fresh = ev.order.freshness;
+          let msg = '🛵 Delivered — $' + ev.pay.toLocaleString() + (fresh >= 0.8 ? ' · still hot 🔥' : fresh > 0 ? ' · lukewarm' : ' · cold ❄️');
+          if(ev.batchBonus > 0) msg += ' + $' + ev.batchBonus.toLocaleString() + ' batch bonus';
+          if(ev.ordersLeft > 0) msg += ' · ' + ev.ordersLeft + ' order' + (ev.ordersLeft > 1 ? 's' : '') + ' still aboard';
+          else msg += ' · ' + ev.deliveries + ' deliveries · $' + ev.earned.toLocaleString() + ' earned';
+          toast(msg, 3200); }
+        else if(ev.type === 'ordersLost'){ setCourierBeacon(null); toast('🛵 Orders lost — the food went down with the car', 2400); }
+      }
+    }
     updateTaxiPed(dt);
-    if(frameN % 3 === 0) updateTaxiHud();
+    if(frameN % 3 === 0){ updateTaxiHud(); updateCourierHud(); }
     // crash detector: a one-frame speed collapse only comes from a shunt
     // (braking and drag bleed speed slowly). tele.speed lags collisions by
     // a frame, so this catches walls and traffic alike.
@@ -1860,13 +2111,14 @@ function frame(now){
     if(award>0){ addCash(award); toast('DRIFT +$'+award.toLocaleString()); }
     cityPos.x=physics.pos.x; cityPos.z=physics.pos.z;
     city.update(dt, cityPos);
+    updatePaint(dt, physics.pos.x, physics.pos.z, physics.heading, tele.speed, true);
     syncCarTransform(dt);
     updateCamera(dt);
     updateHUD();
     updateEffects(dt);
     shops.update(dt);
     weapons.update(dt, weaponCtx, false, false);   // let bullets finish flying
-    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null, mp, copBlips(), taxi.target);
+    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null, mp, copBlips(), taxi.target || courier.target);
     updateAction();
     if(controls.consumeAction()) doAction();
     if(qm) qm.update(dt);
@@ -1994,6 +2246,10 @@ function wireUI(){
     toast(save.manual?'Manual: shift with ▲/▼ GEAR (G / B keys). Watch the rev bar!':'Automatic gearbox', 2600); };
   $('m-trans').onclick=toggleTrans; $('p-trans').onclick=toggleTrans;
   $('mission-btn').onclick=()=>{ audio.beep(650,0.05); openBoard(); };
+  $('paint-btn').onclick=()=>togglePaint();
+  $('p-paint').onclick=()=>{ togglePaint(); $('p-paint').textContent=paintTown&&paintTown.active?'🖌️ PAINT THE TOWN RED: ON':'🖌️ PAINT THE TOWN RED: OFF'; };
+  $('p-wash').onclick=()=>{ audio.beep(500,0.05); washTown(); };
+  window.addEventListener('keydown', e=>{ if((e.key==='p'||e.key==='P') && state==='freeroam' && !paused) togglePaint(); });
   $('mb-start').onclick=()=>startMission();
   $('mb-close').onclick=()=>{ audio.beep(500,0.05); closeBoard(); };
   $('victory-ok').onclick=()=>{ $('victory').classList.add('hidden'); };
@@ -2034,6 +2290,7 @@ async function boot(){
   try{
     save=ensureSkins(ensureArsenal(loadSave()));
     taxi.loadCareer(save.taxi);   // cab career (rides, earnings, rating) survives sessions
+    courier.loadCareer(save.courier);   // courier career (deliveries, earnings, best stack) survives sessions
     audio=createAudio();
     orient=initOrientation(onViewResize);
     await initScene();
@@ -2054,6 +2311,9 @@ async function boot(){
       onPlayerHit:(d)=>hurtPlayer(d) });
     traffic=createTraffic({ scene, lines:city.roadLines, buildCar, applyCarSkin, CAR_DEFS });
     trafficHits=traffic.hitList();
+    paintTown=new PaintTown(city.buildings, city.roadLines, ROAD_W, GRID_HALF);
+    paintFX=createPaintFX(scene, city, paintTown);
+    if(save.paintTown){ paintTown.load(save.paintTown); paintTown.active=!!save.paintTown.on; paintFX.relay(); }
     police=createPolice({
       scene, buildCar,
       collide:(x,z,r)=>{ const res=collideR(x,z,r); if(traffic) traffic.collide(res, r); return res; },
@@ -2107,7 +2367,7 @@ async function boot(){
       play:(m)=>{ audio.unlock(); orient.goLandscape(); playCustom(m); } });
     syncPersonGear(); updateModeHUD();
     // test hook: ?debug exposes a teleport for automated smoke tests
-    if(/[?&]debug\b/.test(location.search)) window.__cd={ frames:()=>frameN, buildMap:m=>{ const t=performance.now(); const c=buildCustomMap(scene,m); const dt=performance.now()-t; c.dispose(); return dt; }, playCustom:m=>{ const t=performance.now(); playCustom(m); return performance.now()-t; }, tp:(x,z,h)=>{ if(onFoot){ foot.reset(x,z,h||0); snapFootCamera(); } else { physics.pos.x=x; physics.pos.z=z; physics.heading=h||0; syncCarTransform(0); snapCamera(); } }, save:()=>save, stores:()=>shops.stores,
+    if(/[?&]debug\b/.test(location.search)) window.__cd={ frames:()=>frameN, buildMap:m=>{ const t=performance.now(); const c=buildCustomMap(scene,m); const dt=performance.now()-t; c.dispose(); return dt; }, playCustom:m=>{ const t=performance.now(); playCustom(m); return performance.now()-t; }, tp:(x,z,h)=>{ if(onFoot){ foot.reset(x,z,h||0); snapFootCamera(); } else { physics.pos.x=x; physics.pos.z=z; physics.heading=h||0; syncCarTransform(0); snapCamera(); } }, save:()=>save, paint:()=>paintTown, stores:()=>shops.stores,
       buildings:()=>city.buildings, inside:()=>inside&&{id:inside.b.id, style:inside.room.style}, enter:b=>enterBuilding(b), exit:()=>exitBuilding(),
       getOut:()=>getOut(), tut:()=>tutorial&&{active:tutorial.active, step:tutorial.step}, finishTut:()=>finishTutorial(), pick:id=>pickCar(id),
       mp:()=>mp&&{status:mp.status,count:mp.count}, state:()=>({state,onFoot,editorOpen,pickOpen,cash:save.cash}),

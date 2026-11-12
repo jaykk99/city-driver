@@ -32,6 +32,8 @@ function defaultSave(){
     wheels:{ sport:0 },
     // Taxi career (taxi.js): lifetime fares, earnings, best streak, rating.
     taxi:{ rides:0, earned:0, bestStreak:0, ratingSum:0, ratingCount:0 },
+    // Courier career (courier.js): lifetime deliveries, earnings, best stack, fresh drops.
+    courier:{ deliveries:0, earned:0, bestStack:0, freshCount:0 },
   };
 }
 
@@ -57,6 +59,10 @@ function normalize(s){
   const txn = v => (typeof v === 'number' && isFinite(v) && v > 0) ? Math.floor(v) : 0;
   out.taxi = { rides:txn(tx.rides), earned:txn(tx.earned), bestStreak:txn(tx.bestStreak),
     ratingSum:txn(tx.ratingSum), ratingCount:txn(tx.ratingCount) };
+  // Courier career: old saves have no courier block; bad values read as 0.
+  const co = (out.courier && typeof out.courier === 'object') ? out.courier : {};
+  out.courier = { deliveries:txn(co.deliveries), earned:txn(co.earned),
+    bestStack:txn(co.bestStack), freshCount:txn(co.freshCount) };
   return out;
 }
 

@@ -78,7 +78,10 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 // times the VIP multiplier when the passenger is a rush fare (2x). An
 // airport run adds the flat airport fee on top — the fee is never
 // multiplied by surge or VIP, so a night VIP airport run pays 3x the
-// meter plus the flat $120.
+// meter plus the flat $120. Rain and storms pay a weather surge on top
+// of the time-of-day surge (rain +25%, storm +50%): the combined surge
+// is passed in as `surge`, with the split in ctx.timeSurge /
+// ctx.weatherSurge so the HUD can name each part honestly.
 // The tip and streak bonus are computed off the surged fare, so the
 // whole meter scales — a night VIP fare pays 3x end to end.
 export function fareFor(distM, surge = 1, vip = false, airport = false){
@@ -284,8 +287,17 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS, op
   // Surge: the rate in effect right now (from ctx.surge, set by main.js
   // from the time-of-day preset) and the rate locked in when the current
   // passenger boarded — the meter is fixed at pickup, so the sky changing
-  // mid-ride never reprices a fare already running.
+  // mid-ride never reprices a fare already running. The surge is a
+  // product of two parts — time of day and weather — and each part is
+  // tracked separately so the HUD can name them (night surge vs storm
+  // surge) instead of showing one mystery multiplier.
   let curSurge = 1, rideSurge = 1;
+  let curTimeSurge = 1, rideTimeSurge = 1;
+  let curWeatherSurge = 1, rideWeatherSurge = 1;
+  let curWeather = 'clear', rideWeather = 'clear';
+  // Fares finished in the rain and in a storm: career totals, persisted
+  // with the rest of the career — proof the driver works the wet shifts.
+  let rainFares = 0, stormFares = 0;
 
   function nextDelay(){ return HAIL_DELAY_MIN + rng() * (HAIL_DELAY_MAX - HAIL_DELAY_MIN); }
 
@@ -319,8 +331,16 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS, op
     // Surge in effect: the locked-in rate during a ride, the live rate
     // otherwise (1 in the day, 1.5 at night). The HUD reads this.
     get surge(){ return state === 'ride' ? rideSurge : curSurge; },
+    // The surge split: time-of-day part and weather part, locked in
+    // during a ride, live otherwise. The HUD names each part.
+    get timeSurge(){ return state === 'ride' ? rideTimeSurge : curTimeSurge; },
+    get weatherSurge(){ return state === 'ride' ? rideWeatherSurge : curWeatherSurge; },
+    // The sky the current ride is running under ('clear' when idle).
+    get weather(){ return state === 'ride' ? rideWeather : curWeather; },
+    get rainFares(){ return rainFares; },
+    get stormFares(){ return stormFares; },
     // Career snapshot for the save file (plain numbers, no state).
-    get career(){ return { rides, earned, bestStreak, ratingSum, ratingCount }; },
+    get career(){ return { rides, earned, bestStreak, ratingSum, ratingCount, rainFares, stormFares }; },
 
     // Seed the career totals from a save (missing/corrupt fields read as 0).
     // The streak itself is never restored: a new session starts a new shift.
@@ -329,6 +349,7 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS, op
       if(!c || typeof c !== 'object') return;
       rides = n(c.rides); earned = n(c.earned); bestStreak = n(c.bestStreak);
       ratingSum = n(c.ratingSum); ratingCount = n(c.ratingCount);
+      rainFares = n(c.rainFares); stormFares = n(c.stormFares);
     },
 
     // Swap the point pickers when the world changes (main city <-> custom
@@ -360,11 +381,16 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS, op
       hailPoint = dest = pickupPoint = null; return true;
     },
 
-    // ctx = { x, z, speed, hp, surge? }. Returns events for main.js.
+    // ctx = { x, z, speed, hp, surge?, timeSurge?, weatherSurge?, weather? }. Returns events for main.js.
     update(dt, ctx){
       const events = [];
       const s = ctx && ctx.surge;
       curSurge = (typeof s === 'number' && isFinite(s) && s > 0) ? s : 1;
+      const ts = ctx && ctx.timeSurge;
+      curTimeSurge = (typeof ts === 'number' && isFinite(ts) && ts > 0) ? ts : curSurge;
+      const ws = ctx && ctx.weatherSurge;
+      curWeatherSurge = (typeof ws === 'number' && isFinite(ws) && ws > 0) ? ws : 1;
+      curWeather = (ctx && typeof ctx.weather === 'string' && ctx.weather) ? ctx.weather : 'clear';
       if(state === 'idle'){
         timer -= dt;
         if(timer <= 0){
@@ -392,6 +418,7 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS, op
             isVip = rng() < vipChance;
             state = 'hail'; timer = isVip ? VIP_HAIL_PATIENCE : HAIL_PATIENCE;
             events.push({ type:'hail', point:{ ...hailPoint }, surge: curSurge, vip: isVip,
+              timeSurge: curTimeSurge, weatherSurge: curWeatherSurge, weather: curWeather,
               airport: isAirport, airportDir });
           }
         }
@@ -412,11 +439,14 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS, op
             if(isAirport && airportDir === 'to') dest = { ...AIRPORT_TERMINAL };
             const trip = dist(pickupPoint, dest);
             rideSurge = curSurge;   // the meter is fixed at pickup
+            rideTimeSurge = curTimeSurge; rideWeatherSurge = curWeatherSurge;
+            rideWeather = curWeather;   // the sky this ride runs under
             parSeconds = parTimeFor(trip, isVip); rideSeconds = 0;
             hpStart = ctx.hp; maxHp = ctx.maxHp || 100;
             state = 'ride';
             events.push({ type:'pickup', dest:{ ...dest }, parSeconds,
               fareEstimate:fareFor(trip, rideSurge, isVip, isAirport), surge: rideSurge, vip: isVip,
+              timeSurge: rideTimeSurge, weatherSurge: rideWeatherSurge, weather: rideWeather,
               airport: isAirport, airportDir });
           }
         }else if(timer <= 0){
@@ -446,11 +476,16 @@ export function createTaxiJob(rng = Math.random, pickers = MAIN_CITY_PICKERS, op
           const streakBonus = streakBonusFor(streak, fare, tip);
           const rating = ratingFor(rideSeconds, parSeconds, damageFrac);
           ratingSum += rating; ratingCount++; rides++;
+          // A fare finished under a wet sky counts toward the wet-shift
+          // career totals, so the save remembers the driver works the rain.
+          if(rideWeather === 'storm') stormFares++;
+          else if(rideWeather === 'rain') rainFares++;
           const total = fare + tip + streakBonus;
           earned += total;
           state = 'cooldown'; timer = FARE_COOLDOWN; dest = pickupPoint = null;
           events.push({ type:'dropoff', fare, tip, tipMult, streakBonus, streak, rating,
             surge: rideSurge, vip: isVip, airport: isAirport, airportDir,
+            timeSurge: rideTimeSurge, weatherSurge: rideWeatherSurge, weather: rideWeather,
             ratingAvg: ratingCount ? ratingSum / ratingCount : 0, total });
           isVip = false; isAirport = false; airportDir = null;
         }else if(rideSeconds > parSeconds * (isVip ? VIP_BAIL_MULT : BAIL_MULT)){
