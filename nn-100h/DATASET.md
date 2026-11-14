@@ -90,3 +90,40 @@ from the six stats.
   none is attempted here. No synthetic or simulated rows, ever.
 - **Prediction only.** The model never changes game state and
   never pays anything; `js/cars.js` decides prices.
+
+## Baseline findings (2026-11-14, first 87 experiments)
+
+- **Frozen test: saturated, 1.000 everywhere.** All 87
+  experiments (hidden 4 / 8 / 8-4 / 16-8, lr 0.05–0.2, L2
+  0–0.01, epochs 100–400, seed 1) score test_acc 1.000,
+  AUC 1.000, confusion tp=2 fp=0 tn=2 fn=0, per-class recall
+  1.0 / 1.0, vs majority baseline 0.50. This is NOT a win and
+  is NOT claimed as one: see the investigation below.
+- **Why 1.000 is not leakage.** No label-derived feature exists
+  (price is excluded); no single feature separates train (best
+  single-feature threshold: topSpeed / accel / nitroPower 0.923,
+  handling / grip 0.846, nitroTime 0.692). But the 13 train rows
+  ARE linearly separable in 6-D (perceptron converges, epoch 4),
+  and so are all 17 rows (epoch 2) — with 13 points in 6
+  dimensions that is expected, not suspicious. Every test point's
+  nearest train neighbour is same-class (sedan–taxi 0.37,
+  police–super 0.97, truck–van 1.17, rally–super 1.13, vs
+  nearest other-class 1.45–2.38). The test set is just four easy
+  points; a single flip would move accuracy 25 points. The
+  honest reading: the game prices fast cars higher, the model
+  learns "fast = premium", and these four cars sit deep in their
+  class regions.
+- **The discriminating metric is LOO-CV** (`loo_acc` on each
+  experiment line, 17 folds, scaler refit per fold). First
+  LOO-scored experiments: **0.8824 (15/17)**, confusion tp=8
+  fp=1 tn=7 fn=1. The two misses are the boundary pair the
+  single-feature analysis predicts: **muscle / Brute V8**
+  (standard, predicted premium, p=0.735 — fast but cheap) and
+  **baja / Badlands Prerunner** (premium, predicted standard,
+  p=0.228 — slower but expensive). LOO is diagnostic only;
+  `best.json` still keys off the frozen test split per contract,
+  so it stays at the first 1.000 experiment
+  (`h4_lr0p05_l20p0_e100_s1`) until a genuinely higher honest
+  test accuracy appears — which the saturated test set cannot
+  produce. Judge the 100h sweep by the LOO distribution, not
+  by `best.json`.

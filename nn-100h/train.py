@@ -21,7 +21,11 @@ Rules honoured here:
   NEVER trains on test rows.
 - One experiments.jsonl line per finished experiment, scored on the
   FROZEN test split. best.json only moves when honest test accuracy
-  improves (ROC AUC tiebreak).
+  improves (ROC AUC tiebreak). Each line also carries a supplementary
+  leave-one-out CV accuracy (`loo_acc`) over all 17 rows: the frozen
+  4-row test set is saturated (every config scores 1.000 on it), so
+  LOO is the metric that actually discriminates configs. LOO never
+  moves best.json; it is diagnostic only.
 - Checkpoints every 20 epochs (atomic write). --resume reloads the
   latest checkpoint of the in-progress experiment and continues
   from its epoch; hours resume from status.json.
@@ -414,8 +418,46 @@ def grid_configs():
         seed += 1
 
 
+def loo_cv(config, layers, X_all, y_all, tr=None):
+    """Leave-one-out CV over all 17 rows, same config, scaler refit per
+    fold on that fold's 16 train rows. Diagnostic only: the frozen
+    test split above stays the contract metric. LOO is what actually
+    discriminates configs here, because the frozen 4-row test set is
+    saturated (every config scores 1.000 on it). Returns None when a
+    chunk stop / SIGTERM lands mid-CV, so the caller can still log
+    the finished main experiment."""
+    correct = 0
+    tp = fp = tn = fn = 0
+    for i in range(len(X_all)):
+        if tr is not None:
+            if tr.stop or tr.time_left() <= 0:
+                return None
+            tr.write_heartbeat()
+        X_tr = [x for j, x in enumerate(X_all) if j != i]
+        y_tr = [v for j, v in enumerate(y_all) if j != i]
+        X_tr_s, X_te_s, _ = standardize(X_tr, [X_all[i]])
+        net = MLP(layers, seed=config["seed"], lr=config["lr"], l2=config["l2"])
+        for epoch in range(config["epochs"]):
+            net.train_one_epoch(X_tr_s, y_tr,
+                                epoch_seed=config["seed"] * 100003 + epoch)
+        p = net.predict_proba(X_te_s[0])
+        pred = 1 if p >= 0.5 else 0
+        t = y_all[i]
+        correct += 1 if pred == t else 0
+        if t == 1 and pred == 1:
+            tp += 1
+        elif t == 0 and pred == 1:
+            fp += 1
+        elif t == 0 and pred == 0:
+            tn += 1
+        else:
+            fn += 1
+    return {"loo_acc": round(correct / len(X_all), 4),
+            "loo_confusion": {"tp": tp, "fp": fp, "tn": tn, "fn": fn}}
+
+
 def run_experiment(tr: Trainer, config, X_train, y_train, X_test, y_test,
-                   scaler, resume_ck=None):
+                   scaler, X_all=None, y_all=None, resume_ck=None):
     exp_id = exp_id_for(config)
     tr.current_exp_id = exp_id
     layers = [len(FEATURES)] + list(config["hidden"]) + [1]
@@ -446,6 +488,7 @@ def run_experiment(tr: Trainer, config, X_train, y_train, X_test, y_test,
             tr.checkpoint(exp_id, config, epoch + 1, net, loss)
     secs = time.time() - t0
     metrics = evaluate(net, X_test, y_test)
+    train_metrics = evaluate(net, X_train, y_train)
     rec = {
         "exp_id": exp_id,
         "config": config,
@@ -454,14 +497,29 @@ def run_experiment(tr: Trainer, config, X_train, y_train, X_test, y_test,
         "confusion": metrics["confusion"],
         "per_class_recall": {k: round(v, 4)
                              for k, v in metrics["per_class_recall"].items()},
+        "train_acc": round(train_metrics["test_acc"], 4),
         "seconds": round(secs, 3),
     }
+    # Supplementary LOO-CV (diagnostic; best.json still keys off the
+    # frozen test split per contract). Skipped when the chunk is nearly
+    # out of time, so the contract record is never held hostage by it.
+    if X_all is not None and tr.time_left() > 30:
+        loo = loo_cv(config, layers, X_all, y_all, tr=tr)
+        if loo is not None:
+            rec.update(loo)
+        else:
+            rec["loo_acc"] = None
+            rec["loo_confusion"] = None
+        rec["seconds"] = round(time.time() - t0, 3)
+    else:
+        rec["loo_acc"] = None
+        rec["loo_confusion"] = None
     with open(BASE / "experiments.jsonl", "a", encoding="utf-8") as fh:
         fh.write(json.dumps(rec) + "\n")
     tr.experiments_done += 1
     log(f"DONE {exp_id}: test_acc={rec['test_acc']:.3f} auc={rec['auc']:.3f} "
-        f"conf={rec['confusion']} recall={rec['per_class_recall']} "
-        f"({rec['seconds']}s)")
+        f"loo_acc={rec.get('loo_acc')} conf={rec['confusion']} "
+        f"recall={rec['per_class_recall']} ({rec['seconds']}s)")
     # best.json only on honest test-acc improvement (AUC tiebreak).
     best = _read_json(BASE / "best.json", None)
     better = (best is None
@@ -543,7 +601,7 @@ def main(argv=None) -> int:
             continue
         ck = resume_ck if (resume_ck and resume_ck.get("exp_id") == exp_id) else None
         result = run_experiment(tr, config, X_train, y_train, X_test, y_test,
-                                scaler, resume_ck=ck)
+                                scaler, X_all=X, y_all=y, resume_ck=ck)
         if result is None:
             break  # chunk stop mid-experiment; hours banked on exit
         done[exp_id] = result

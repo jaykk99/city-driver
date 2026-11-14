@@ -32,9 +32,26 @@ stops with `status: done`.
   (AUC tiebreak), with weights + scaler.
 - `status.json` / `heartbeat.json` — progress + liveness.
 
-## Resume test (2026-11-14)
+## Resume test (2026-11-14, verified)
 
-Run A started with `NN100H_EPOCH_DELAY_MS=50`, killed mid-run
-(SIGTERM) during its first experiment; run B with `--resume`
-continued that experiment from its checkpoint epoch instead of
-restarting. See the parent report for the log evidence.
+- Run A2: `NN100H_EPOCH_DELAY_MS=50 python3 train.py
+  --max-run-hours 5.5`, SIGTERM at ~10s. Log:
+  `signal 15: checkpointing and exiting gracefully` /
+  `CHUNK-STOP h16_8_lr0p05_l20p0_e400_s1: checkpointed at epoch
+  103/400` / `exit: hours_trained=0.0247 experiments_done=83`.
+  No experiments.jsonl line for that experiment.
+- Run B: same delay, `python3 train.py --resume
+  --max-run-hours 0.05`. Log: `resume checkpoint found:
+  h16_8_lr0p05_l20p0_e400_s1 epoch 103` /
+  `RESUME h16_8_lr0p05_l20p0_e400_s1: continuing from checkpoint
+  epoch 103/400 (not restarting)` /
+  `DONE h16_8_lr0p05_l20p0_e400_s1: test_acc=1.000 auc=1.000
+  loo_acc=0.8824 ... (76.396s)` — the experiment completed and
+  was appended (87 experiments total), hours resumed from
+  status.json (0.0247h -> 0.0747h). Full logs:
+  `/tmp/resume_a2.log`, `/tmp/resume_b.log` (ephemeral).
+- Side finding: the first resume attempt showed LOO has no
+  stop-check and no heartbeat, so a SIGTERM during LOO was
+  deferred until the CV finished; fixed in `train.py`
+  (`loo_cv` now checks `tr.stop` / time-left each fold and
+  heartbeats).
