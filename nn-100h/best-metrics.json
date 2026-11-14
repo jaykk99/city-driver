@@ -1,0 +1,35 @@
+{
+  "exp_id": "h4_lr0p05_l20p0_e100_s1",
+  "config": {
+    "hidden": [
+      4
+    ],
+    "lr": 0.05,
+    "l2": 0.0,
+    "epochs": 100,
+    "seed": 1
+  },
+  "test_acc": 1.0,
+  "auc": 1.0,
+  "confusion": {
+    "tp": 2,
+    "fp": 0,
+    "tn": 2,
+    "fn": 0
+  },
+  "per_class_recall": {
+    "premium": 1.0,
+    "standard": 1.0
+  },
+  "seconds": 0.51,
+  "train_rows": 13,
+  "test_rows": 4,
+  "features": [
+    "topSpeed",
+    "accel",
+    "handling",
+    "grip",
+    "nitroTime",
+    "nitroPower"
+  ]
+}
