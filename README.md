@@ -34,7 +34,7 @@ Open-world 3D driving game for mobile browsers. Built with Three.js — no app s
 - **Weather** — clear skies roll into cloud, rain and full storms on their own clock: rain slicks the roads (less grip), dims the sun, turns the headlights on and pays cab fares a weather surge (rain +25%, storm +50%, stacking with the night surge); storms throw lightning, and fares finished in the wet count toward your career
 - **Taxi fares** — drive the Peg City Cab and fares hail nearby: base + distance, tips for quick clean rides, streak bonuses, passenger star ratings that set future tips, VIP rush fares, airport runs, and surge pricing at sunset and night
 - **Traffic that panics** — working traffic lights and AI drivers that stop, keep gaps and brake for you — until gunfire goes off nearby, when every driver in earshot floors it and runs the red lights to get away
-- **16 driveable cars** — from the Apex S starter to the Aurora Hyper, plus the five hero cars above. All modeled in code by Forge, distinct handling/top speed
+- **17 driveable cars** — from the Apex S starter to the Aurora Hyper, plus the five hero cars above and the Winnipeg Transit Bus. All modeled in code by Forge, distinct handling/top speed
 - **Arcade physics** — acceleration, braking, speed-sensitive steering, handbrake drifts, nitro boost
 - **Garage** — upgrade engine, turbo, tires, suspension, nitro (5 levels each), paint shop (8 colors), 3 wheel styles. Upgrades change real stats. Progress saved in localStorage
 - **Huge map** — 3.4 km across: downtown Winnipeg in the middle of suburbs, the Perimeter Highway, farmland, lakes, forest, an airport and the off-road park. Tap the radar (or press M) for the full map + GPS waypoint
@@ -49,6 +49,7 @@ Open-world 3D driving game for mobile browsers. Built with Three.js — no app s
 - **Drag racing** — quarter-mile strip, Christmas-tree lights, reaction-time launch, 5-gear shift-timing minigame, AI opponent, cash payouts
 - **Taxi fares** — drive the Peg City Cab and fares hail nearby: base + distance, tips for quick clean rides, streak bonuses, passenger star ratings, night/sunset surge, VIP rush fares and airport runs
 - **Courier deliveries** — food delivery in any car but the cab: orders appear at restaurants, pay base + distance scaled by freshness, hard shunts spoil the food, and a second order can stack for a $50 batch bonus
+- **Bus routes** — drive the Winnipeg Transit Bus and run a route: 6–9 stops along the streets, riders waiting at each one, $5 a head into the farebox, a $150 completion bonus and $25 per leg run on schedule. Hard shunts scare riders off, and wrecking the bus loses the whole farebox — the route only pays when it finishes
 - **Live multiplayer** — everyone who opens the game shares one city over Supabase Realtime (no game server). Other players show up as their car or on foot with their skin, name tag and gun, and you see their bullets fly. Online count on the menu + HUD, players on the minimap
 - **Free skin editor** — any car paint color, rims, racing stripes, underglow, window tint; driver shirt/pants/skin tone/hair/hat (incl. crown + helmet) and your online name. All free
 - **Tutorial mission** — drive, drift, get out, enter a building, leave it. Pays **$100,000** once, then you pick **any car free**

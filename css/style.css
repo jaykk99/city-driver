@@ -280,6 +280,8 @@ body.compact #killfeed{top:calc(150px + env(safe-area-inset-top))}
 #tx-streak{font-size:12px;color:#ffc400;margin-top:2px;min-height:14px;font-weight:700}
 #courier-hud{position:fixed;top:calc(96px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:36;background:rgba(10,14,30,.88);border:2px solid #fb923c;border-radius:16px;padding:8px 14px;min-width:260px;max-width:min(440px,70vw);pointer-events:none}
 #courier-hud .obj-top b{color:#fb923c}
+#bus-hud{position:fixed;top:calc(96px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:36;background:rgba(10,14,30,.88);border:2px solid #22d3ee;border-radius:16px;padding:8px 14px;min-width:260px;max-width:min(440px,70vw);pointer-events:none}
+#bus-hud .obj-top b{color:#22d3ee}
 #cv-time{font-weight:900;font-size:14px;color:#e2e8f0}
 #cv-time.low{color:#ef4444}
 #cv-arrow{display:inline-block;font-size:20px;color:#fb923c}

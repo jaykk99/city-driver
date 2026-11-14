@@ -27,6 +27,8 @@ export const CAR_DEFS = [
     stats:{ topSpeed:49, accel:15, handling:1.05, grip:1.0, nitroTime:3.0, nitroPower:1.3 }, extra:'taxi' },
   { id:'van',    name:'Delivery Van', desc:'Big box on wheels. Slow, heavy, tough.', price:9000, colors:[0xf2f2f2,0x1f6feb,0x2d6a4f,0xc01818],
     stats:{ topSpeed:42, accel:12, handling:0.8, grip:1.0, nitroTime:4.0, nitroPower:1.3 } },
+  { id:'bus',    name:'Winnipeg Transit Bus', desc:'City bus. Run the route, mind the riders.', price:18000, colors:[0x1e6fb8,0xf2f2f2,0x2d6a4f,0xc01818],
+    stats:{ topSpeed:38, accel:10, handling:0.75, grip:1.0, nitroTime:4.0, nitroPower:1.25 }, extra:'bus' },
   { id:'police', name:'Interceptor', desc:'Police-spec V8 with a light bar.', price:28000, colors:[0x14161c,0xf2f2f2,0x1a3a6b],
     stats:{ topSpeed:60, accel:19, handling:1.1, grip:1.15, nitroTime:3.4, nitroPower:1.4 }, extra:'police' },
   { id:'hyper',  name:'Aurora Hyper', desc:'The fastest thing in the city. Wings and all.', price:90000, colors:[0xff5e3a,0xa855f7,0x18c0c0,0xf2f2f2,0x14161c],
@@ -113,6 +115,12 @@ const PROFILES = {
     W:2.0, wb:1.6, wheelR:0.36, track:1.68,
     body:[[2.45,0.3],[2.5,0.6],[2.35,0.95],[1.6,1.1],[0.95,1.1],[0.95,2.0],[-2.45,2.0],[-2.5,1.85],[-2.5,0.35],[-2.2,0.24],[2.2,0.24]],
     glass:[[1.62,1.1],[1.05,1.95],[0.9,1.95],[0.9,1.1]],
+    roof:null, splitter:false,
+  },
+  bus: {
+    W:2.5, wb:3.2, wheelR:0.45, track:2.1,
+    body:[[5.5,0.3],[5.55,0.6],[5.45,1.0],[5.2,2.9],[4.6,3.0],[-5.2,3.0],[-5.5,2.85],[-5.55,0.6],[-5.5,0.3],[-5.0,0.2],[5.0,0.2]],
+    glass:[[5.2,1.1],[5.0,2.75],[-5.25,2.75],[-5.35,1.1]],
     roof:null, splitter:false,
   },
   hyper: {

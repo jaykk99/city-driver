@@ -18,6 +18,7 @@ export const BASE = {
   sedan:{ hp:180, kg:1450, cyl:4, red:6500 },   taxi:{ hp:170, kg:1500, cyl:4, red:6200 },
   van:{ hp:210, kg:2200, cyl:6, red:5500, idle:700 }, police:{ hp:400, kg:1800, cyl:8, red:6600, idle:800 },
   hyper:{ hp:900, kg:1350, cyl:12, red:9000, idle:1000 },
+  bus:{ hp:300, kg:12000, cyl:6, red:5200, idle:650 },
   brawler:{ hp:480, kg:1720, cyl:8, red:7000, idle:750, voice:'v8x' },  kaze:{ hp:420, kg:1510, cyl:6, red:7600, idle:850, voice:'i6' },
   vanta:{ hp:640, kg:1480, cyl:10, red:8700, idle:1000, voice:'v10' },   rally:{ hp:340, kg:1260, cyl:4, red:7800, idle:950, voice:'i4r' },
   baja:{ hp:450, kg:2250, cyl:8, red:6000, idle:700, voice:'v8' },

@@ -48,6 +48,7 @@ import { PaintTown, MILESTONES as PAINT_MILESTONES } from './painttown.js';
 import { createPaintFX } from './paintfx.js';
 import { createTaxiJob, isTaxiCar, customMapPickers, surgeMultiplierFor, surgeLabelFor, tipLabelFor } from './taxi.js';
 import { createCourierJob } from './courier.js';
+import { createBusJob, isBusCar, busRoutePickers } from './bus.js';
 import { createWeather, weatherSurgeFor, weatherSurgeLabelFor } from './weather.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
@@ -111,6 +112,7 @@ let tireBaseGrip=null, tireStatsObj=null;   // fresh-stats grip, recaptured per 
 let fuelTruck=null, fuelTruckMesh=null, fuelTruckCost=0;   // visible delivery run, if one is out
 let taxi=createTaxiJob(), taxiBeacon=null, taxiPed=null, taxiPedPhase=0;   // cab fares: beacon + hailer ped + state live here, logic in taxi.js
 let courier=createCourierJob(), courierBeacon=null;   // courier shift: beacon + state live here, logic in courier.js
+let bus=createBusJob(), busBeacon=null, busPeds=[];   // bus route: beacon + waiting peds + state live here, logic in bus.js
 let weather=createWeather();   // the sky: clear/cloudy/rain/storm, logic in weather.js
 let rainPts=null, lightningT=0, flashEl=null;   // rain streaks + storm flash, built in init()
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
@@ -120,6 +122,7 @@ let paintTown=null, paintFX=null, paintPay=0, paintPayT=0, paintSaveT=0, paintDi
 const ENGINES={ sport:{cyl:6,red:7200}, muscle:{cyl:8,red:6200,idle:750}, super:{cyl:10,red:8500}, suv:{cyl:6,red:6000},
   truck:{cyl:8,red:5600,idle:700}, track:{cyl:4,red:8800,idle:1100}, sedan:{cyl:4,red:6500}, taxi:{cyl:4,red:6200},
   van:{cyl:6,red:5500,idle:700}, police:{cyl:8,red:6600,idle:800}, hyper:{cyl:12,red:9000,idle:1000},
+  bus:{cyl:6,red:5200,idle:650},
   brawler:{cyl:8,red:7000,idle:750,voice:'v8x'}, kaze:{cyl:6,red:7600,idle:850,voice:'i6'}, vanta:{cyl:10,red:8700,idle:1000,voice:'v10'}, rally:{cyl:4,red:7800,idle:950,voice:'i4r'}, baja:{cyl:8,red:6000,idle:700,voice:'v8'} };
 function applyGearbox(){
   if(physics && physics.box) physics.box.mode = save.manual ? 'manual' : 'auto';
@@ -800,8 +803,10 @@ function playCustom(map){
   // A fare cannot follow you to another world: end it here, quietly.
   if(taxi.active){ taxi.abandon(); setTaxiBeacon(null); hideTaxiPed(); updateTaxiHud(); }
   if(courier.active){ courier.abandon(); setCourierBeacon(null); updateCourierHud(); }
+  if(bus.active){ bus.abandon(); setBusBeacon(null); hideBusPeds(); updateBusHud(); }
   taxi.setPickers(customMapPickers(map, OFFSET));   // cab fares run on custom streets too
   courier.setPickers(customMapPickers(map, OFFSET));   // courier orders run on custom streets too
+  bus.setPickers(busRoutePickers(map, OFFSET));   // bus routes run on custom streets too
   weaponCtx.colliders=customMap.colliders; weaponCtx.targets=[];
   minimap.setCustom(customMap.painter); minimap.setWaypoint(null);
   setTimeOfDay((MAP_THEMES[map.theme]||MAP_THEMES.summer).sky, true);
@@ -816,8 +821,10 @@ function exitCustom(){
   // Leaving the custom world ends a live fare, same as leaving the cab.
   if(taxi.active){ taxi.abandon(); setTaxiBeacon(null); hideTaxiPed(); updateTaxiHud(); }
   if(courier.active){ courier.abandon(); setCourierBeacon(null); updateCourierHud(); }
+  if(bus.active){ bus.abandon(); setBusBeacon(null); hideBusPeds(); updateBusHud(); }
   taxi.setPickers(null);   // back to the main-city grid
   courier.setPickers(null);   // courier orders back to the main-city grid too
+  bus.setPickers(null);   // bus routes back to the main-city grid too
   customMap.dispose(); customMap=null;
   weaponCtx.colliders=city.colliders; weaponCtx.targets=shops.targets;
   minimap.setCustom(null);
@@ -1193,6 +1200,89 @@ function updateCourierHud(){
     arrow.classList.remove('hidden');
     $('cv-dist').textContent = Math.round(Math.hypot(tg.x - px, tg.z - pz)) + ' m';
   }else{ $('cv-arrow').classList.add('hidden'); $('cv-dist').textContent = ''; }
+}
+
+// ---------------- bus routes: beacon + HUD + waiting peds (logic lives in bus.js) ----------------
+// The beacon is teal for a bus stop — never a taxi fare or a delivery —
+// so the three jobs never read as each other on the street.
+function setBusBeacon(p){
+  if(!p){ if(busBeacon) busBeacon.visible = false; return; }
+  if(!busBeacon){
+    const ringMat = new THREE.MeshBasicMaterial({ color:0x22d3ee, transparent:true, opacity:0.85, depthWrite:false, side:THREE.DoubleSide });
+    const beamMat = new THREE.MeshBasicMaterial({ color:0x22d3ee, transparent:true, opacity:0.2, depthWrite:false, side:THREE.DoubleSide, blending:THREE.AdditiveBlending });
+    busBeacon = new THREE.Group();
+    busBeacon.add(new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 40).rotateX(-Math.PI / 2).translate(0, 0.1, 0), ringMat));
+    busBeacon.add(new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 30, 24, 1, true).translate(0, 15, 0), beamMat));
+    scene.add(busBeacon);
+  }
+  busBeacon.visible = true; busBeacon.position.set(p.x, 0, p.z);
+}
+// The riders waiting at the next stop are people, not just a marker: up
+// to three peds standing by the stop, facing the bus until it pulls up
+// (then they are aboard, so the peds hide). They are scene props, never
+// bullet targets — same as the taxi hailer — so they cannot be shot, run
+// over for a crime, or counted as witnesses.
+function setBusPeds(p, count){
+  if(!scene) return;
+  const pick = arr => arr[(Math.random() * arr.length) | 0];
+  const n = Math.min(3, Math.max(0, count | 0));
+  for(let i = 0; i < 3; i++){
+    if(i >= n){ if(busPeds[i]) busPeds[i].visible = false; continue; }
+    const outfit = { shirt:pick(PALETTE), pants:pick([0x2d3748, 0x1e3a8a, 0x111827, 0x6b7280, 0x8a5a1a, 0xcbd5e1]),
+      skin:pick(SKIN_TONES), hair:pick(HAIR_COLORS.slice(0, 6)),
+      hat:Math.random() < 0.25 ? pick(['cap', 'beanie', 'cowboy']) : 'none', hatColor:pick(PALETTE),
+      hairLong:Math.random() < 0.4 };
+    if(!busPeds[i]){ busPeds[i] = buildCharacter(outfit); busPeds[i].userData.phase = 0; scene.add(busPeds[i]); }
+    else setOutfit(busPeds[i], outfit);
+    resetPose(busPeds[i]);
+    // A little cluster by the stop, not a pile on one spot.
+    const a = i * 2.1 + 0.6, r = 1.6;
+    busPeds[i].position.set(p.x + Math.cos(a) * r, 0, p.z + Math.sin(a) * r);
+    busPeds[i].visible = true;
+  }
+}
+function hideBusPeds(){ for(const ped of busPeds) if(ped) ped.visible = false; }
+// Every frame while a route is running: the waiting peds face the bus.
+function updateBusPeds(dt){
+  const stop = bus.nextStop;
+  if(!stop || bus.state !== 'route') return;
+  for(const ped of busPeds){
+    if(!ped || !ped.visible) continue;
+    const dx = physics.pos.x - ped.position.x, dz = physics.pos.z - ped.position.z;
+    ped.rotation.y = Math.atan2(-dx, -dz);
+    ped.userData.phase = (ped.userData.phase || 0) + dt * 2;
+    animateCharacter(ped, ped.userData.phase, 0, false, dt, {});
+  }
+}
+function updateBusHud(){
+  const el = $('bus-hud'); if(!el) return;
+  if(!bus.active){ el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  const px = physics.pos.x, pz = physics.pos.z, h = physics.heading, tg = bus.target;
+  const stop = bus.nextStop;
+  $('bs-obj').textContent = 'Stop ' + (bus.stopIndex + 1) + '/' + bus.stopCount
+    + (stop ? ' · ' + stop.waiting + ' waiting' : '')
+    + (bus.onboard ? ' · ' + bus.onboard + ' aboard' : '');
+  const tl = bus.timeLeft;
+  $('bs-time').textContent = tl >= 0 ? '⏱ ' + Math.ceil(tl) + 's' : '⏱ LATE';
+  $('bs-time').classList.toggle('low', tl < 10);
+  const info = $('bs-info');
+  if(info){
+    const bits = [];
+    if(bus.farebox > 0) bits.push('💵 $' + bus.farebox.toLocaleString() + ' in the farebox');
+    if(bus.surge > 1) bits.push('Surge ×' + bus.surge);
+    if(bus.routes > 0) bits.push(bus.routes + ' routes · ' + bus.passengers + ' riders · $' + bus.earned.toLocaleString());
+    if(bus.ratingCount > 0) bits.push('★ ' + bus.ratingAvg.toFixed(1) + ' (' + bus.ratingCount + ' routes)');
+    info.textContent = bits.join(' · ');
+  }
+  if(tg && !inside){
+    const a = Math.atan2(-(tg.x - px), -(tg.z - pz));
+    const rel = Math.atan2(Math.sin(a - h), Math.cos(a - h));
+    const arrow = $('bs-arrow');
+    arrow.style.transform = 'rotate(' + (-rel).toFixed(3) + 'rad)';
+    arrow.classList.remove('hidden');
+    $('bs-dist').textContent = Math.round(Math.hypot(tg.x - px, tg.z - pz)) + ' m';
+  }else{ $('bs-arrow').classList.add('hidden'); $('bs-dist').textContent = ''; }
 }
 
 // ---------------- full map + GPS waypoint ----------------
@@ -1864,6 +1954,9 @@ function frame(now){
   if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && courier.active){
     courier.abandon(); setCourierBeacon(null); updateCourierHud(); toast('🛵 Delivery abandoned — order lost', 2000);
   }
+  if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && bus.active){
+    bus.abandon(); setBusBeacon(null); hideBusPeds(); updateBusHud(); toast('🚌 Route abandoned — farebox lost', 2000);
+  }
   if(editorOpen){
     updateEditorCamera(dt);
   }else if(playing && onFoot){
@@ -2084,7 +2177,34 @@ function frame(now){
       }
     }
     updateTaxiPed(dt);
-    if(frameN % 3 === 0){ updateTaxiHud(); updateCourierHud(); }
+    // Bus route: the Winnipeg Transit loop — a chain of stops, riders
+    // boarding at each one, the farebox paying out only when the route
+    // finishes. The bus runs its own shift, so it never fights the cab
+    // or the courier for a beacon; switching out of the bus ends it.
+    if(bus.setInBus(isBusCar(carDef)) === 'abandoned'){ hideBusPeds(); toast('🚌 Route abandoned — you switched cars', 2000); }
+    if(isBusCar(carDef)){
+      for(const ev of bus.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100, surge:timeSurge*wSurge })){
+        if(ev.type === 'routeStart'){ setBusBeacon(ev.stops[0]); setBusPeds(ev.stops[0], ev.stops[0].waiting);
+          toast('🚌 Route started — ' + ev.stops.length + ' stops' + (ev.surge > 1 ? ' · surge ×' + ev.surge : ''), 2600); }
+        else if(ev.type === 'board'){ const next = bus.target; setBusBeacon(next); setBusPeds(next, next.waiting);
+          audio.beep(990, 0.08);
+          toast('🚌 ' + ev.boarded + ' aboard' + (ev.leftWaiting ? ' · ' + ev.leftWaiting + ' left waiting' : '')
+            + ' · +$' + ev.fare.toLocaleString() + ' in the farebox' + (ev.onTime ? '' : ' · late for this leg'), 2200); }
+        else if(ev.type === 'passengerLeft'){ toast('😠 A rider got off early — drive smoother!', 2000); }
+        else if(ev.type === 'routeComplete'){ addCash(ev.total); setBusBeacon(null); hideBusPeds();
+          save.bus = bus.career; saveSave(save);   // career (routes, riders, on-time record) persists
+          const stars = '★'.repeat(ev.rating) + '☆'.repeat(5 - ev.rating);
+          let msg = '🚌 Route complete — $' + ev.fares.toLocaleString() + ' fares + $' + ev.completionBonus.toLocaleString() + ' bonus';
+          if(ev.onTimeBonus > 0) msg += ' + $' + ev.onTimeBonus.toLocaleString() + ' on time (' + ev.onTimeLegs + '/' + ev.totalStops + ' legs)';
+          if(ev.surge > 1) msg += ' · surge ×' + ev.surge;
+          msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';
+          toast(msg, 3200); }
+        else if(ev.type === 'routeFailed'){ setBusBeacon(null); hideBusPeds();
+          toast('🚌 Bus wrecked — route lost, $' + ev.fareboxLost.toLocaleString() + ' in the farebox gone', 2400); }
+      }
+    }
+    updateBusPeds(dt);
+    if(frameN % 3 === 0){ updateTaxiHud(); updateCourierHud(); updateBusHud(); }
     // crash detector: a one-frame speed collapse only comes from a shunt
     // (braking and drag bleed speed slowly). tele.speed lags collisions by
     // a frame, so this catches walls and traffic alike.
@@ -2118,7 +2238,7 @@ function frame(now){
     updateEffects(dt);
     shops.update(dt);
     weapons.update(dt, weaponCtx, false, false);   // let bullets finish flying
-    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null, mp, copBlips(), taxi.target || courier.target);
+    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null, mp, copBlips(), taxi.target || courier.target || bus.target);
     updateAction();
     if(controls.consumeAction()) doAction();
     if(qm) qm.update(dt);
@@ -2291,6 +2411,7 @@ async function boot(){
     save=ensureSkins(ensureArsenal(loadSave()));
     taxi.loadCareer(save.taxi);   // cab career (rides, earnings, rating) survives sessions
     courier.loadCareer(save.courier);   // courier career (deliveries, earnings, best stack) survives sessions
+    bus.loadCareer(save.bus);   // bus career (routes, riders, earnings, on-time record) survives sessions
     audio=createAudio();
     orient=initOrientation(onViewResize);
     await initScene();

@@ -35,6 +35,8 @@ export const FORGE_DESIGNS = {
   sedan:  { text:'four-door sedan, rounded, chrome trim', rim:'multispoke', rimSize:17, finish:'metallic', seed:707, len:4.64, W:1.84, wb:2.8, R:0.33 },
   taxi:   { text:'four-door sedan, boxy, upright windshield', rim:'steelie', rimSize:16, finish:'gloss', seed:808, len:4.64, W:1.84, wb:2.8, R:0.33 },
   van:    { text:'delivery van, boxy, tall', rim:'steelie', rimSize:16, finish:'gloss', seed:909, len:5.0, W:2.0, wb:3.2, R:0.36 },
+  bus:    { text:'city transit bus, long, boxy, tall, big windows', rim:'steelie', rimSize:19, finish:'gloss', seed:1706, len:11.0, W:2.5, wb:6.4, R:0.45,
+    design:{ height:2.9, hood:0.12, windshield:0.5, roofLength:0.7, rearWindow:0.08, noseHeight:0.9, cowlHeight:1.6, deckHeight:1.0, tailHeight:2.4, beltLine:1.0, tumblehome:0.95, boxy:0.95, round:0.1, clearance:0.25 } },
   police: { text:'four-door sedan, sleek, black trim, tinted', rim:'sixspoke', rimSize:18, finish:'gloss', seed:1001, len:4.64, W:1.84, wb:2.8, R:0.33 },
   hyper:  { text:'hypercar, mid-engine, very low, aero, gt wing, wide', rim:'turbine', rimSize:20, finish:'candy', seed:1102, len:4.85, W:2.04, wb:2.8, R:0.34, spoiler:'gtwing', tailBar:true },
   // ---- hero cars: described in words, then the key body numbers pinned so each one has a strong,
