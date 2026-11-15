@@ -49,6 +49,7 @@ import { createPaintFX } from './paintfx.js';
 import { createTaxiJob, isTaxiCar, customMapPickers, surgeMultiplierFor, surgeLabelFor, tipLabelFor } from './taxi.js';
 import { createCourierJob } from './courier.js';
 import { createBusJob, isBusCar, busRoutePickers } from './bus.js';
+import { createAmbulanceJob, isAmbulanceCar, ambulancePickers } from './ambulance.js';
 import { createWeather, weatherSurgeFor, weatherSurgeLabelFor } from './weather.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
@@ -113,6 +114,7 @@ let fuelTruck=null, fuelTruckMesh=null, fuelTruckCost=0;   // visible delivery r
 let taxi=createTaxiJob(), taxiBeacon=null, taxiPed=null, taxiPedPhase=0;   // cab fares: beacon + hailer ped + state live here, logic in taxi.js
 let courier=createCourierJob(), courierBeacon=null;   // courier shift: beacon + state live here, logic in courier.js
 let bus=createBusJob(), busBeacon=null, busPeds=[];   // bus route: beacon + waiting peds + state live here, logic in bus.js
+let amb=createAmbulanceJob(), ambBeacon=null, ambPed=null;   // EMS calls: beacon + patient ped + state live here, logic in ambulance.js
 let weather=createWeather();   // the sky: clear/cloudy/rain/storm, logic in weather.js
 let rainPts=null, lightningT=0, flashEl=null;   // rain streaks + storm flash, built in init()
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
@@ -804,9 +806,11 @@ function playCustom(map){
   if(taxi.active){ taxi.abandon(); setTaxiBeacon(null); hideTaxiPed(); updateTaxiHud(); }
   if(courier.active){ courier.abandon(); setCourierBeacon(null); updateCourierHud(); }
   if(bus.active){ bus.abandon(); setBusBeacon(null); hideBusPeds(); updateBusHud(); }
+  if(amb.active){ amb.abandon(); setAmbBeacon(null); hideAmbPed(); updateAmbHud(); }
   taxi.setPickers(customMapPickers(map, OFFSET));   // cab fares run on custom streets too
   courier.setPickers(customMapPickers(map, OFFSET));   // courier orders run on custom streets too
   bus.setPickers(busRoutePickers(map, OFFSET));   // bus routes run on custom streets too
+  amb.setPickers(ambulancePickers(map, OFFSET));   // EMS calls run on custom streets too
   weaponCtx.colliders=customMap.colliders; weaponCtx.targets=[];
   minimap.setCustom(customMap.painter); minimap.setWaypoint(null);
   setTimeOfDay((MAP_THEMES[map.theme]||MAP_THEMES.summer).sky, true);
@@ -822,9 +826,11 @@ function exitCustom(){
   if(taxi.active){ taxi.abandon(); setTaxiBeacon(null); hideTaxiPed(); updateTaxiHud(); }
   if(courier.active){ courier.abandon(); setCourierBeacon(null); updateCourierHud(); }
   if(bus.active){ bus.abandon(); setBusBeacon(null); hideBusPeds(); updateBusHud(); }
+  if(amb.active){ amb.abandon(); setAmbBeacon(null); hideAmbPed(); updateAmbHud(); }
   taxi.setPickers(null);   // back to the main-city grid
   courier.setPickers(null);   // courier orders back to the main-city grid too
   bus.setPickers(null);   // bus routes back to the main-city grid too
+  amb.setPickers(null);   // EMS calls back to the main-city grid too
   customMap.dispose(); customMap=null;
   weaponCtx.colliders=city.colliders; weaponCtx.targets=shops.targets;
   minimap.setCustom(null);
@@ -1283,6 +1289,82 @@ function updateBusHud(){
     arrow.classList.remove('hidden');
     $('bs-dist').textContent = Math.round(Math.hypot(tg.x - px, tg.z - pz)) + ' m';
   }else{ $('bs-arrow').classList.add('hidden'); $('bs-dist').textContent = ''; }
+}
+
+// ---------------- ambulance calls: beacon + HUD + patient ped (logic lives in ambulance.js) ----------------
+// The beacon is red for the patient — an emergency, not a fare — and
+// green for the hospital, so the two legs of a call never read as each other.
+function setAmbBeacon(p, phase){
+  if(!p){ if(ambBeacon) ambBeacon.visible = false; return; }
+  if(!ambBeacon){
+    const ringMat = new THREE.MeshBasicMaterial({ color:0xef4444, transparent:true, opacity:0.85, depthWrite:false, side:THREE.DoubleSide });
+    const beamMat = new THREE.MeshBasicMaterial({ color:0xef4444, transparent:true, opacity:0.2, depthWrite:false, side:THREE.DoubleSide, blending:THREE.AdditiveBlending });
+    ambBeacon = new THREE.Group();
+    ambBeacon.add(new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 40).rotateX(-Math.PI / 2).translate(0, 0.1, 0), ringMat));
+    ambBeacon.add(new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 30, 24, 1, true).translate(0, 15, 0), beamMat));
+    scene.add(ambBeacon);
+  }
+  const col = phase === 'transport' ? 0x22c55e : 0xef4444;
+  ambBeacon.children[0].material.color.set(col);
+  ambBeacon.children[1].material.color.set(col);
+  ambBeacon.children[1].material.opacity = phase === 'transport' ? 0.3 : 0.2;
+  ambBeacon.visible = true; ambBeacon.position.set(p.x, 0, p.z);
+}
+// The patient is a person, not just a marker: someone waiting on the
+// sidewalk, facing the ambulance until it pulls up (then they are aboard,
+// so the ped hides). A scene prop, never a bullet target — same as the
+// taxi hailer — so they cannot be shot, run over for a crime, or counted
+// as a witness.
+function setAmbPed(p){
+  if(!scene) return;
+  const pick = arr => arr[(Math.random() * arr.length) | 0];
+  const outfit = { shirt:pick(PALETTE), pants:pick([0x2d3748, 0x1e3a8a, 0x111827, 0x6b7280, 0x8a5a1a, 0xcbd5e1]),
+    skin:pick(SKIN_TONES), hair:pick(HAIR_COLORS.slice(0, 6)),
+    hat:Math.random() < 0.25 ? pick(['cap', 'beanie', 'cowboy']) : 'none', hatColor:pick(PALETTE),
+    hairLong:Math.random() < 0.4 };
+  if(!ambPed){ ambPed = buildCharacter(outfit); scene.add(ambPed); }
+  else setOutfit(ambPed, outfit);
+  resetPose(ambPed);
+  ambPed.position.set(p.x, 0, p.z);
+  ambPed.visible = true;
+}
+function hideAmbPed(){ if(ambPed) ambPed.visible = false; }
+// Every frame while a call is coming in: the patient faces the ambulance.
+function updateAmbPed(dt){
+  if(!ambPed || !ambPed.visible || amb.state !== 'respond') return;
+  const dx = physics.pos.x - ambPed.position.x, dz = physics.pos.z - ambPed.position.z;
+  ambPed.rotation.y = Math.atan2(-dx, -dz);
+  ambPed.userData.phase = (ambPed.userData.phase || 0) + dt * 2;
+  animateCharacter(ambPed, ambPed.userData.phase, 0, false, dt, {});
+}
+function updateAmbHud(){
+  const el = $('amb-hud'); if(!el) return;
+  if(!amb.active){ el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  const px = physics.pos.x, pz = physics.pos.z, h = physics.heading, tg = amb.target;
+  $('am-obj').textContent = amb.state === 'respond'
+    ? 'Pick up the patient · Condition ' + amb.condition + '%'
+    : 'To the hospital · Condition ' + amb.condition + '%';
+  const tl = amb.timeLeft;
+  $('am-time').textContent = tl >= 0 ? '⏱ ' + Math.ceil(tl) + 's' : '⏱ LATE';
+  $('am-time').classList.toggle('low', tl < 10);
+  const info = $('am-info');
+  if(info){
+    const bits = [];
+    if(amb.condition < 30) bits.push('🚨 CRITICAL');
+    if(amb.surge > 1) bits.push('Surge ×' + amb.surge);
+    if(amb.calls > 0) bits.push(amb.calls + ' calls · ' + amb.saved + ' saved · $' + amb.earned.toLocaleString());
+    if(amb.ratingCount > 0) bits.push('★ ' + amb.ratingAvg.toFixed(1) + ' (' + amb.ratingCount + ' calls)');
+    info.textContent = bits.join(' · ');
+  }
+  if(tg && !inside){
+    const a = Math.atan2(-(tg.x - px), -(tg.z - pz));
+    const rel = Math.atan2(Math.sin(a - h), Math.cos(a - h));
+    const arrow = $('am-arrow');
+    arrow.style.transform = 'rotate(' + (-rel).toFixed(3) + 'rad)';
+    arrow.classList.remove('hidden');
+    $('am-dist').textContent = Math.round(Math.hypot(tg.x - px, tg.z - pz)) + ' m';
+  }else{ $('am-arrow').classList.add('hidden'); $('am-dist').textContent = ''; }
 }
 
 // ---------------- full map + GPS waypoint ----------------
@@ -2204,7 +2286,35 @@ function frame(now){
       }
     }
     updateBusPeds(dt);
-    if(frameN % 3 === 0){ updateTaxiHud(); updateCourierHud(); updateBusHud(); }
+    // Ambulance: the Winnipeg EMS loop — a call comes in, race to the
+    // patient, load them aboard, then race them to the hospital before
+    // their condition runs out. The ambulance runs its own shift, so it
+    // never fights the cab, the courier or the bus for a beacon; switching
+    // out of the rig ends the call.
+    if(amb.setInAmbulance(isAmbulanceCar(carDef)) === 'abandoned'){ hideAmbPed(); toast('🚑 Call abandoned — you switched cars', 2000); }
+    if(isAmbulanceCar(carDef)){
+      for(const ev of amb.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100, surge:timeSurge*wSurge })){
+        if(ev.type === 'callStart'){ setAmbBeacon(ev.patient, 'respond'); setAmbPed(ev.patient);
+          toast('🚨 EMS call — patient waiting' + (ev.surge > 1 ? ' · surge ×' + ev.surge : ''), 2600); }
+        else if(ev.type === 'loaded'){ setAmbBeacon(ev.hospital, 'transport'); hideAmbPed(); audio.beep(990, 0.08);
+          toast('🚑 Patient aboard — get them to the hospital! Condition ' + ev.condition + '%', 2600); }
+        else if(ev.type === 'jostled'){ toast('😖 The patient took a hit — drive smoother! Condition ' + ev.condition + '%', 2000); }
+        else if(ev.type === 'critical'){ toast('🚨 Patient critical — ' + ev.condition + '% — hurry!', 2400); }
+        else if(ev.type === 'delivered'){ addCash(ev.total); setAmbBeacon(null); hideAmbPed();
+          save.amb = amb.career; saveSave(save);   // career (calls, lives saved, rating) persists
+          const stars = '★'.repeat(ev.rating) + '☆'.repeat(5 - ev.rating);
+          let msg = '🚑 Patient delivered — $' + ev.base.toLocaleString() + ' base';
+          if(ev.speedBonus > 0) msg += ' + $' + ev.speedBonus.toLocaleString() + ' speed';
+          if(ev.careBonus > 0) msg += ' + $' + ev.careBonus.toLocaleString() + ' care';
+          if(ev.surge > 1) msg += ' · surge ×' + ev.surge;
+          msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';
+          toast(msg, 3200); }
+        else if(ev.type === 'callFailed'){ setAmbBeacon(null); hideAmbPed();
+          toast(ev.reason === 'patientLost' ? (ev.patientAboard ? '🚑 Patient died in the back — call lost' : '🚑 Patient died before you got there — call lost') : '🚑 Ambulance wrecked — call lost', 2400); }
+      }
+    }
+    updateAmbPed(dt);
+    if(frameN % 3 === 0){ updateTaxiHud(); updateCourierHud(); updateBusHud(); updateAmbHud(); }
     // crash detector: a one-frame speed collapse only comes from a shunt
     // (braking and drag bleed speed slowly). tele.speed lags collisions by
     // a frame, so this catches walls and traffic alike.
@@ -2412,6 +2522,7 @@ async function boot(){
     taxi.loadCareer(save.taxi);   // cab career (rides, earnings, rating) survives sessions
     courier.loadCareer(save.courier);   // courier career (deliveries, earnings, best stack) survives sessions
     bus.loadCareer(save.bus);   // bus career (routes, riders, earnings, on-time record) survives sessions
+    amb.loadCareer(save.amb);   // EMS career (calls, lives saved, earnings, rating) survives sessions
     audio=createAudio();
     orient=initOrientation(onViewResize);
     await initScene();

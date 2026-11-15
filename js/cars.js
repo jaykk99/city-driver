@@ -29,6 +29,8 @@ export const CAR_DEFS = [
     stats:{ topSpeed:42, accel:12, handling:0.8, grip:1.0, nitroTime:4.0, nitroPower:1.3 } },
   { id:'bus',    name:'Winnipeg Transit Bus', desc:'City bus. Run the route, mind the riders.', price:18000, colors:[0x1e6fb8,0xf2f2f2,0x2d6a4f,0xc01818],
     stats:{ topSpeed:38, accel:10, handling:0.75, grip:1.0, nitroTime:4.0, nitroPower:1.25 }, extra:'bus' },
+  { id:'ambulance', name:'Winnipeg EMS Ambulance', desc:'Paramedic rig. Race the patient to the hospital.', price:20000, colors:[0xf2f2f2,0xc01818,0x1e6fb8],
+    stats:{ topSpeed:55, accel:18, handling:1.0, grip:1.0, nitroTime:3.2, nitroPower:1.35 }, extra:'ambulance' },
   { id:'police', name:'Interceptor', desc:'Police-spec V8 with a light bar.', price:28000, colors:[0x14161c,0xf2f2f2,0x1a3a6b],
     stats:{ topSpeed:60, accel:19, handling:1.1, grip:1.15, nitroTime:3.4, nitroPower:1.4 }, extra:'police' },
   { id:'hyper',  name:'Aurora Hyper', desc:'The fastest thing in the city. Wings and all.', price:90000, colors:[0xff5e3a,0xa855f7,0x18c0c0,0xf2f2f2,0x14161c],
