@@ -1,7 +1,7 @@
 {
-  "pid": 2863,
-  "time": "2026-11-15T20:39:09.250380+00:00",
-  "exp_id": "h16_8_lr0p2_l20p0_e100_s3",
-  "epoch": 80,
-  "experiments_done": 315
+  "pid": 3017,
+  "time": "2026-11-16T02:09:20.155070+00:00",
+  "exp_id": "h16_8_lr0p2_l20p0_e100_s60",
+  "epoch": 36,
+  "experiments_done": 6471
 }
