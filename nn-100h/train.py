@@ -558,6 +558,14 @@ def main(argv=None) -> int:
     ap.add_argument("--max-run-hours", type=float, default=5.5)
     args = ap.parse_args(argv)
 
+    _pre = _read_json(BASE / "status.json", None) or {}
+    if _pre.get("status") == "done":
+        # Terminal state: touch NOTHING (no status/heartbeat writes), so
+        # the CircleCI commit step finds no changes and the chain stops
+        # instead of looping on empty checkpoint commits.
+        log("already done, nothing to do")
+        return 0
+
     rows = load_rows()
     if len(rows) < 4:
         print("dataset too small", file=sys.stderr)
