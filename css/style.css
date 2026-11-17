@@ -286,6 +286,8 @@ body.compact #killfeed{top:calc(150px + env(safe-area-inset-top))}
 #amb-hud .obj-top b{color:#ef4444}
 #fire-hud{position:fixed;top:calc(96px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:36;background:rgba(10,14,30,.88);border:2px solid #ff6a00;border-radius:16px;padding:8px 14px;min-width:260px;max-width:min(440px,70vw);pointer-events:none}
 #fire-hud .obj-top b{color:#ff6a00}
+#police-hud{position:fixed;top:calc(96px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:36;background:rgba(10,14,30,.88);border:2px solid #3b82f6;border-radius:16px;padding:8px 14px;min-width:260px;max-width:min(440px,70vw);pointer-events:none}
+#police-hud .obj-top b{color:#60a5fa}
 #cv-time{font-weight:900;font-size:14px;color:#e2e8f0}
 #cv-time.low{color:#ef4444}
 #cv-arrow{display:inline-block;font-size:20px;color:#fb923c}

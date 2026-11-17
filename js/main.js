@@ -51,6 +51,7 @@ import { createCourierJob } from './courier.js';
 import { createBusJob, isBusCar, busRoutePickers } from './bus.js';
 import { createAmbulanceJob, isAmbulanceCar, ambulancePickers } from './ambulance.js';
 import { createFireJob, isFireCar, firePickers } from './fire.js';
+import { createPoliceJob, isPoliceCar, policePickers } from './policejob.js';
 import { createWeather, weatherSurgeFor, weatherSurgeLabelFor } from './weather.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
@@ -117,6 +118,7 @@ let courier=createCourierJob(), courierBeacon=null;   // courier shift: beacon +
 let bus=createBusJob(), busBeacon=null, busPeds=[];   // bus route: beacon + waiting peds + state live here, logic in bus.js
 let amb=createAmbulanceJob(), ambBeacon=null, ambPed=null;   // EMS calls: beacon + patient ped + state live here, logic in ambulance.js
 let fire=createFireJob(), fireBeacon=null, fireMesh=null, waterJet=null;   // fire calls: beacon + fire visual + water jet + state live here, logic in fire.js
+let policeJob=createPoliceJob(), policeBeacon=null, suspectCar=null;   // police patrol: beacon + suspect car + state live here, logic in policejob.js
 let weather=createWeather();   // the sky: clear/cloudy/rain/storm, logic in weather.js
 let rainPts=null, lightningT=0, flashEl=null;   // rain streaks + storm flash, built in init()
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
@@ -400,6 +402,32 @@ function collide(x, z){
         // spark/damage feedback
         if(typeof spawnSparks === 'function' && impact > 10){
           try{ spawnSparks(r.x, r.z, Math.min(12, impact | 0)); }catch(e){}
+        }
+      }
+    }
+  }
+  // The fleeing suspect is solid: bounce the cruiser off them like a
+  // traffic car, so a PIT is a real ram, not a drive-through. The job
+  // itself counts the PIT from the contact; this only makes it physical.
+  if(policeJob.active && !inside){
+    const s = policeJob.suspect;
+    if(s && physics){
+      const dx = r.x - s.x, dz = r.z - s.z, d = Math.hypot(dx, dz), rr = 1.15 + 2.2;
+      if(d < rr && d > 1e-6){
+        const nx = dx / d, nz = dz / d;
+        r.x = s.x + nx * rr; r.z = s.z + nz * rr;
+        const vx = physics.vel.x, vz = physics.vel.z;
+        const vn = vx * nx + vz * nz;
+        if(vn < 0){
+          const impact = Math.abs(vn);
+          const tx = -nz, tz = nx, vt = (vx * tx + vz * tz) * 0.82;
+          const rest = impact > 15 ? 0.45 : impact > 8 ? 0.3 : 0.15;
+          physics.vel.x = nx * (-vn * rest) + tx * vt;
+          physics.vel.z = nz * (-vn * rest) + tz * vt;
+          if(impact > 6 && audio) audio.beep(90, 0.08);
+          if(typeof spawnSparks === 'function' && impact > 10){
+            try{ spawnSparks(r.x, r.z, Math.min(12, impact | 0)); }catch(e){}
+          }
         }
       }
     }
@@ -811,11 +839,13 @@ function playCustom(map){
   if(bus.active){ bus.abandon(); setBusBeacon(null); hideBusPeds(); updateBusHud(); }
   if(amb.active){ amb.abandon(); setAmbBeacon(null); hideAmbPed(); updateAmbHud(); }
   if(fire.active){ fire.abandon(); setFireBeacon(null); hideFireMesh(); updateFireHud(); }
+  if(policeJob.active){ policeJob.abandon(); setPoliceBeacon(null); hideSuspectCar(); updatePoliceHud(); }
   taxi.setPickers(customMapPickers(map, OFFSET));   // cab fares run on custom streets too
   courier.setPickers(customMapPickers(map, OFFSET));   // courier orders run on custom streets too
   bus.setPickers(busRoutePickers(map, OFFSET));   // bus routes run on custom streets too
   amb.setPickers(ambulancePickers(map, OFFSET));   // EMS calls run on custom streets too
   fire.setPickers(firePickers(map, OFFSET));   // fire calls run on custom streets too
+  policeJob.setPickers(policePickers(map, OFFSET));   // patrol calls run on custom streets too
   weaponCtx.colliders=customMap.colliders; weaponCtx.targets=[];
   minimap.setCustom(customMap.painter); minimap.setWaypoint(null);
   setTimeOfDay((MAP_THEMES[map.theme]||MAP_THEMES.summer).sky, true);
@@ -833,11 +863,13 @@ function exitCustom(){
   if(bus.active){ bus.abandon(); setBusBeacon(null); hideBusPeds(); updateBusHud(); }
   if(amb.active){ amb.abandon(); setAmbBeacon(null); hideAmbPed(); updateAmbHud(); }
   if(fire.active){ fire.abandon(); setFireBeacon(null); hideFireMesh(); updateFireHud(); }
+  if(policeJob.active){ policeJob.abandon(); setPoliceBeacon(null); hideSuspectCar(); updatePoliceHud(); }
   taxi.setPickers(null);   // back to the main-city grid
   courier.setPickers(null);   // courier orders back to the main-city grid too
   bus.setPickers(null);   // bus routes back to the main-city grid too
   amb.setPickers(null);   // EMS calls back to the main-city grid too
   fire.setPickers(null);   // fire calls back to the main-city grid too
+  policeJob.setPickers(null);   // patrol calls back to the main-city grid too
   customMap.dispose(); customMap=null;
   weaponCtx.colliders=city.colliders; weaponCtx.targets=shops.targets;
   minimap.setCustom(null);
@@ -1477,6 +1509,85 @@ function updateFireHud(){
     arrow.classList.remove('hidden');
     $('fr-dist').textContent = Math.round(Math.hypot(tg.x - px, tg.z - pz)) + ' m';
   }else{ $('fr-arrow').classList.add('hidden'); $('fr-dist').textContent = ''; }
+}
+
+// ---------------- police patrol: beacon + suspect car + HUD (logic lives in policejob.js) ----------------
+// The beacon is blue for a pursuit — an emergency, not a fare — and it
+// rides the suspect, so it moves with the chase. The suspect is a real
+// car in the world (a cheap getaway ride in a dark colour, built by the
+// same builder as every other car), and it flees along the roads until
+// its nerve breaks or you PIT it to a stop.
+function setPoliceBeacon(p){
+  if(!p){ if(policeBeacon) policeBeacon.visible = false; return; }
+  if(!policeBeacon){
+    const ringMat = new THREE.MeshBasicMaterial({ color:0x3b82f6, transparent:true, opacity:0.85, depthWrite:false, side:THREE.DoubleSide });
+    const beamMat = new THREE.MeshBasicMaterial({ color:0x3b82f6, transparent:true, opacity:0.25, depthWrite:false, side:THREE.DoubleSide, blending:THREE.AdditiveBlending });
+    policeBeacon = new THREE.Group();
+    policeBeacon.add(new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 40).rotateX(-Math.PI / 2).translate(0, 0.1, 0), ringMat));
+    policeBeacon.add(new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 30, 24, 1, true).translate(0, 15, 0), beamMat));
+    scene.add(policeBeacon);
+  }
+  policeBeacon.visible = true; policeBeacon.position.set(p.x, 0, p.z);
+}
+// The suspect car: built fresh per call from the ride dispatch picked,
+// repositioned every frame by updateSuspectCar. The old one is dropped
+// from the scene when the next call starts.
+function setSuspectCar(p, car){
+  if(!scene) return;
+  if(suspectCar){ scene.remove(suspectCar); suspectCar = null; }
+  suspectCar = buildCar(car.id, car.color);
+  scene.add(suspectCar);
+  suspectCar.position.set(p.x, 0, p.z);
+  suspectCar.visible = true;
+}
+function hideSuspectCar(){
+  if(suspectCar) suspectCar.visible = false;
+  if(policeBeacon) policeBeacon.visible = false;
+}
+// Every frame while a call is live: the suspect car tracks the flee AI
+// (position, heading, wheel spin), and the beacon rides along with it.
+function updateSuspectCar(dt){
+  if(!suspectCar) return;
+  const s = policeJob.suspect;
+  if(!s || !policeJob.active){ suspectCar.visible = false; if(policeBeacon) policeBeacon.visible = false; return; }
+  suspectCar.visible = true;
+  suspectCar.position.set(s.x, 0, s.z);
+  suspectCar.rotation.y = s.heading;
+  if(policeBeacon){ policeBeacon.visible = true; policeBeacon.position.set(s.x, 0, s.z); }
+  const wheels = suspectCar.userData.wheels;
+  if(wheels){ const spin = (s.speed || 0) * dt * 2.6; for(const w of wheels) w.rotation.x += spin; }
+}
+function updatePoliceHud(){
+  const el = $('police-hud'); if(!el) return;
+  if(!policeJob.active){ el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  const px = physics.pos.x, pz = physics.pos.z, h = physics.heading, tg = policeJob.target;
+  const pressuring = policeJob.isPressuring({ x:px, z:pz, speed:Math.abs(tele.speed) });
+  $('pc-obj').textContent = policeJob.state === 'respond'
+    ? 'Close on the suspect'
+    : pressuring ? '🚔 On their tail — keep the pressure on · ' + policeJob.progress + '%'
+    : 'Stay on them · ' + policeJob.progress + '% stopped';
+  const tl = policeJob.timeLeft;
+  $('pc-time').textContent = tl >= 0 ? '⏱ ' + Math.ceil(tl) + 's' : '⏱ LATE';
+  $('pc-time').classList.toggle('low', tl < 10);
+  const info = $('pc-info');
+  if(info){
+    const bits = [];
+    if(tg && Math.hypot(tg.x - px, tg.z - pz) > 100) bits.push('🚔 LOSING THEM');
+    if(policeJob.shunts > 0) bits.push(policeJob.shunts + (policeJob.shunts === 1 ? ' shunt' : ' shunts'));
+    if(policeJob.surge > 1) bits.push('Surge ×' + policeJob.surge);
+    if(policeJob.calls > 0) bits.push(policeJob.calls + ' calls · ' + policeJob.arrests + ' arrests · $' + policeJob.earned.toLocaleString());
+    if(policeJob.ratingCount > 0) bits.push('★ ' + policeJob.ratingAvg.toFixed(1) + ' (' + policeJob.ratingCount + ' calls)');
+    info.textContent = bits.join(' · ');
+  }
+  if(tg && !inside){
+    const a = Math.atan2(-(tg.x - px), -(tg.z - pz));
+    const rel = Math.atan2(Math.sin(a - h), Math.cos(a - h));
+    const arrow = $('pc-arrow');
+    arrow.style.transform = 'rotate(' + (-rel).toFixed(3) + 'rad)';
+    arrow.classList.remove('hidden');
+    $('pc-dist').textContent = Math.round(Math.hypot(tg.x - px, tg.z - pz)) + ' m';
+  }else{ $('pc-arrow').classList.add('hidden'); $('pc-dist').textContent = ''; }
 }
 
 // ---------------- full map + GPS waypoint ----------------
@@ -2453,7 +2564,37 @@ function frame(now){
       }
     }
     updateFireMesh(dt);
-    if(frameN % 3 === 0){ updateTaxiHud(); updateCourierHud(); updateBusHud(); updateAmbHud(); updateFireHud(); }
+    // Police patrol: the Interceptor answers dispatch — a suspect is
+    // fleeing, and the chase is on. The cruiser runs its own shift, so
+    // it never fights the cab, the courier, the bus, the ambulance or
+    // the fire truck for a beacon; switching out of the cruiser ends it.
+    if(policeJob.setInPoliceCar(isPoliceCar(carDef)) === 'abandoned'){ hideSuspectCar(); toast('🚔 Call abandoned — you switched cars', 2000); }
+    if(isPoliceCar(carDef)){
+      for(const ev of policeJob.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100, surge:timeSurge*wSurge })){
+        if(ev.type === 'callStart'){ setPoliceBeacon(ev.suspect); setSuspectCar(ev.suspect, ev.car);
+          if(audio.dispatch) audio.dispatch();
+          toast('🚔 Dispatch — suspect fleeing' + (ev.surge > 1 ? ' · surge ×' + ev.surge : ''), 2600); }
+        else if(ev.type === 'inPursuit'){ audio.beep(990, 0.08);
+          toast('🚔 In pursuit — stay on them!', 2200); }
+        else if(ev.type === 'pit'){ audio.beep(180, 0.1);
+          toast('🚔 PIT! They are losing it — ' + ev.progress + '% stopped', 2000); }
+        else if(ev.type === 'shunt'){ toast('🚔 Rough driving — clean bonus shrinking', 1800); }
+        else if(ev.type === 'losing'){ toast('🚔 Losing them — close the gap!', 2400); }
+        else if(ev.type === 'arrested'){ addCash(ev.total); setPoliceBeacon(null); hideSuspectCar();
+          save.police = policeJob.career; saveSave(save);   // career (calls, arrests, rating) persists
+          const stars = '★'.repeat(ev.rating) + '☆'.repeat(5 - ev.rating);
+          let msg = '🚔 Suspect arrested — $' + ev.base.toLocaleString() + ' base';
+          if(ev.speedBonus > 0) msg += ' + $' + ev.speedBonus.toLocaleString() + ' speed';
+          if(ev.cleanBonus > 0) msg += ' + $' + ev.cleanBonus.toLocaleString() + ' clean';
+          if(ev.surge > 1) msg += ' · surge ×' + ev.surge;
+          msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';
+          toast(msg, 3200); }
+        else if(ev.type === 'callFailed'){ setPoliceBeacon(null); hideSuspectCar();
+          toast(ev.reason === 'escaped' ? '🚔 Suspect got away — call lost' : '🚔 Cruiser wrecked — call lost', 2400); }
+      }
+    }
+    updateSuspectCar(dt);
+    if(frameN % 3 === 0){ updateTaxiHud(); updateCourierHud(); updateBusHud(); updateAmbHud(); updateFireHud(); updatePoliceHud(); }
     // crash detector: a one-frame speed collapse only comes from a shunt
     // (braking and drag bleed speed slowly). tele.speed lags collisions by
     // a frame, so this catches walls and traffic alike.
@@ -2487,7 +2628,7 @@ function frame(now){
     updateEffects(dt);
     shops.update(dt);
     weapons.update(dt, weaponCtx, false, false);   // let bullets finish flying
-    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null, mp, copBlips(), taxi.target || courier.target || bus.target);
+    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null, mp, copBlips(), taxi.target || courier.target || bus.target || policeJob.target);
     updateAction();
     if(controls.consumeAction()) doAction();
     if(qm) qm.update(dt);
@@ -2523,6 +2664,9 @@ function frame(now){
     blood.update(dt);
     policeRes = police ? police.update(dt, now/1000) : null;
     if(police) police.copHitList();   // refresh bullet blockers after cops move
+    // The cruiser's siren wails while a patrol call is live — over the
+    // wanted system's level, which retakes it when the call ends.
+    if(policeJob.siren && audio.siren) audio.siren(0.45);
     // bust pressure: the hurt vignette pulses as the arrest closes in
     if(hurtFlash>0) hurtFlash-=dt;
     {
@@ -2663,6 +2807,7 @@ async function boot(){
     bus.loadCareer(save.bus);   // bus career (routes, riders, earnings, on-time record) survives sessions
     amb.loadCareer(save.amb);   // EMS career (calls, lives saved, earnings, rating) survives sessions
     fire.loadCareer(save.fire);   // fire career (calls, fires out, earnings, rating) survives sessions
+    policeJob.loadCareer(save.police);   // patrol career (calls, arrests, earnings, rating) survives sessions
     audio=createAudio();
     orient=initOrientation(onViewResize);
     await initScene();
