@@ -1,12 +1,12 @@
 {
   "repo": "jaykk99/city-driver",
-  "hours_trained": 37.674716,
-  "experiments_done": 49463,
+  "hours_trained": 38.424716,
+  "experiments_done": 50285,
   "best": {
     "exp_id": "h4_lr0p05_l20p0_e100_s1",
     "test_acc": 1.0,
     "auc": 1.0
   },
   "status": "training",
-  "updated": "2026-11-17T14:52:07.310626+00:00"
+  "updated": "2026-11-17T15:37:38.662660+00:00"
 }
