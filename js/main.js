@@ -53,6 +53,7 @@ import { createAmbulanceJob, isAmbulanceCar, ambulancePickers } from './ambulanc
 import { createFireJob, isFireCar, firePickers } from './fire.js';
 import { createPoliceJob, isPoliceCar, policePickers } from './policejob.js';
 import { createGarbageJob, isGarbageCar, garbageRoutePickers } from './garbage.js';
+import { createTowJob, isTowCar, towPickers } from './towjob.js';
 import { createWeather, weatherSurgeFor, weatherSurgeLabelFor } from './weather.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
@@ -121,6 +122,7 @@ let amb=createAmbulanceJob(), ambBeacon=null, ambPed=null;   // EMS calls: beaco
 let fire=createFireJob(), fireBeacon=null, fireMesh=null, waterJet=null;   // fire calls: beacon + fire visual + water jet + state live here, logic in fire.js
 let policeJob=createPoliceJob(), policeBeacon=null, suspectCar=null;   // police patrol: beacon + suspect car + state live here, logic in policejob.js
 let garbage=createGarbageJob(), garbageBeacon=null, garbageBins=[];   // garbage route: beacon + curb bins + state live here, logic in garbage.js
+let tow=createTowJob(), towBeacon=null, towedCar=null;   // tow calls: beacon + stranded car + state live here, logic in towjob.js
 let weather=createWeather();   // the sky: clear/cloudy/rain/storm, logic in weather.js
 let rainPts=null, lightningT=0, flashEl=null;   // rain streaks + storm flash, built in init()
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
@@ -133,6 +135,7 @@ const ENGINES={ sport:{cyl:6,red:7200}, muscle:{cyl:8,red:6200,idle:750}, super:
   bus:{cyl:6,red:5200,idle:650},
   fire:{cyl:6,red:5200,idle:650},
   garbage:{cyl:6,red:5200,idle:650},
+  tow:{cyl:6,red:5200,idle:650},
   brawler:{cyl:8,red:7000,idle:750,voice:'v8x'}, kaze:{cyl:6,red:7600,idle:850,voice:'i6'}, vanta:{cyl:10,red:8700,idle:1000,voice:'v10'}, rally:{cyl:4,red:7800,idle:950,voice:'i4r'}, baja:{cyl:8,red:6000,idle:700,voice:'v8'} };
 function applyGearbox(){
   if(physics && physics.box) physics.box.mode = save.manual ? 'manual' : 'auto';
@@ -844,6 +847,7 @@ function playCustom(map){
   if(fire.active){ fire.abandon(); setFireBeacon(null); hideFireMesh(); updateFireHud(); }
   if(policeJob.active){ policeJob.abandon(); setPoliceBeacon(null); hideSuspectCar(); updatePoliceHud(); }
   if(garbage.active){ garbage.abandon(); setGarbageBeacon(null); hideGarbageBins(); updateGarbageHud(); }
+  if(tow.active){ tow.abandon(); setTowBeacon(null); hideTowedCar(); updateTowHud(); }
   taxi.setPickers(customMapPickers(map, OFFSET));   // cab fares run on custom streets too
   courier.setPickers(customMapPickers(map, OFFSET));   // courier orders run on custom streets too
   bus.setPickers(busRoutePickers(map, OFFSET));   // bus routes run on custom streets too
@@ -851,6 +855,7 @@ function playCustom(map){
   fire.setPickers(firePickers(map, OFFSET));   // fire calls run on custom streets too
   policeJob.setPickers(policePickers(map, OFFSET));   // patrol calls run on custom streets too
   garbage.setPickers(garbageRoutePickers(map, OFFSET));   // garbage routes run on custom streets too
+  tow.setPickers(towPickers(map, OFFSET));   // tow calls run on custom streets too
   weaponCtx.colliders=customMap.colliders; weaponCtx.targets=[];
   minimap.setCustom(customMap.painter); minimap.setWaypoint(null);
   setTimeOfDay((MAP_THEMES[map.theme]||MAP_THEMES.summer).sky, true);
@@ -870,6 +875,7 @@ function exitCustom(){
   if(fire.active){ fire.abandon(); setFireBeacon(null); hideFireMesh(); updateFireHud(); }
   if(policeJob.active){ policeJob.abandon(); setPoliceBeacon(null); hideSuspectCar(); updatePoliceHud(); }
   if(garbage.active){ garbage.abandon(); setGarbageBeacon(null); hideGarbageBins(); updateGarbageHud(); }
+  if(tow.active){ tow.abandon(); setTowBeacon(null); hideTowedCar(); updateTowHud(); }
   taxi.setPickers(null);   // back to the main-city grid
   courier.setPickers(null);   // courier orders back to the main-city grid too
   bus.setPickers(null);   // bus routes back to the main-city grid too
@@ -877,6 +883,7 @@ function exitCustom(){
   fire.setPickers(null);   // fire calls back to the main-city grid too
   policeJob.setPickers(null);   // patrol calls back to the main-city grid too
   garbage.setPickers(null);   // garbage routes back to the main-city grid too
+  tow.setPickers(null);   // tow calls back to the main-city grid too
   customMap.dispose(); customMap=null;
   weaponCtx.colliders=city.colliders; weaponCtx.targets=shops.targets;
   minimap.setCustom(null);
@@ -1680,6 +1687,94 @@ function updateGarbageHud(){
   }else{ $('gb-arrow').classList.add('hidden'); $('gb-dist').textContent = ''; }
 }
 
+// ---------------- tow calls: beacon + stranded car + HUD (logic lives in towjob.js) ----------------
+// The beacon is amber for a breakdown — an emergency, not a fare — and it
+// sits on the stranded car until the winch hooks it up, then swings to
+// the repair shop. The stranded car is a real car in the world (a cheap
+// ride in a plain colour, built by the same builder as every other car),
+// sitting where it died until the truck hauls it away, then trailing
+// behind the truck on the hook.
+function setTowBeacon(p){
+  if(!p){ if(towBeacon) towBeacon.visible = false; return; }
+  if(!towBeacon){
+    const ringMat = new THREE.MeshBasicMaterial({ color:0xf59e0b, transparent:true, opacity:0.85, depthWrite:false, side:THREE.DoubleSide });
+    const beamMat = new THREE.MeshBasicMaterial({ color:0xf59e0b, transparent:true, opacity:0.25, depthWrite:false, side:THREE.DoubleSide, blending:THREE.AdditiveBlending });
+    towBeacon = new THREE.Group();
+    towBeacon.add(new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 40).rotateX(-Math.PI / 2).translate(0, 0.1, 0), ringMat));
+    towBeacon.add(new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 30, 24, 1, true).translate(0, 15, 0), beamMat));
+    scene.add(towBeacon);
+  }
+  towBeacon.visible = true; towBeacon.position.set(p.x, 0, p.z);
+}
+// The stranded car: built fresh per call from the ride dispatch picked,
+// repositioned every frame by updateTowedCar. The old one is dropped
+// from the scene when the next call starts.
+function setTowedCar(p, car){
+  if(!scene) return;
+  if(towedCar){ scene.remove(towedCar); towedCar = null; }
+  towedCar = buildCar(car.id, car.color);
+  scene.add(towedCar);
+  towedCar.position.set(p.x, 0, p.z);
+  towedCar.visible = true;
+}
+function hideTowedCar(){
+  if(towedCar) towedCar.visible = false;
+  if(towBeacon) towBeacon.visible = false;
+}
+// Every frame while a call is live: the stranded car tracks the tow job
+// (position, heading, wheel spin) — sitting where it died, then trailing
+// the truck on the hook — and the beacon rides along with it.
+function updateTowedCar(dt){
+  if(!towedCar) return;
+  const t = tow.towed;
+  if(!t || !tow.active){ towedCar.visible = false; if(towBeacon) towBeacon.visible = false; return; }
+  towedCar.visible = true;
+  towedCar.position.set(t.x, 0, t.z);
+  towedCar.rotation.y = t.heading;
+  if(towBeacon){ towBeacon.visible = true; towBeacon.position.set(tow.target.x, 0, tow.target.z); }
+  const wheels = towedCar.userData.wheels;
+  if(wheels){ const spin = (t.speed || 0) * dt * 2.6; for(const w of wheels) w.rotation.x += spin; }
+}
+function updateTowHud(){
+  const el = $('tow-hud'); if(!el) return;
+  if(!tow.active){ el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  const px = physics.pos.x, pz = physics.pos.z, h = physics.heading, tg = tow.target;
+  if(tow.state === 'respond'){
+    $('tw-obj').textContent = 'Race to the breakdown';
+  }else if(tow.state === 'hook'){
+    $('tw-obj').textContent = tow.hookFrac > 0 ? '🪝 Winching it on… ' + Math.round(tow.hookFrac * 100) + '%' : 'Hold still — winch the car on';
+  }else{
+    $('tw-obj').textContent = 'Haul it to the shop · ' + tow.condition + '%';
+  }
+  if(tow.state === 'hook'){
+    $('tw-time').textContent = '⏱ WINCH';
+    $('tw-time').classList.remove('low');
+  }else{
+    const tl = tow.timeLeft;
+    $('tw-time').textContent = tl >= 0 ? '⏱ ' + Math.ceil(tl) + 's' : '⏱ LATE';
+    $('tw-time').classList.toggle('low', tl < 10);
+  }
+  const info = $('tw-info');
+  if(info){
+    const bits = [];
+    if(tow.state === 'tow' && tow.strain > 0) bits.push('🪝 Hitch strain ' + tow.strain + '%');
+    if(tow.isHooking({ x:px, z:pz, speed:Math.abs(tele.speed) })) bits.push('🪝 Winching…');
+    if(tow.surge > 1) bits.push('Surge ×' + tow.surge);
+    if(tow.calls > 0) bits.push(tow.calls + ' calls · ' + tow.tows + ' tows · $' + tow.earned.toLocaleString());
+    if(tow.ratingCount > 0) bits.push('★ ' + tow.ratingAvg.toFixed(1) + ' (' + tow.ratingCount + ' calls)');
+    info.textContent = bits.join(' · ');
+  }
+  if(tg && !inside){
+    const a = Math.atan2(-(tg.x - px), -(tg.z - pz));
+    const rel = Math.atan2(Math.sin(a - h), Math.cos(a - h));
+    const arrow = $('tw-arrow');
+    arrow.style.transform = 'rotate(' + (-rel).toFixed(3) + 'rad)';
+    arrow.classList.remove('hidden');
+    $('tw-dist').textContent = Math.round(Math.hypot(tg.x - px, tg.z - pz)) + ' m';
+  }else{ $('tw-arrow').classList.add('hidden'); $('tw-dist').textContent = ''; }
+}
+
 // ---------------- full map + GPS waypoint ----------------
 let bigMapOpen=false;
 function playerXZ(){ return onFoot ? { x:inside?inside.back.x:foot.pos.x, z:inside?inside.back.z:foot.pos.z, h:foot.heading } : { x:physics.pos.x, z:physics.pos.z, h:physics.heading }; }
@@ -2355,6 +2450,9 @@ function frame(now){
   if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && garbage.active){
     garbage.abandon(); setGarbageBeacon(null); hideGarbageBins(); updateGarbageHud(); toast('🗑️ Route abandoned — hopper load lost', 2000);
   }
+  if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && tow.active){
+    tow.abandon(); setTowBeacon(null); hideTowedCar(); updateTowHud(); toast('🪝 Call abandoned — car left on the road', 2000);
+  }
   if(editorOpen){
     updateEditorCamera(dt);
   }else if(playing && onFoot){
@@ -2722,7 +2820,42 @@ function frame(now){
           toast(msg, 2400); }
       }
     }
-    if(frameN % 3 === 0){ updateTaxiHud(); updateCourierHud(); updateBusHud(); updateAmbHud(); updateFireHud(); updatePoliceHud(); updateGarbageHud(); }
+    // Tow calls: the roadside-assistance loop — a stranded car on a
+    // street somewhere, a winch hook-up that needs the truck stopped
+    // beside it, then a haul to the nearest repair shop with the car
+    // trailing on the hook. The truck runs its own shift, so it never
+    // fights the cab, the courier, the bus, the ambulance, the fire
+    // truck, the cruiser or the garbage truck for a beacon; switching
+    // out of the truck ends it.
+    if(tow.setInTow(isTowCar(carDef)) === 'abandoned'){ hideTowedCar(); toast('🪝 Call abandoned — you switched cars', 2000); }
+    if(isTowCar(carDef)){
+      for(const ev of tow.update(dt, { x:physics.pos.x, z:physics.pos.z, heading:physics.heading, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100, surge:timeSurge*wSurge })){
+        if(ev.type === 'callStart'){ setTowBeacon(ev.breakdown); setTowedCar(ev.breakdown, ev.car);
+          if(audio.dispatch) audio.dispatch();
+          toast('🪝 Dispatch — car down, ' + ev.condition + '% · ' + ev.shop.name + (ev.surge > 1 ? ' · surge ×' + ev.surge : ''), 2600); }
+        else if(ev.type === 'onSite'){ audio.beep(990, 0.08);
+          toast('🪝 On site — hold still, winching it on…', 2200); }
+        else if(ev.type === 'hooked'){ setTowBeacon(ev.shop); audio.beep(990, 0.08);
+          toast('🪝 Hooked — haul it to ' + (tow.shop ? tow.shop.name : 'the shop'), 2200); }
+        else if(ev.type === 'straining'){ toast('🪝 Hitch straining — slow down or it drops!', 2000); }
+        else if(ev.type === 'unhooked'){ setTowBeacon(tow.breakdown);
+          toast('🪝 Car dropped off the hook — go back and hook it again', 2400); }
+        else if(ev.type === 'jostled'){ toast('🪝 Rough — the car took a knock, ' + ev.condition + '% left', 2000); }
+        else if(ev.type === 'delivered'){ addCash(ev.total); setTowBeacon(null); hideTowedCar();
+          save.tow = tow.career; saveSave(save);   // career (calls, tows, rating) persists
+          const stars = '★'.repeat(ev.rating) + '☆'.repeat(5 - ev.rating);
+          let msg = '🪝 Car delivered — $' + ev.base.toLocaleString() + ' base';
+          if(ev.speedBonus > 0) msg += ' + $' + ev.speedBonus.toLocaleString() + ' speed';
+          if(ev.careBonus > 0) msg += ' + $' + ev.careBonus.toLocaleString() + ' care';
+          if(ev.surge > 1) msg += ' · surge ×' + ev.surge;
+          msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';
+          toast(msg, 3200); }
+        else if(ev.type === 'callFailed'){ setTowBeacon(null); hideTowedCar();
+          toast(ev.reason === 'totalled' ? '🪝 The car fell apart on the hook — call lost' : '🪝 Truck wrecked — call lost', 2400); }
+      }
+    }
+    updateTowedCar(dt);
+    if(frameN % 3 === 0){ updateTaxiHud(); updateCourierHud(); updateBusHud(); updateAmbHud(); updateFireHud(); updatePoliceHud(); updateGarbageHud(); updateTowHud(); }
     // crash detector: a one-frame speed collapse only comes from a shunt
     // (braking and drag bleed speed slowly). tele.speed lags collisions by
     // a frame, so this catches walls and traffic alike.
@@ -2756,7 +2889,7 @@ function frame(now){
     updateEffects(dt);
     shops.update(dt);
     weapons.update(dt, weaponCtx, false, false);   // let bullets finish flying
-    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null, mp, copBlips(), taxi.target || courier.target || bus.target || policeJob.target || garbage.target);
+    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null, mp, copBlips(), taxi.target || courier.target || bus.target || policeJob.target || garbage.target || tow.target);
     updateAction();
     if(controls.consumeAction()) doAction();
     if(qm) qm.update(dt);
@@ -2937,6 +3070,7 @@ async function boot(){
     fire.loadCareer(save.fire);   // fire career (calls, fires out, earnings, rating) survives sessions
     policeJob.loadCareer(save.police);   // patrol career (calls, arrests, earnings, rating) survives sessions
     garbage.loadCareer(save.garbage);   // garbage career (routes, bins, earnings, on-time record) survives sessions
+    tow.loadCareer(save.tow);   // tow career (calls, tows, earnings, rating) survives sessions
     audio=createAudio();
     orient=initOrientation(onViewResize);
     await initScene();
