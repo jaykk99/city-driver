@@ -7,8 +7,8 @@ import { CAR_DEFS, carDef, effectiveStats } from '../js/cars.js';
 const STAT_KEYS = ['topSpeed', 'accel', 'handling', 'grip', 'nitroTime', 'nitroPower'];
 
 describe('CAR_DEFS', () => {
-  it('has 19 cars with unique ids', () => {
-    assert.equal(CAR_DEFS.length, 19);
+  it('has 20 cars with unique ids', () => {
+    assert.equal(CAR_DEFS.length, 20);
     const ids = CAR_DEFS.map(c => c.id);
     assert.equal(new Set(ids).size, ids.length, 'duplicate car ids');
   });

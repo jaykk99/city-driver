@@ -35,6 +35,8 @@ export const CAR_DEFS = [
     stats:{ topSpeed:50, accel:16, handling:0.85, grip:1.0, nitroTime:3.6, nitroPower:1.3 }, extra:'fire' },
   { id:'police', name:'Interceptor', desc:'Police-spec V8 with a light bar.', price:28000, colors:[0x14161c,0xf2f2f2,0x1a3a6b],
     stats:{ topSpeed:60, accel:19, handling:1.1, grip:1.15, nitroTime:3.4, nitroPower:1.4 }, extra:'police' },
+  { id:'garbage', name:'Winnipeg Garbage Truck', desc:'Sanitation rig. Run the route, mind the bins.', price:22000, colors:[0x2d6a4f,0xf2f2f2,0x1e6fb8],
+    stats:{ topSpeed:42, accel:12, handling:0.8, grip:1.0, nitroTime:4.0, nitroPower:1.25 }, extra:'garbage' },
   { id:'hyper',  name:'Aurora Hyper', desc:'The fastest thing in the city. Wings and all.', price:90000, colors:[0xff5e3a,0xa855f7,0x18c0c0,0xf2f2f2,0x14161c],
     stats:{ topSpeed:76, accel:27, handling:1.3, grip:1.4, nitroTime:3.2, nitroPower:1.55 } },
   // ---- hero cars (Forge 3D, high-detail) ----
@@ -125,6 +127,12 @@ const PROFILES = {
     W:2.5, wb:3.2, wheelR:0.45, track:2.1,
     body:[[5.5,0.3],[5.55,0.6],[5.45,1.0],[5.2,2.9],[4.6,3.0],[-5.2,3.0],[-5.5,2.85],[-5.55,0.6],[-5.5,0.3],[-5.0,0.2],[5.0,0.2]],
     glass:[[5.2,1.1],[5.0,2.75],[-5.25,2.75],[-5.35,1.1]],
+    roof:null, splitter:false,
+  },
+  garbage: {
+    W:2.5, wb:2.6, wheelR:0.42, track:2.1,
+    body:[[4.25,0.3],[4.3,0.6],[4.2,1.0],[3.9,2.8],[3.4,2.9],[-4.0,2.9],[-4.25,2.8],[-4.3,0.6],[-4.25,0.3],[-3.9,0.2],[3.9,0.2]],
+    glass:[[4.2,1.1],[3.95,2.6],[3.3,2.6],[3.3,1.1]],
     roof:null, splitter:false,
   },
   hyper: {

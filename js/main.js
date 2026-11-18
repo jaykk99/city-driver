@@ -52,6 +52,7 @@ import { createBusJob, isBusCar, busRoutePickers } from './bus.js';
 import { createAmbulanceJob, isAmbulanceCar, ambulancePickers } from './ambulance.js';
 import { createFireJob, isFireCar, firePickers } from './fire.js';
 import { createPoliceJob, isPoliceCar, policePickers } from './policejob.js';
+import { createGarbageJob, isGarbageCar, garbageRoutePickers } from './garbage.js';
 import { createWeather, weatherSurgeFor, weatherSurgeLabelFor } from './weather.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
@@ -119,6 +120,7 @@ let bus=createBusJob(), busBeacon=null, busPeds=[];   // bus route: beacon + wai
 let amb=createAmbulanceJob(), ambBeacon=null, ambPed=null;   // EMS calls: beacon + patient ped + state live here, logic in ambulance.js
 let fire=createFireJob(), fireBeacon=null, fireMesh=null, waterJet=null;   // fire calls: beacon + fire visual + water jet + state live here, logic in fire.js
 let policeJob=createPoliceJob(), policeBeacon=null, suspectCar=null;   // police patrol: beacon + suspect car + state live here, logic in policejob.js
+let garbage=createGarbageJob(), garbageBeacon=null, garbageBins=[];   // garbage route: beacon + curb bins + state live here, logic in garbage.js
 let weather=createWeather();   // the sky: clear/cloudy/rain/storm, logic in weather.js
 let rainPts=null, lightningT=0, flashEl=null;   // rain streaks + storm flash, built in init()
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
@@ -130,6 +132,7 @@ const ENGINES={ sport:{cyl:6,red:7200}, muscle:{cyl:8,red:6200,idle:750}, super:
   van:{cyl:6,red:5500,idle:700}, police:{cyl:8,red:6600,idle:800}, hyper:{cyl:12,red:9000,idle:1000},
   bus:{cyl:6,red:5200,idle:650},
   fire:{cyl:6,red:5200,idle:650},
+  garbage:{cyl:6,red:5200,idle:650},
   brawler:{cyl:8,red:7000,idle:750,voice:'v8x'}, kaze:{cyl:6,red:7600,idle:850,voice:'i6'}, vanta:{cyl:10,red:8700,idle:1000,voice:'v10'}, rally:{cyl:4,red:7800,idle:950,voice:'i4r'}, baja:{cyl:8,red:6000,idle:700,voice:'v8'} };
 function applyGearbox(){
   if(physics && physics.box) physics.box.mode = save.manual ? 'manual' : 'auto';
@@ -840,12 +843,14 @@ function playCustom(map){
   if(amb.active){ amb.abandon(); setAmbBeacon(null); hideAmbPed(); updateAmbHud(); }
   if(fire.active){ fire.abandon(); setFireBeacon(null); hideFireMesh(); updateFireHud(); }
   if(policeJob.active){ policeJob.abandon(); setPoliceBeacon(null); hideSuspectCar(); updatePoliceHud(); }
+  if(garbage.active){ garbage.abandon(); setGarbageBeacon(null); hideGarbageBins(); updateGarbageHud(); }
   taxi.setPickers(customMapPickers(map, OFFSET));   // cab fares run on custom streets too
   courier.setPickers(customMapPickers(map, OFFSET));   // courier orders run on custom streets too
   bus.setPickers(busRoutePickers(map, OFFSET));   // bus routes run on custom streets too
   amb.setPickers(ambulancePickers(map, OFFSET));   // EMS calls run on custom streets too
   fire.setPickers(firePickers(map, OFFSET));   // fire calls run on custom streets too
   policeJob.setPickers(policePickers(map, OFFSET));   // patrol calls run on custom streets too
+  garbage.setPickers(garbageRoutePickers(map, OFFSET));   // garbage routes run on custom streets too
   weaponCtx.colliders=customMap.colliders; weaponCtx.targets=[];
   minimap.setCustom(customMap.painter); minimap.setWaypoint(null);
   setTimeOfDay((MAP_THEMES[map.theme]||MAP_THEMES.summer).sky, true);
@@ -864,12 +869,14 @@ function exitCustom(){
   if(amb.active){ amb.abandon(); setAmbBeacon(null); hideAmbPed(); updateAmbHud(); }
   if(fire.active){ fire.abandon(); setFireBeacon(null); hideFireMesh(); updateFireHud(); }
   if(policeJob.active){ policeJob.abandon(); setPoliceBeacon(null); hideSuspectCar(); updatePoliceHud(); }
+  if(garbage.active){ garbage.abandon(); setGarbageBeacon(null); hideGarbageBins(); updateGarbageHud(); }
   taxi.setPickers(null);   // back to the main-city grid
   courier.setPickers(null);   // courier orders back to the main-city grid too
   bus.setPickers(null);   // bus routes back to the main-city grid too
   amb.setPickers(null);   // EMS calls back to the main-city grid too
   fire.setPickers(null);   // fire calls back to the main-city grid too
   policeJob.setPickers(null);   // patrol calls back to the main-city grid too
+  garbage.setPickers(null);   // garbage routes back to the main-city grid too
   customMap.dispose(); customMap=null;
   weaponCtx.colliders=city.colliders; weaponCtx.targets=shops.targets;
   minimap.setCustom(null);
@@ -1590,6 +1597,89 @@ function updatePoliceHud(){
   }else{ $('pc-arrow').classList.add('hidden'); $('pc-dist').textContent = ''; }
 }
 
+// ---------------- garbage routes: beacon + HUD + curb bins (logic lives in garbage.js) ----------------
+// The beacon is green for a bin stop — never a fare, a delivery or a
+// pursuit — so the jobs never read as each other on the street. The bins
+// waiting at the next stop are boxes on the curb, not just a marker: up
+// to four of them, one per bin still waiting, shrinking as the crew loads
+// them into the hopper. On a depot run the beacon swings to the transfer
+// station and the bins hide.
+function setGarbageBeacon(p){
+  if(!p){ if(garbageBeacon) garbageBeacon.visible = false; return; }
+  if(!garbageBeacon){
+    const ringMat = new THREE.MeshBasicMaterial({ color:0x22c55e, transparent:true, opacity:0.85, depthWrite:false, side:THREE.DoubleSide });
+    const beamMat = new THREE.MeshBasicMaterial({ color:0x22c55e, transparent:true, opacity:0.2, depthWrite:false, side:THREE.DoubleSide, blending:THREE.AdditiveBlending });
+    garbageBeacon = new THREE.Group();
+    garbageBeacon.add(new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 40).rotateX(-Math.PI / 2).translate(0, 0.1, 0), ringMat));
+    garbageBeacon.add(new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 30, 24, 1, true).translate(0, 15, 0), beamMat));
+    scene.add(garbageBeacon);
+  }
+  garbageBeacon.visible = true; garbageBeacon.position.set(p.x, 0, p.z);
+}
+function setGarbageBins(p, count){
+  if(!scene || !p) return;
+  const binMat = new THREE.MeshStandardMaterial({ color:0x1f3d2b, roughness:0.85 });
+  const lidMat = new THREE.MeshStandardMaterial({ color:0x2d6a4f, roughness:0.7 });
+  const n = Math.min(4, Math.max(0, count | 0));
+  for(let i = 0; i < 4; i++){
+    if(i >= n){ if(garbageBins[i]) garbageBins[i].visible = false; continue; }
+    if(!garbageBins[i]){
+      const g = new THREE.Group();
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.9, 0.7), binMat);
+      body.position.y = 0.45; body.castShadow = true;
+      const lid = new THREE.Mesh(new THREE.BoxGeometry(0.74, 0.1, 0.74), lidMat);
+      lid.position.y = 0.95;
+      g.add(body); g.add(lid);
+      garbageBins[i] = g; scene.add(g);
+    }
+    const a = i * 1.9 + 0.4, r = 1.8;
+    garbageBins[i].position.set(p.x + Math.cos(a) * r, 0, p.z + Math.sin(a) * r);
+    garbageBins[i].visible = true;
+  }
+}
+function hideGarbageBins(){ for(const b of garbageBins) if(b) b.visible = false; }
+function updateGarbageHud(){
+  const el = $('garbage-hud'); if(!el) return;
+  if(!garbage.active){ el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  const px = physics.pos.x, pz = physics.pos.z, h = physics.heading, tg = garbage.target;
+  const stop = garbage.nextStop;
+  if(garbage.phase === 'depot'){
+    $('gb-obj').textContent = 'To the depot — empty the hopper · ' + garbage.hopper + ' aboard';
+  }else{
+    $('gb-obj').textContent = 'Stop ' + (garbage.stopIndex + 1) + '/' + garbage.stopCount
+      + (stop ? ' · ' + stop.bins + ' bins waiting' : '')
+      + (garbage.hopper ? ' · ' + garbage.hopper + ' in the hopper' : '');
+  }
+  if(garbage.phase === 'depot'){
+    $('gb-time').textContent = '⏱ PAUSED';
+    $('gb-time').classList.remove('low');
+  }else{
+    const tl = garbage.timeLeft;
+    $('gb-time').textContent = tl >= 0 ? '⏱ ' + Math.ceil(tl) + 's' : '⏱ LATE';
+    $('gb-time').classList.toggle('low', tl < 10);
+  }
+  const info = $('gb-info');
+  if(info){
+    const bits = [];
+    if(garbage.loadValue > 0) bits.push('💵 $' + garbage.loadValue.toLocaleString() + ' in the hopper');
+    if(garbage.banked > 0) bits.push('🏦 $' + garbage.banked.toLocaleString() + ' banked');
+    if(garbage.isLoading({ x:px, z:pz, speed:Math.abs(tele.speed) })) bits.push('🗑️ Loading…');
+    if(garbage.surge > 1) bits.push('Surge ×' + garbage.surge);
+    if(garbage.routes > 0) bits.push(garbage.routes + ' routes · ' + garbage.bins + ' bins · $' + garbage.earned.toLocaleString());
+    if(garbage.ratingCount > 0) bits.push('★ ' + garbage.ratingAvg.toFixed(1) + ' (' + garbage.ratingCount + ' routes)');
+    info.textContent = bits.join(' · ');
+  }
+  if(tg && !inside){
+    const a = Math.atan2(-(tg.x - px), -(tg.z - pz));
+    const rel = Math.atan2(Math.sin(a - h), Math.cos(a - h));
+    const arrow = $('gb-arrow');
+    arrow.style.transform = 'rotate(' + (-rel).toFixed(3) + 'rad)';
+    arrow.classList.remove('hidden');
+    $('gb-dist').textContent = Math.round(Math.hypot(tg.x - px, tg.z - pz)) + ' m';
+  }else{ $('gb-arrow').classList.add('hidden'); $('gb-dist').textContent = ''; }
+}
+
 // ---------------- full map + GPS waypoint ----------------
 let bigMapOpen=false;
 function playerXZ(){ return onFoot ? { x:inside?inside.back.x:foot.pos.x, z:inside?inside.back.z:foot.pos.z, h:foot.heading } : { x:physics.pos.x, z:physics.pos.z, h:physics.heading }; }
@@ -2262,6 +2352,9 @@ function frame(now){
   if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && bus.active){
     bus.abandon(); setBusBeacon(null); hideBusPeds(); updateBusHud(); toast('🚌 Route abandoned — farebox lost', 2000);
   }
+  if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && garbage.active){
+    garbage.abandon(); setGarbageBeacon(null); hideGarbageBins(); updateGarbageHud(); toast('🗑️ Route abandoned — hopper load lost', 2000);
+  }
   if(editorOpen){
     updateEditorCamera(dt);
   }else if(playing && onFoot){
@@ -2540,7 +2633,7 @@ function frame(now){
     // Fire truck: the Winnipeg Fire Paramedic Service loop — a call
     // comes in, race to the fire, park close and spray until it is out
     // before it fully engulfs. The truck runs its own shift, so it never
-    // fights the cab, the courier, the bus or the ambulance for a beacon;
+    // fights the cab, the courier, the bus, the ambulance or the garbage truck for a beacon;
     // switching out of the rig ends the call.
     if(fire.setInFireTruck(isFireCar(carDef)) === 'abandoned'){ hideFireMesh(); toast('🔥 Call abandoned — you switched cars', 2000); }
     if(isFireCar(carDef)){
@@ -2566,8 +2659,8 @@ function frame(now){
     updateFireMesh(dt);
     // Police patrol: the Interceptor answers dispatch — a suspect is
     // fleeing, and the chase is on. The cruiser runs its own shift, so
-    // it never fights the cab, the courier, the bus, the ambulance or
-    // the fire truck for a beacon; switching out of the cruiser ends it.
+    // it never fights the cab, the courier, the bus, the ambulance, the
+    // fire truck or the garbage truck for a beacon; switching out of the cruiser ends it.
     if(policeJob.setInPoliceCar(isPoliceCar(carDef)) === 'abandoned'){ hideSuspectCar(); toast('🚔 Call abandoned — you switched cars', 2000); }
     if(isPoliceCar(carDef)){
       for(const ev of policeJob.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100, surge:timeSurge*wSurge })){
@@ -2594,7 +2687,42 @@ function frame(now){
       }
     }
     updateSuspectCar(dt);
-    if(frameN % 3 === 0){ updateTaxiHud(); updateCourierHud(); updateBusHud(); updateAmbHud(); updateFireHud(); updatePoliceHud(); }
+    // Garbage route: the sanitation loop — a chain of bin stops, bins
+    // loading one at a time, the hopper emptying at the depot when it
+    // fills, and the route paying only when the last stop clears. The
+    // truck runs its own shift, so it never fights the cab, the courier,
+    // the bus, the ambulance, the fire truck or the cruiser for a beacon;
+    // switching out of the truck ends it.
+    if(garbage.setInTruck(isGarbageCar(carDef)) === 'abandoned'){ hideGarbageBins(); toast('🗑️ Route abandoned — you switched cars', 2000); }
+    if(isGarbageCar(carDef)){
+      for(const ev of garbage.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100, surge:timeSurge*wSurge })){
+        if(ev.type === 'routeStart'){ setGarbageBeacon(ev.stops[0]); setGarbageBins(ev.stops[0], ev.stops[0].bins);
+          toast('🗑️ Route started — ' + ev.stops.length + ' stops' + (ev.surge > 1 ? ' · surge ×' + ev.surge : ''), 2600); }
+        else if(ev.type === 'binLoaded'){ const next = garbage.nextStop; if(next) setGarbageBins(next, ev.binsLeft); }
+        else if(ev.type === 'stopCleared'){ const next = garbage.target; setGarbageBeacon(next); if(next && garbage.phase === 'collect') setGarbageBins(next, next.bins);
+          audio.beep(990, 0.08);
+          toast('🗑️ Stop cleared — ' + ev.hopper + ' in the hopper · $' + ev.loadValue.toLocaleString() + ' aboard' + (ev.onTime ? '' : ' · late for this leg'), 2200); }
+        else if(ev.type === 'hopperFull'){ setGarbageBeacon(garbage.depot); hideGarbageBins();
+          toast('🗑️ Hopper full — to the depot to empty it!', 2400); }
+        else if(ev.type === 'emptied'){ const next = garbage.target; setGarbageBeacon(next); if(next) setGarbageBins(next, next.bins);
+          audio.beep(990, 0.08);
+          toast('🗑️ Emptied — $' + ev.dumped.toLocaleString() + ' banked · $' + ev.banked.toLocaleString() + ' safe', 2200); }
+        else if(ev.type === 'spilled'){ toast('🗑️ A bin spilled off the back — drive smoother!', 2000); }
+        else if(ev.type === 'routeComplete'){ addCash(ev.total); setGarbageBeacon(null); hideGarbageBins();
+          save.garbage = garbage.career; saveSave(save);   // career (routes, bins, on-time record) persists
+          const stars = '★'.repeat(ev.rating) + '☆'.repeat(5 - ev.rating);
+          let msg = '🗑️ Route complete — $' + ev.binPay.toLocaleString() + ' bins + $' + ev.completionBonus.toLocaleString() + ' bonus';
+          if(ev.onTimeBonus > 0) msg += ' + $' + ev.onTimeBonus.toLocaleString() + ' on time (' + ev.onTimeLegs + '/' + ev.totalStops + ' legs)';
+          if(ev.surge > 1) msg += ' · surge ×' + ev.surge;
+          msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';
+          toast(msg, 3200); }
+        else if(ev.type === 'routeFailed'){ setGarbageBeacon(null); hideGarbageBins();
+          let msg = '🗑️ Truck wrecked — route lost, $' + ev.loadLost.toLocaleString() + ' in the hopper gone';
+          if(ev.banked > 0) msg += ' · $' + ev.banked.toLocaleString() + ' already banked is safe';
+          toast(msg, 2400); }
+      }
+    }
+    if(frameN % 3 === 0){ updateTaxiHud(); updateCourierHud(); updateBusHud(); updateAmbHud(); updateFireHud(); updatePoliceHud(); updateGarbageHud(); }
     // crash detector: a one-frame speed collapse only comes from a shunt
     // (braking and drag bleed speed slowly). tele.speed lags collisions by
     // a frame, so this catches walls and traffic alike.
@@ -2628,7 +2756,7 @@ function frame(now){
     updateEffects(dt);
     shops.update(dt);
     weapons.update(dt, weaponCtx, false, false);   // let bullets finish flying
-    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null, mp, copBlips(), taxi.target || courier.target || bus.target || policeJob.target);
+    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null, mp, copBlips(), taxi.target || courier.target || bus.target || policeJob.target || garbage.target);
     updateAction();
     if(controls.consumeAction()) doAction();
     if(qm) qm.update(dt);
@@ -2808,6 +2936,7 @@ async function boot(){
     amb.loadCareer(save.amb);   // EMS career (calls, lives saved, earnings, rating) survives sessions
     fire.loadCareer(save.fire);   // fire career (calls, fires out, earnings, rating) survives sessions
     policeJob.loadCareer(save.police);   // patrol career (calls, arrests, earnings, rating) survives sessions
+    garbage.loadCareer(save.garbage);   // garbage career (routes, bins, earnings, on-time record) survives sessions
     audio=createAudio();
     orient=initOrientation(onViewResize);
     await initScene();
