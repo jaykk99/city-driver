@@ -54,6 +54,7 @@ import { createFireJob, isFireCar, firePickers } from './fire.js';
 import { createPoliceJob, isPoliceCar, policePickers } from './policejob.js';
 import { createGarbageJob, isGarbageCar, garbageRoutePickers } from './garbage.js';
 import { createTowJob, isTowCar, towPickers } from './towjob.js';
+import { createSnowplowJob, isPlowCar, snowplowRoutePickers } from './snowplow.js';
 import { createWeather, weatherSurgeFor, weatherSurgeLabelFor } from './weather.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
@@ -123,6 +124,7 @@ let fire=createFireJob(), fireBeacon=null, fireMesh=null, waterJet=null;   // fi
 let policeJob=createPoliceJob(), policeBeacon=null, suspectCar=null;   // police patrol: beacon + suspect car + state live here, logic in policejob.js
 let garbage=createGarbageJob(), garbageBeacon=null, garbageBins=[];   // garbage route: beacon + curb bins + state live here, logic in garbage.js
 let tow=createTowJob(), towBeacon=null, towedCar=null;   // tow calls: beacon + stranded car + state live here, logic in towjob.js
+let plow=createSnowplowJob(), plowBeacon=null, plowDrifts=[];   // snow plow routes: beacon + snow drifts + state live here, logic in snowplow.js
 let weather=createWeather();   // the sky: clear/cloudy/rain/storm, logic in weather.js
 let rainPts=null, lightningT=0, flashEl=null;   // rain streaks + storm flash, built in init()
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
@@ -136,6 +138,7 @@ const ENGINES={ sport:{cyl:6,red:7200}, muscle:{cyl:8,red:6200,idle:750}, super:
   fire:{cyl:6,red:5200,idle:650},
   garbage:{cyl:6,red:5200,idle:650},
   tow:{cyl:6,red:5200,idle:650},
+  plow:{cyl:6,red:5200,idle:650},
   brawler:{cyl:8,red:7000,idle:750,voice:'v8x'}, kaze:{cyl:6,red:7600,idle:850,voice:'i6'}, vanta:{cyl:10,red:8700,idle:1000,voice:'v10'}, rally:{cyl:4,red:7800,idle:950,voice:'i4r'}, baja:{cyl:8,red:6000,idle:700,voice:'v8'} };
 function applyGearbox(){
   if(physics && physics.box) physics.box.mode = save.manual ? 'manual' : 'auto';
@@ -848,6 +851,7 @@ function playCustom(map){
   if(policeJob.active){ policeJob.abandon(); setPoliceBeacon(null); hideSuspectCar(); updatePoliceHud(); }
   if(garbage.active){ garbage.abandon(); setGarbageBeacon(null); hideGarbageBins(); updateGarbageHud(); }
   if(tow.active){ tow.abandon(); setTowBeacon(null); hideTowedCar(); updateTowHud(); }
+  if(plow.active){ plow.abandon(); setPlowBeacon(null); hidePlowDrifts(); updatePlowHud(); }
   taxi.setPickers(customMapPickers(map, OFFSET));   // cab fares run on custom streets too
   courier.setPickers(customMapPickers(map, OFFSET));   // courier orders run on custom streets too
   bus.setPickers(busRoutePickers(map, OFFSET));   // bus routes run on custom streets too
@@ -856,6 +860,7 @@ function playCustom(map){
   policeJob.setPickers(policePickers(map, OFFSET));   // patrol calls run on custom streets too
   garbage.setPickers(garbageRoutePickers(map, OFFSET));   // garbage routes run on custom streets too
   tow.setPickers(towPickers(map, OFFSET));   // tow calls run on custom streets too
+  plow.setPickers(snowplowRoutePickers(map, OFFSET));   // plow routes run on custom streets too
   weaponCtx.colliders=customMap.colliders; weaponCtx.targets=[];
   minimap.setCustom(customMap.painter); minimap.setWaypoint(null);
   setTimeOfDay((MAP_THEMES[map.theme]||MAP_THEMES.summer).sky, true);
@@ -876,6 +881,7 @@ function exitCustom(){
   if(policeJob.active){ policeJob.abandon(); setPoliceBeacon(null); hideSuspectCar(); updatePoliceHud(); }
   if(garbage.active){ garbage.abandon(); setGarbageBeacon(null); hideGarbageBins(); updateGarbageHud(); }
   if(tow.active){ tow.abandon(); setTowBeacon(null); hideTowedCar(); updateTowHud(); }
+  if(plow.active){ plow.abandon(); setPlowBeacon(null); hidePlowDrifts(); updatePlowHud(); }
   taxi.setPickers(null);   // back to the main-city grid
   courier.setPickers(null);   // courier orders back to the main-city grid too
   bus.setPickers(null);   // bus routes back to the main-city grid too
@@ -884,6 +890,7 @@ function exitCustom(){
   policeJob.setPickers(null);   // patrol calls back to the main-city grid too
   garbage.setPickers(null);   // garbage routes back to the main-city grid too
   tow.setPickers(null);   // tow calls back to the main-city grid too
+  plow.setPickers(null);   // plow routes back to the main-city grid too
   customMap.dispose(); customMap=null;
   weaponCtx.colliders=city.colliders; weaponCtx.targets=shops.targets;
   minimap.setCustom(null);
@@ -1775,6 +1782,85 @@ function updateTowHud(){
   }else{ $('tw-arrow').classList.add('hidden'); $('tw-dist').textContent = ''; }
 }
 
+// ---------------- snow plow routes: beacon + HUD + snow drifts (logic lives in snowplow.js) ----------------
+// The beacon is ice blue for a snowed-in street — never a fare, a
+// delivery or a pursuit — so the jobs never read as each other on the
+// street. The drifts waiting at the next stop are white mounds on the
+// road, not just a marker: up to four of them, one per drift still
+// waiting, shrinking as the blade clears them. On a depot run the
+// beacon swings to the salt shed and the drifts hide.
+function setPlowBeacon(p){
+  if(!p){ if(plowBeacon) plowBeacon.visible = false; return; }
+  if(!plowBeacon){
+    const ringMat = new THREE.MeshBasicMaterial({ color:0x7dd3fc, transparent:true, opacity:0.85, depthWrite:false, side:THREE.DoubleSide });
+    const beamMat = new THREE.MeshBasicMaterial({ color:0x7dd3fc, transparent:true, opacity:0.2, depthWrite:false, side:THREE.DoubleSide, blending:THREE.AdditiveBlending });
+    plowBeacon = new THREE.Group();
+    plowBeacon.add(new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 40).rotateX(-Math.PI / 2).translate(0, 0.1, 0), ringMat));
+    plowBeacon.add(new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 30, 24, 1, true).translate(0, 15, 0), beamMat));
+    scene.add(plowBeacon);
+  }
+  plowBeacon.visible = true; plowBeacon.position.set(p.x, 0, p.z);
+}
+function setPlowDrifts(stop){
+  if(!scene || !stop) return;
+  const driftMat = new THREE.MeshStandardMaterial({ color:0xe8f1f8, roughness:0.95 });
+  const n = Math.min(4, stop.drifts.length);
+  for(let i = 0; i < 4; i++){
+    if(i >= n){ if(plowDrifts[i]) plowDrifts[i].visible = false; continue; }
+    if(!plowDrifts[i]){
+      const m = new THREE.Mesh(new THREE.SphereGeometry(1.3, 12, 8), driftMat);
+      m.scale.y = 0.35; m.castShadow = true;
+      plowDrifts[i] = m; scene.add(m);
+    }
+    const d = stop.drifts[i];
+    plowDrifts[i].position.set(d.x, 0.05, d.z);
+    plowDrifts[i].visible = !d.cleared;
+  }
+}
+function hidePlowDrifts(){ for(const d of plowDrifts) if(d) d.visible = false; }
+function updatePlowHud(){
+  const el = $('plow-hud'); if(!el) return;
+  if(!plow.active){ el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  const px = physics.pos.x, pz = physics.pos.z, h = physics.heading, tg = plow.target;
+  const stop = plow.nextStop;
+  if(plow.phase === 'depot'){
+    $('pw-obj').textContent = 'To the depot — refill the salt · ' + plow.salt + ' left';
+  }else{
+    $('pw-obj').textContent = 'Stop ' + (plow.stopIndex + 1) + '/' + plow.stopCount
+      + (stop ? ' · ' + plow.driftsLeft + ' drifts waiting' : '')
+      + ' · 🧂 ' + plow.salt + '/' + plow.saltCapacity + ' salt';
+  }
+  if(plow.phase === 'depot'){
+    $('pw-time').textContent = '⏱ PAUSED';
+    $('pw-time').classList.remove('low');
+  }else{
+    const tl = plow.timeLeft;
+    $('pw-time').textContent = tl >= 0 ? '⏱ ' + Math.ceil(tl) + 's' : '⏱ LATE';
+    $('pw-time').classList.toggle('low', tl < 10);
+  }
+  const info = $('pw-info');
+  if(info){
+    const bits = [];
+    if(plow.loadValue > 0) bits.push('💵 $' + plow.loadValue.toLocaleString() + ' unbanked');
+    if(plow.banked > 0) bits.push('🏦 $' + plow.banked.toLocaleString() + ' banked');
+    if(plow.isPlowing({ x:px, z:pz, speed:Math.abs(tele.speed) })) bits.push('❄️ Plowing…');
+    else if(plow.phase === 'collect' && plow.nextDrift) bits.push('Plow through at 2–15 m/s');
+    if(plow.surge > 1) bits.push('Surge ×' + plow.surge);
+    if(plow.routes > 0) bits.push(plow.routes + ' routes · ' + plow.drifts + ' drifts · $' + plow.earned.toLocaleString());
+    if(plow.ratingCount > 0) bits.push('★ ' + plow.ratingAvg.toFixed(1) + ' (' + plow.ratingCount + ' routes)');
+    info.textContent = bits.join(' · ');
+  }
+  if(tg && !inside){
+    const a = Math.atan2(-(tg.x - px), -(tg.z - pz));
+    const rel = Math.atan2(Math.sin(a - h), Math.cos(a - h));
+    const arrow = $('pw-arrow');
+    arrow.style.transform = 'rotate(' + (-rel).toFixed(3) + 'rad)';
+    arrow.classList.remove('hidden');
+    $('pw-dist').textContent = Math.round(Math.hypot(tg.x - px, tg.z - pz)) + ' m';
+  }else{ $('pw-arrow').classList.add('hidden'); $('pw-dist').textContent = ''; }
+}
+
 // ---------------- full map + GPS waypoint ----------------
 let bigMapOpen=false;
 function playerXZ(){ return onFoot ? { x:inside?inside.back.x:foot.pos.x, z:inside?inside.back.z:foot.pos.z, h:foot.heading } : { x:physics.pos.x, z:physics.pos.z, h:physics.heading }; }
@@ -2453,6 +2539,9 @@ function frame(now){
   if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && tow.active){
     tow.abandon(); setTowBeacon(null); hideTowedCar(); updateTowHud(); toast('🪝 Call abandoned — car left on the road', 2000);
   }
+  if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && plow.active){
+    plow.abandon(); setPlowBeacon(null); hidePlowDrifts(); updatePlowHud(); toast('❄️ Route abandoned — unbanked drifts lost', 2000);
+  }
   if(editorOpen){
     updateEditorCamera(dt);
   }else if(playing && onFoot){
@@ -2854,8 +2943,37 @@ function frame(now){
           toast(ev.reason === 'totalled' ? '🪝 The car fell apart on the hook — call lost' : '🪝 Truck wrecked — call lost', 2400); }
       }
     }
+    // plow routes: drive the snow plow in free roam and a route starts.
+    // Switching out of the plow ends it.
+    if(plow.setInPlow(isPlowCar(carDef)) === 'abandoned'){ hidePlowDrifts(); toast('❄️ Route abandoned — you switched cars', 2000); }
+    if(isPlowCar(carDef)){
+      for(const ev of plow.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100, surge:timeSurge*wSurge })){
+        if(ev.type === 'routeStart'){ setPlowBeacon(plow.target); setPlowDrifts(plow.nextStop);
+          if(audio.dispatch) audio.dispatch();
+          toast('❄️ Plow route — ' + plow.stopCount + ' stops' + (ev.surge > 1 ? ' · surge ×' + ev.surge : ''), 2600); }
+        else if(ev.type === 'driftCleared'){ setPlowDrifts(plow.nextStop); }
+        else if(ev.type === 'stopCleared'){ const next = plow.target; setPlowBeacon(next); if(next && plow.phase === 'collect') setPlowDrifts(plow.nextStop);
+          if(ev.onTime) toast('❄️ Stop cleared — on schedule', 1800); }
+        else if(ev.type === 'saltEmpty'){ setPlowBeacon(plow.depot); hidePlowDrifts();
+          toast('🧂 Salt dry — to the depot to refill', 2400); }
+        else if(ev.type === 'refilled'){ const next = plow.target; setPlowBeacon(next); if(next) setPlowDrifts(plow.nextStop);
+          toast('🧂 Salt refilled — $' + ev.dumped.toLocaleString() + ' banked', 2200); }
+        else if(ev.type === 'spilled'){ toast('🧂 Rough — salt spilled, ' + ev.salt + ' left', 2000); }
+        else if(ev.type === 'routeComplete'){ addCash(ev.total); setPlowBeacon(null); hidePlowDrifts();
+          save.plow = plow.career; saveSave(save);   // career (routes, drifts, rating) persists
+          const stars = '★'.repeat(ev.rating) + '☆'.repeat(5 - ev.rating);
+          let msg = '❄️ Route cleared — $' + ev.driftPay.toLocaleString() + ' drifts';
+          if(ev.completionBonus > 0) msg += ' + $' + ev.completionBonus.toLocaleString() + ' route';
+          if(ev.onTimeBonus > 0) msg += ' + $' + ev.onTimeBonus.toLocaleString() + ' on time';
+          if(ev.surge > 1) msg += ' · surge ×' + ev.surge;
+          msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';
+          toast(msg, 3200); }
+        else if(ev.type === 'routeFailed'){ setPlowBeacon(null); hidePlowDrifts();
+          toast('❄️ Plow wrecked — route lost' + (ev.banked > 0 ? ', $' + ev.banked.toLocaleString() + ' banked kept' : ''), 2400); }
+      }
+    }
     updateTowedCar(dt);
-    if(frameN % 3 === 0){ updateTaxiHud(); updateCourierHud(); updateBusHud(); updateAmbHud(); updateFireHud(); updatePoliceHud(); updateGarbageHud(); updateTowHud(); }
+    if(frameN % 3 === 0){ updateTaxiHud(); updateCourierHud(); updateBusHud(); updateAmbHud(); updateFireHud(); updatePoliceHud(); updateGarbageHud(); updateTowHud(); updatePlowHud(); }
     // crash detector: a one-frame speed collapse only comes from a shunt
     // (braking and drag bleed speed slowly). tele.speed lags collisions by
     // a frame, so this catches walls and traffic alike.
@@ -2889,7 +3007,7 @@ function frame(now){
     updateEffects(dt);
     shops.update(dt);
     weapons.update(dt, weaponCtx, false, false);   // let bullets finish flying
-    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null, mp, copBlips(), taxi.target || courier.target || bus.target || policeJob.target || garbage.target || tow.target);
+    minimap.draw(physics.pos.x, physics.pos.z, physics.heading, null, mp, copBlips(), taxi.target || courier.target || bus.target || policeJob.target || garbage.target || tow.target || plow.target);
     updateAction();
     if(controls.consumeAction()) doAction();
     if(qm) qm.update(dt);
@@ -3071,6 +3189,7 @@ async function boot(){
     policeJob.loadCareer(save.police);   // patrol career (calls, arrests, earnings, rating) survives sessions
     garbage.loadCareer(save.garbage);   // garbage career (routes, bins, earnings, on-time record) survives sessions
     tow.loadCareer(save.tow);   // tow career (calls, tows, earnings, rating) survives sessions
+    plow.loadCareer(save.plow);   // plow career (routes, drifts, earnings, on-time record) survives sessions
     audio=createAudio();
     orient=initOrientation(onViewResize);
     await initScene();
