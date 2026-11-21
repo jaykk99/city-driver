@@ -56,6 +56,7 @@ import { createGarbageJob, isGarbageCar, garbageRoutePickers } from './garbage.j
 import { createTowJob, isTowCar, towPickers } from './towjob.js';
 import { createSnowplowJob, isPlowCar, snowplowRoutePickers } from './snowplow.js';
 import { createStreetSweeperJob, isSweeperCar, sweeperRoutePickers } from './streetsweeper.js';
+import { createMixerJob, isMixerCar, mixerRoutePickers } from './mixer.js';
 import { createWeather, weatherSurgeFor, weatherSurgeLabelFor } from './weather.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
@@ -127,6 +128,7 @@ let garbage=createGarbageJob(), garbageBeacon=null, garbageBins=[];   // garbage
 let tow=createTowJob(), towBeacon=null, towedCar=null;   // tow calls: beacon + stranded car + state live here, logic in towjob.js
 let plow=createSnowplowJob(), plowBeacon=null, plowDrifts=[];   // snow plow routes: beacon + snow drifts + state live here, logic in snowplow.js
 let sweeper=createStreetSweeperJob(), sweeperBeacon=null, sweeperPiles=[];   // street sweeper routes: beacon + leaf piles + state live here, logic in streetsweeper.js
+let mixer=createMixerJob(), mixerBeacon=null, mixerCones=[];   // cement mixer routes: beacon + pour cones + state live here, logic in mixer.js
 let weather=createWeather();   // the sky: clear/cloudy/rain/storm, logic in weather.js
 let rainPts=null, lightningT=0, flashEl=null;   // rain streaks + storm flash, built in init()
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
@@ -142,6 +144,7 @@ const ENGINES={ sport:{cyl:6,red:7200}, muscle:{cyl:8,red:6200,idle:750}, super:
   tow:{cyl:6,red:5200,idle:650},
   plow:{cyl:6,red:5200,idle:650},
   sweeper:{cyl:6,red:5200,idle:650},
+  mixer:{cyl:6,red:5200,idle:650},
   brawler:{cyl:8,red:7000,idle:750,voice:'v8x'}, kaze:{cyl:6,red:7600,idle:850,voice:'i6'}, vanta:{cyl:10,red:8700,idle:1000,voice:'v10'}, rally:{cyl:4,red:7800,idle:950,voice:'i4r'}, baja:{cyl:8,red:6000,idle:700,voice:'v8'} };
 function applyGearbox(){
   if(physics && physics.box) physics.box.mode = save.manual ? 'manual' : 'auto';
@@ -856,6 +859,7 @@ function playCustom(map){
   if(tow.active){ tow.abandon(); setTowBeacon(null); hideTowedCar(); updateTowHud(); }
   if(plow.active){ plow.abandon(); setPlowBeacon(null); hidePlowDrifts(); updatePlowHud(); }
   if(sweeper.active){ sweeper.abandon(); setSweeperBeacon(null); hideSweeperPiles(); updateSweeperHud(); }
+  if(mixer.active){ mixer.abandon(); setMixerBeacon(null); hideMixerCones(); updateMixerHud(); }
   taxi.setPickers(customMapPickers(map, OFFSET));   // cab fares run on custom streets too
   courier.setPickers(customMapPickers(map, OFFSET));   // courier orders run on custom streets too
   bus.setPickers(busRoutePickers(map, OFFSET));   // bus routes run on custom streets too
@@ -866,6 +870,7 @@ function playCustom(map){
   tow.setPickers(towPickers(map, OFFSET));   // tow calls run on custom streets too
   plow.setPickers(snowplowRoutePickers(map, OFFSET));   // plow routes run on custom streets too
   sweeper.setPickers(sweeperRoutePickers(map, OFFSET));   // sweeper routes run on custom streets too
+  mixer.setPickers(mixerRoutePickers(map, OFFSET));   // mixer routes run on custom streets too
   weaponCtx.colliders=customMap.colliders; weaponCtx.targets=[];
   minimap.setCustom(customMap.painter); minimap.setWaypoint(null);
   setTimeOfDay((MAP_THEMES[map.theme]||MAP_THEMES.summer).sky, true);
@@ -888,6 +893,7 @@ function exitCustom(){
   if(tow.active){ tow.abandon(); setTowBeacon(null); hideTowedCar(); updateTowHud(); }
   if(plow.active){ plow.abandon(); setPlowBeacon(null); hidePlowDrifts(); updatePlowHud(); }
   if(sweeper.active){ sweeper.abandon(); setSweeperBeacon(null); hideSweeperPiles(); updateSweeperHud(); }
+  if(mixer.active){ mixer.abandon(); setMixerBeacon(null); hideMixerCones(); updateMixerHud(); }
   taxi.setPickers(null);   // back to the main-city grid
   courier.setPickers(null);   // courier orders back to the main-city grid too
   bus.setPickers(null);   // bus routes back to the main-city grid too
@@ -898,6 +904,7 @@ function exitCustom(){
   tow.setPickers(null);   // tow calls back to the main-city grid too
   plow.setPickers(null);   // plow routes back to the main-city grid too
   sweeper.setPickers(null);   // sweeper routes back to the main-city grid too
+  mixer.setPickers(null);   // mixer routes back to the main-city grid too
   customMap.dispose(); customMap=null;
   weaponCtx.colliders=city.colliders; weaponCtx.targets=shops.targets;
   minimap.setCustom(null);
@@ -1947,6 +1954,85 @@ function updateSweeperHud(){
   }else{ $('sw-arrow').classList.add('hidden'); $('sw-dist').textContent = ''; }
 }
 
+// ---------------- cement mixer routes: beacon + HUD + pour cones (logic lives in mixer.js) ----------------
+// The beacon is blue for a pour site — never a fare, a delivery or a
+// pursuit — so the jobs never read as each other on the street. The
+// pour site is marked by orange traffic cones on the road, one per load
+// still waiting, disappearing as the chute pours them in. On a plant
+// run the beacon swings to the batch plant and the cones hide.
+function setMixerBeacon(p){
+  if(!p){ if(mixerBeacon) mixerBeacon.visible = false; return; }
+  if(!mixerBeacon){
+    const ringMat = new THREE.MeshBasicMaterial({ color:0x60a5fa, transparent:true, opacity:0.85, depthWrite:false, side:THREE.DoubleSide });
+    const beamMat = new THREE.MeshBasicMaterial({ color:0x60a5fa, transparent:true, opacity:0.2, depthWrite:false, side:THREE.DoubleSide, blending:THREE.AdditiveBlending });
+    mixerBeacon = new THREE.Group();
+    mixerBeacon.add(new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 40).rotateX(-Math.PI / 2).translate(0, 0.1, 0), ringMat));
+    mixerBeacon.add(new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 30, 24, 1, true).translate(0, 15, 0), beamMat));
+    scene.add(mixerBeacon);
+  }
+  mixerBeacon.visible = true; mixerBeacon.position.set(p.x, 0, p.z);
+}
+function setMixerCones(stop){
+  if(!scene || !stop) return;
+  const coneMat = new THREE.MeshStandardMaterial({ color:0xf97316, roughness:0.7 });
+  const n = Math.min(2, stop.loads - stop.poured);
+  for(let i = 0; i < 2; i++){
+    if(i >= n){ if(mixerCones[i]) mixerCones[i].visible = false; continue; }
+    if(!mixerCones[i]){
+      const m = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.1, 10), coneMat);
+      m.castShadow = true;
+      mixerCones[i] = m; scene.add(m);
+    }
+    // Cones flank the pour point so the mixer pulls up between them.
+    const off = i === 0 ? -3 : 3;
+    mixerCones[i].position.set(stop.x + off, 0.55, stop.z);
+    mixerCones[i].visible = true;
+  }
+}
+function hideMixerCones(){ for(const c of mixerCones) if(c) c.visible = false; }
+function updateMixerHud(){
+  const el = $('mixer-hud'); if(!el) return;
+  if(!mixer.active){ el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  const px = physics.pos.x, pz = physics.pos.z, h = physics.heading, tg = mixer.target;
+  const stop = mixer.nextStop;
+  if(mixer.phase === 'plant'){
+    $('mx-obj').textContent = 'To the batch plant — refill the drum · ' + mixer.drum + ' aboard';
+  }else{
+    $('mx-obj').textContent = 'Stop ' + (mixer.stopIndex + 1) + '/' + mixer.stopCount
+      + (stop ? ' · ' + mixer.loadsLeft + ' loads waiting' : '')
+      + ' · 🏗️ ' + mixer.drum + '/' + mixer.drumCapacity + ' drum';
+  }
+  if(mixer.phase === 'plant'){
+    $('mx-time').textContent = '⏱ PAUSED';
+    $('mx-time').classList.remove('low');
+  }else{
+    const tl = mixer.timeLeft;
+    $('mx-time').textContent = tl >= 0 ? '⏱ ' + Math.ceil(tl) + 's' : '⏱ LATE';
+    $('mx-time').classList.toggle('low', tl < 10);
+  }
+  const info = $('mx-info');
+  if(info){
+    const bits = [];
+    if(mixer.loadValue > 0) bits.push('💵 $' + mixer.loadValue.toLocaleString() + ' unbanked');
+    if(mixer.banked > 0) bits.push('🏦 $' + mixer.banked.toLocaleString() + ' banked');
+    if(mixer.isPouring({ x:px, z:pz, speed:Math.abs(tele.speed) })) bits.push('🏗️ Pouring…');
+    else if(mixer.phase === 'pour' && mixer.nextStop) bits.push('Stop at the site to pour');
+    if(mixer.surge > 1) bits.push('Surge ×' + mixer.surge);
+    if(mixer.routes > 0) bits.push(mixer.routes + ' routes · ' + mixer.loads + ' loads · $' + mixer.earned.toLocaleString());
+    if(mixer.ratingCount > 0) bits.push('★ ' + mixer.ratingAvg.toFixed(1) + ' (' + mixer.ratingCount + ' routes)');
+    info.textContent = bits.join(' · ');
+  }
+  if(tg && !inside){
+    const a = Math.atan2(-(tg.x - px), -(tg.z - pz));
+    const rel = Math.atan2(Math.sin(a - h), Math.cos(a - h));
+    const arrow = $('mx-arrow');
+    arrow.style.transform = 'rotate(' + (-rel).toFixed(3) + 'rad)';
+    arrow.classList.remove('hidden');
+    $('mx-dist').textContent = Math.round(Math.hypot(tg.x - px, tg.z - pz)) + ' m';
+  }else{ $('mx-arrow').classList.add('hidden'); $('mx-dist').textContent = ''; }
+}
+
 // ---------------- full map + GPS waypoint ----------------
 let bigMapOpen=false;
 function playerXZ(){ return onFoot ? { x:inside?inside.back.x:foot.pos.x, z:inside?inside.back.z:foot.pos.z, h:foot.heading } : { x:physics.pos.x, z:physics.pos.z, h:physics.heading }; }
@@ -2631,6 +2717,9 @@ function frame(now){
   if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && sweeper.active){
     sweeper.abandon(); setSweeperBeacon(null); hideSweeperPiles(); updateSweeperHud(); toast('🧹 Route abandoned — unbanked piles lost', 2000);
   }
+  if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && mixer.active){
+    mixer.abandon(); setMixerBeacon(null); hideMixerCones(); updateMixerHud(); toast('🏗️ Route abandoned — unbanked pours lost', 2000);
+  }
   if(editorOpen){
     updateEditorCamera(dt);
   }else if(playing && onFoot){
@@ -3090,8 +3179,38 @@ function frame(now){
           toast('🧹 Sweeper wrecked — route lost' + (ev.banked > 0 ? ', $' + ev.banked.toLocaleString() + ' banked kept' : ''), 2400); }
       }
     }
+    // mixer routes: drive the cement mixer in free roam and a route starts.
+    // Switching out of the mixer ends it.
+    if(mixer.setInMixer(isMixerCar(carDef)) === 'abandoned'){ hideMixerCones(); toast('🏗️ Route abandoned — you switched cars', 2000); }
+    if(isMixerCar(carDef)){
+      for(const ev of mixer.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100, surge:timeSurge*wSurge })){
+        if(ev.type === 'routeStart'){ setMixerBeacon(mixer.target); setMixerCones(mixer.nextStop);
+          if(audio.dispatch) audio.dispatch();
+          toast('🏗️ Pour route — ' + mixer.stopCount + ' sites' + (ev.surge > 1 ? ' · surge ×' + ev.surge : ''), 2600); }
+        else if(ev.type === 'loadPoured'){ setMixerCones(mixer.nextStop); }
+        else if(ev.type === 'stopCleared'){ const next = mixer.target; setMixerBeacon(next); if(next && mixer.phase === 'pour') setMixerCones(mixer.nextStop);
+          if(ev.onTime) toast('🏗️ Site poured — on schedule', 1800); }
+        else if(ev.type === 'drumEmpty'){ setMixerBeacon(mixer.plant); hideMixerCones();
+          toast('🏗️ Drum dry — to the batch plant to refill it', 2400); }
+        else if(ev.type === 'refilled'){ const next = mixer.target; setMixerBeacon(next); if(next) setMixerCones(mixer.nextStop);
+          toast('🏗️ Drum refilled — $' + ev.dumped.toLocaleString() + ' banked', 2200); }
+        else if(ev.type === 'loadSet'){ toast('🏗️ A load set in the drum — ' + ev.drum + ' left', 2000); }
+        else if(ev.type === 'spilled'){ toast('🏗️ Rough — a load slopped out of the drum, ' + ev.drum + ' left', 2000); }
+        else if(ev.type === 'routeComplete'){ addCash(ev.total); setMixerBeacon(null); hideMixerCones();
+          save.mixer = mixer.career; saveSave(save);   // career (routes, loads, rating) persists
+          const stars = '★'.repeat(ev.rating) + '☆'.repeat(5 - ev.rating);
+          let msg = '🏗️ Route poured — $' + ev.loadPay.toLocaleString() + ' loads';
+          if(ev.completionBonus > 0) msg += ' + $' + ev.completionBonus.toLocaleString() + ' route';
+          if(ev.onTimeBonus > 0) msg += ' + $' + ev.onTimeBonus.toLocaleString() + ' on time';
+          if(ev.surge > 1) msg += ' · surge ×' + ev.surge;
+          msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';
+          toast(msg, 3200); }
+        else if(ev.type === 'routeFailed'){ setMixerBeacon(null); hideMixerCones();
+          toast('🏗️ Mixer wrecked — route lost' + (ev.banked > 0 ? ', $' + ev.banked.toLocaleString() + ' banked kept' : ''), 2400); }
+      }
+    }
     updateTowedCar(dt);
-    if(frameN % 3 === 0){ updateTaxiHud(); updateCourierHud(); updateBusHud(); updateAmbHud(); updateFireHud(); updatePoliceHud(); updateGarbageHud(); updateTowHud(); updatePlowHud(); updateSweeperHud(); }
+    if(frameN % 3 === 0){ updateTaxiHud(); updateCourierHud(); updateBusHud(); updateAmbHud(); updateFireHud(); updatePoliceHud(); updateGarbageHud(); updateTowHud(); updatePlowHud(); updateSweeperHud(); updateMixerHud(); }
     // crash detector: a one-frame speed collapse only comes from a shunt
     // (braking and drag bleed speed slowly). tele.speed lags collisions by
     // a frame, so this catches walls and traffic alike.
@@ -3309,6 +3428,7 @@ async function boot(){
     tow.loadCareer(save.tow);   // tow career (calls, tows, earnings, rating) survives sessions
     plow.loadCareer(save.plow);   // plow career (routes, drifts, earnings, on-time record) survives sessions
     sweeper.loadCareer(save.sweeper);   // sweeper career (routes, piles, earnings, on-time record) survives sessions
+    mixer.loadCareer(save.mixer);   // mixer career (routes, loads, earnings, on-time record) survives sessions
     audio=createAudio();
     orient=initOrientation(onViewResize);
     await initScene();

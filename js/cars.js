@@ -43,6 +43,8 @@ export const CAR_DEFS = [
     stats:{ topSpeed:40, accel:11, handling:0.8, grip:1.15, nitroTime:4.0, nitroPower:1.25 }, extra:'plow' },
   { id:'sweeper', name:'Winnipeg Street Sweeper', desc:'Spring-clean rig. Sweep the piles, mind the hopper.', price:23000, colors:[0xeab308,0xf2f2f2,0x2d6a4f],
     stats:{ topSpeed:38, accel:11, handling:0.8, grip:1.1, nitroTime:4.0, nitroPower:1.25 }, extra:'sweeper' },
+  { id:'mixer', name:'Winnipeg Cement Mixer', desc:'Concrete rig. Pour the loads, mind the drum.', price:25000, colors:[0xf2f2f2,0x1e6fb8,0xc01818],
+    stats:{ topSpeed:40, accel:11, handling:0.8, grip:1.1, nitroTime:4.0, nitroPower:1.25 }, extra:'mixer' },
   { id:'hyper',  name:'Aurora Hyper', desc:'The fastest thing in the city. Wings and all.', price:90000, colors:[0xff5e3a,0xa855f7,0x18c0c0,0xf2f2f2,0x14161c],
     stats:{ topSpeed:76, accel:27, handling:1.3, grip:1.4, nitroTime:3.2, nitroPower:1.55 } },
   // ---- hero cars (Forge 3D, high-detail) ----
@@ -155,6 +157,12 @@ const PROFILES = {
     roof:null, splitter:false,
   },
   sweeper: {
+    W:2.5, wb:2.6, wheelR:0.42, track:2.1,
+    body:[[4.25,0.3],[4.3,0.6],[4.2,1.0],[3.9,2.8],[3.4,2.9],[-4.0,2.9],[-4.25,2.8],[-4.3,0.6],[-4.25,0.3],[-3.9,0.2],[3.9,0.2]],
+    glass:[[4.2,1.1],[3.95,2.6],[3.3,2.6],[3.3,1.1]],
+    roof:null, splitter:false,
+  },
+  mixer: {
     W:2.5, wb:2.6, wheelR:0.42, track:2.1,
     body:[[4.25,0.3],[4.3,0.6],[4.2,1.0],[3.9,2.8],[3.4,2.9],[-4.0,2.9],[-4.25,2.8],[-4.3,0.6],[-4.25,0.3],[-3.9,0.2],[3.9,0.2]],
     glass:[[4.2,1.1],[3.95,2.6],[3.3,2.6],[3.3,1.1]],
