@@ -52,6 +52,8 @@ export const FORGE_DESIGNS = {
     design:{ height:2.9, hood:0.25, windshield:0.5, roofLength:0.7, rearWindow:0.08, noseHeight:0.9, cowlHeight:1.6, deckHeight:1.0, tailHeight:2.4, beltLine:1.0, tumblehome:0.95, boxy:0.95, round:0.1, clearance:0.25 } },
   mixer:  { text:'cement mixer truck, long, boxy, tall, white, rotating drum, amber light bar', rim:'steelie', rimSize:19, finish:'gloss', seed:2017, len:8.5, W:2.5, wb:5.2, R:0.42,
     design:{ height:2.9, hood:0.25, windshield:0.5, roofLength:0.7, rearWindow:0.08, noseHeight:0.9, cowlHeight:1.6, deckHeight:1.0, tailHeight:2.4, beltLine:1.0, tumblehome:0.95, boxy:0.95, round:0.1, clearance:0.25 } },
+  mail:   { text:'mail truck, long, boxy, tall, red and white, parcel van, amber light bar', rim:'steelie', rimSize:19, finish:'gloss', seed:2019, len:8.5, W:2.5, wb:5.2, R:0.42,
+    design:{ height:2.9, hood:0.25, windshield:0.5, roofLength:0.7, rearWindow:0.08, noseHeight:0.9, cowlHeight:1.6, deckHeight:1.0, tailHeight:2.4, beltLine:1.0, tumblehome:0.95, boxy:0.95, round:0.1, clearance:0.25 } },
   hyper:  { text:'hypercar, mid-engine, very low, aero, gt wing, wide', rim:'turbine', rimSize:20, finish:'candy', seed:1102, len:4.85, W:2.04, wb:2.8, R:0.34, spoiler:'gtwing', tailBar:true },
   // ---- hero cars: described in words, then the key body numbers pinned so each one has a strong,
   // deliberate silhouette (still built from numbers by the Forge lofter — no stored shapes)

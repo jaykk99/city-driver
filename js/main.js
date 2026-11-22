@@ -57,6 +57,7 @@ import { createTowJob, isTowCar, towPickers } from './towjob.js';
 import { createSnowplowJob, isPlowCar, snowplowRoutePickers } from './snowplow.js';
 import { createStreetSweeperJob, isSweeperCar, sweeperRoutePickers } from './streetsweeper.js';
 import { createMixerJob, isMixerCar, mixerRoutePickers } from './mixer.js';
+import { createMailJob, isMailCar, mailRoutePickers } from './mail.js';
 import { createWeather, weatherSurgeFor, weatherSurgeLabelFor } from './weather.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
@@ -129,6 +130,7 @@ let tow=createTowJob(), towBeacon=null, towedCar=null;   // tow calls: beacon + 
 let plow=createSnowplowJob(), plowBeacon=null, plowDrifts=[];   // snow plow routes: beacon + snow drifts + state live here, logic in snowplow.js
 let sweeper=createStreetSweeperJob(), sweeperBeacon=null, sweeperPiles=[];   // street sweeper routes: beacon + leaf piles + state live here, logic in streetsweeper.js
 let mixer=createMixerJob(), mixerBeacon=null, mixerCones=[];   // cement mixer routes: beacon + pour cones + state live here, logic in mixer.js
+let mail=createMailJob(), mailBeacon=null, mailBoxes=[];   // mail routes: beacon + parcel boxes + state live here, logic in mail.js
 let weather=createWeather();   // the sky: clear/cloudy/rain/storm, logic in weather.js
 let rainPts=null, lightningT=0, flashEl=null;   // rain streaks + storm flash, built in init()
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
@@ -145,6 +147,7 @@ const ENGINES={ sport:{cyl:6,red:7200}, muscle:{cyl:8,red:6200,idle:750}, super:
   plow:{cyl:6,red:5200,idle:650},
   sweeper:{cyl:6,red:5200,idle:650},
   mixer:{cyl:6,red:5200,idle:650},
+  mail:{cyl:6,red:5200,idle:650},
   brawler:{cyl:8,red:7000,idle:750,voice:'v8x'}, kaze:{cyl:6,red:7600,idle:850,voice:'i6'}, vanta:{cyl:10,red:8700,idle:1000,voice:'v10'}, rally:{cyl:4,red:7800,idle:950,voice:'i4r'}, baja:{cyl:8,red:6000,idle:700,voice:'v8'} };
 function applyGearbox(){
   if(physics && physics.box) physics.box.mode = save.manual ? 'manual' : 'auto';
@@ -860,6 +863,7 @@ function playCustom(map){
   if(plow.active){ plow.abandon(); setPlowBeacon(null); hidePlowDrifts(); updatePlowHud(); }
   if(sweeper.active){ sweeper.abandon(); setSweeperBeacon(null); hideSweeperPiles(); updateSweeperHud(); }
   if(mixer.active){ mixer.abandon(); setMixerBeacon(null); hideMixerCones(); updateMixerHud(); }
+  if(mail.active){ mail.abandon(); setMailBeacon(null); hideMailBoxes(); updateMailHud(); }
   taxi.setPickers(customMapPickers(map, OFFSET));   // cab fares run on custom streets too
   courier.setPickers(customMapPickers(map, OFFSET));   // courier orders run on custom streets too
   bus.setPickers(busRoutePickers(map, OFFSET));   // bus routes run on custom streets too
@@ -871,6 +875,7 @@ function playCustom(map){
   plow.setPickers(snowplowRoutePickers(map, OFFSET));   // plow routes run on custom streets too
   sweeper.setPickers(sweeperRoutePickers(map, OFFSET));   // sweeper routes run on custom streets too
   mixer.setPickers(mixerRoutePickers(map, OFFSET));   // mixer routes run on custom streets too
+  mail.setPickers(mailRoutePickers(map, OFFSET));   // mail routes run on custom streets too
   weaponCtx.colliders=customMap.colliders; weaponCtx.targets=[];
   minimap.setCustom(customMap.painter); minimap.setWaypoint(null);
   setTimeOfDay((MAP_THEMES[map.theme]||MAP_THEMES.summer).sky, true);
@@ -894,6 +899,7 @@ function exitCustom(){
   if(plow.active){ plow.abandon(); setPlowBeacon(null); hidePlowDrifts(); updatePlowHud(); }
   if(sweeper.active){ sweeper.abandon(); setSweeperBeacon(null); hideSweeperPiles(); updateSweeperHud(); }
   if(mixer.active){ mixer.abandon(); setMixerBeacon(null); hideMixerCones(); updateMixerHud(); }
+  if(mail.active){ mail.abandon(); setMailBeacon(null); hideMailBoxes(); updateMailHud(); }
   taxi.setPickers(null);   // back to the main-city grid
   courier.setPickers(null);   // courier orders back to the main-city grid too
   bus.setPickers(null);   // bus routes back to the main-city grid too
@@ -905,6 +911,7 @@ function exitCustom(){
   plow.setPickers(null);   // plow routes back to the main-city grid too
   sweeper.setPickers(null);   // sweeper routes back to the main-city grid too
   mixer.setPickers(null);   // mixer routes back to the main-city grid too
+  mail.setPickers(null);   // mail routes back to the main-city grid too
   customMap.dispose(); customMap=null;
   weaponCtx.colliders=city.colliders; weaponCtx.targets=shops.targets;
   minimap.setCustom(null);
@@ -2033,6 +2040,90 @@ function updateMixerHud(){
   }else{ $('mx-arrow').classList.add('hidden'); $('mx-dist').textContent = ''; }
 }
 
+// ---------------- mail routes: beacon + HUD + parcel boxes (logic lives in mail.js) ----------------
+// The beacon is red for a delivery stop — never a fare, a pour or a
+// pursuit — so the jobs never read as each other on the street. The
+// stop is marked by red parcel boxes on the road, one per parcel still
+// waiting, disappearing as the carrier drops them in. On an office run
+// the beacon swings to the post office and the boxes hide. A priority
+// stop gets a gold box: registered mail, double pay.
+function setMailBeacon(p){
+  if(!p){ if(mailBeacon) mailBeacon.visible = false; return; }
+  if(!mailBeacon){
+    const ringMat = new THREE.MeshBasicMaterial({ color:0xf87171, transparent:true, opacity:0.85, depthWrite:false, side:THREE.DoubleSide });
+    const beamMat = new THREE.MeshBasicMaterial({ color:0xf87171, transparent:true, opacity:0.2, depthWrite:false, side:THREE.DoubleSide, blending:THREE.AdditiveBlending });
+    mailBeacon = new THREE.Group();
+    mailBeacon.add(new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 40).rotateX(-Math.PI / 2).translate(0, 0.1, 0), ringMat));
+    mailBeacon.add(new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 30, 24, 1, true).translate(0, 15, 0), beamMat));
+    scene.add(mailBeacon);
+  }
+  mailBeacon.visible = true; mailBeacon.position.set(p.x, 0, p.z);
+}
+function setMailBoxes(stop){
+  if(!scene || !stop) return;
+  const boxMat = new THREE.MeshStandardMaterial({ color:0xdc2626, roughness:0.7 });
+  const priMat = new THREE.MeshStandardMaterial({ color:0xf59e0b, roughness:0.5, metalness:0.3 });
+  const n = Math.min(2, stop.parcels - stop.dropped);
+  for(let i = 0; i < 2; i++){
+    if(i >= n){ if(mailBoxes[i]) mailBoxes[i].visible = false; continue; }
+    if(!mailBoxes[i]){
+      const m = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.7, 0.9), boxMat);
+      m.castShadow = true;
+      mailBoxes[i] = m; scene.add(m);
+    }
+    // Boxes flank the stop so the truck pulls up between them; a priority
+    // stop gets a gold box instead of a red one.
+    mailBoxes[i].material = stop.priority ? priMat : boxMat;
+    const off = i === 0 ? -3 : 3;
+    mailBoxes[i].position.set(stop.x + off, 0.35, stop.z);
+    mailBoxes[i].visible = true;
+  }
+}
+function hideMailBoxes(){ for(const b of mailBoxes) if(b) b.visible = false; }
+function updateMailHud(){
+  const el = $('mail-hud'); if(!el) return;
+  if(!mail.active){ el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  const px = physics.pos.x, pz = physics.pos.z, h = physics.heading, tg = mail.target;
+  const stop = mail.nextStop;
+  if(mail.phase === 'office'){
+    $('ml-obj').textContent = 'To the post office — restock the satchel · ' + mail.satchel + ' aboard';
+  }else{
+    $('ml-obj').textContent = 'Stop ' + (mail.stopIndex + 1) + '/' + mail.stopCount
+      + (stop ? ' · ' + mail.parcelsLeft + ' parcels waiting' : '')
+      + (mail.nextPriority ? ' · ⭐ PRIORITY ×2' : '')
+      + ' · 📬 ' + mail.satchel + '/' + mail.satchelCapacity + ' satchel';
+  }
+  if(mail.phase === 'office'){
+    $('ml-time').textContent = '⏱ PAUSED';
+    $('ml-time').classList.remove('low');
+  }else{
+    const tl = mail.timeLeft;
+    $('ml-time').textContent = tl >= 0 ? '⏱ ' + Math.ceil(tl) + 's' : '⏱ LATE';
+    $('ml-time').classList.toggle('low', tl < 10);
+  }
+  const info = $('ml-info');
+  if(info){
+    const bits = [];
+    if(mail.loadValue > 0) bits.push('💵 $' + mail.loadValue.toLocaleString() + ' unbanked');
+    if(mail.banked > 0) bits.push('🏦 $' + mail.banked.toLocaleString() + ' banked');
+    if(mail.isDelivering({ x:px, z:pz, speed:Math.abs(tele.speed) })) bits.push('📬 Delivering…');
+    else if(mail.phase === 'deliver' && mail.nextStop) bits.push('Stop at the address to deliver');
+    if(mail.surge > 1) bits.push('Surge ×' + mail.surge);
+    if(mail.routes > 0) bits.push(mail.routes + ' routes · ' + mail.parcels + ' parcels · $' + mail.earned.toLocaleString());
+    if(mail.ratingCount > 0) bits.push('★ ' + mail.ratingAvg.toFixed(1) + ' (' + mail.ratingCount + ' routes)');
+    info.textContent = bits.join(' · ');
+  }
+  if(tg && !inside){
+    const a = Math.atan2(-(tg.x - px), -(tg.z - pz));
+    const rel = Math.atan2(Math.sin(a - h), Math.cos(a - h));
+    const arrow = $('ml-arrow');
+    arrow.style.transform = 'rotate(' + (-rel).toFixed(3) + 'rad)';
+    arrow.classList.remove('hidden');
+    $('ml-dist').textContent = Math.round(Math.hypot(tg.x - px, tg.z - pz)) + ' m';
+  }else{ $('ml-arrow').classList.add('hidden'); $('ml-dist').textContent = ''; }
+}
+
 // ---------------- full map + GPS waypoint ----------------
 let bigMapOpen=false;
 function playerXZ(){ return onFoot ? { x:inside?inside.back.x:foot.pos.x, z:inside?inside.back.z:foot.pos.z, h:foot.heading } : { x:physics.pos.x, z:physics.pos.z, h:physics.heading }; }
@@ -2720,6 +2811,9 @@ function frame(now){
   if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && mixer.active){
     mixer.abandon(); setMixerBeacon(null); hideMixerCones(); updateMixerHud(); toast('🏗️ Route abandoned — unbanked pours lost', 2000);
   }
+  if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && mail.active){
+    mail.abandon(); setMailBeacon(null); hideMailBoxes(); updateMailHud(); toast('📬 Route abandoned — unbanked parcels lost', 2000);
+  }
   if(editorOpen){
     updateEditorCamera(dt);
   }else if(playing && onFoot){
@@ -3209,8 +3303,37 @@ function frame(now){
           toast('🏗️ Mixer wrecked — route lost' + (ev.banked > 0 ? ', $' + ev.banked.toLocaleString() + ' banked kept' : ''), 2400); }
       }
     }
+    // mail routes: drive the mail truck in free roam and a route starts.
+    // Switching out of the mail truck ends it.
+    if(mail.setInMail(isMailCar(carDef)) === 'abandoned'){ hideMailBoxes(); toast('📬 Route abandoned — you switched cars', 2000); }
+    if(isMailCar(carDef)){
+      for(const ev of mail.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100, surge:timeSurge*wSurge })){
+        if(ev.type === 'routeStart'){ setMailBeacon(mail.target); setMailBoxes(mail.nextStop);
+          if(audio.dispatch) audio.dispatch();
+          toast('📬 Mail route — ' + mail.stopCount + ' stops' + (ev.surge > 1 ? ' · surge ×' + ev.surge : ''), 2600); }
+        else if(ev.type === 'parcelDelivered'){ setMailBoxes(mail.nextStop); }
+        else if(ev.type === 'stopCleared'){ const next = mail.target; setMailBeacon(next); if(next && mail.phase === 'deliver') setMailBoxes(mail.nextStop);
+          if(ev.onTime) toast('📬 Stop delivered — on schedule' + (ev.priority ? ' · ⭐ priority' : ''), 1800); }
+        else if(ev.type === 'satchelEmpty'){ setMailBeacon(mail.office); hideMailBoxes();
+          toast('📬 Satchel empty — to the post office to restock it', 2400); }
+        else if(ev.type === 'restocked'){ const next = mail.target; setMailBeacon(next); if(next) setMailBoxes(mail.nextStop);
+          toast('📬 Satchel restocked — $' + ev.dumped.toLocaleString() + ' banked', 2200); }
+        else if(ev.type === 'damaged'){ toast('📬 Rough — a parcel broke in the satchel, ' + ev.satchel + ' left', 2000); }
+        else if(ev.type === 'routeComplete'){ addCash(ev.total); setMailBeacon(null); hideMailBoxes();
+          save.mail = mail.career; saveSave(save);   // career (routes, parcels, rating) persists
+          const stars = '★'.repeat(ev.rating) + '☆'.repeat(5 - ev.rating);
+          let msg = '📬 Route delivered — $' + ev.loadPay.toLocaleString() + ' parcels';
+          if(ev.completionBonus > 0) msg += ' + $' + ev.completionBonus.toLocaleString() + ' route';
+          if(ev.onTimeBonus > 0) msg += ' + $' + ev.onTimeBonus.toLocaleString() + ' on time';
+          if(ev.surge > 1) msg += ' · surge ×' + ev.surge;
+          msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';
+          toast(msg, 3200); }
+        else if(ev.type === 'routeFailed'){ setMailBeacon(null); hideMailBoxes();
+          toast('📬 Mail truck wrecked — route lost' + (ev.banked > 0 ? ', $' + ev.banked.toLocaleString() + ' banked kept' : ''), 2400); }
+      }
+    }
     updateTowedCar(dt);
-    if(frameN % 3 === 0){ updateTaxiHud(); updateCourierHud(); updateBusHud(); updateAmbHud(); updateFireHud(); updatePoliceHud(); updateGarbageHud(); updateTowHud(); updatePlowHud(); updateSweeperHud(); updateMixerHud(); }
+    if(frameN % 3 === 0){ updateTaxiHud(); updateCourierHud(); updateBusHud(); updateAmbHud(); updateFireHud(); updatePoliceHud(); updateGarbageHud(); updateTowHud(); updatePlowHud(); updateSweeperHud(); updateMixerHud(); updateMailHud(); }
     // crash detector: a one-frame speed collapse only comes from a shunt
     // (braking and drag bleed speed slowly). tele.speed lags collisions by
     // a frame, so this catches walls and traffic alike.
@@ -3429,6 +3552,7 @@ async function boot(){
     plow.loadCareer(save.plow);   // plow career (routes, drifts, earnings, on-time record) survives sessions
     sweeper.loadCareer(save.sweeper);   // sweeper career (routes, piles, earnings, on-time record) survives sessions
     mixer.loadCareer(save.mixer);   // mixer career (routes, loads, earnings, on-time record) survives sessions
+    mail.loadCareer(save.mail);   // mail career (routes, parcels, earnings, on-time record) survives sessions
     audio=createAudio();
     orient=initOrientation(onViewResize);
     await initScene();
