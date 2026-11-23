@@ -3270,6 +3270,7 @@ function frame(now){
           msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';
           toast(msg, 3200); }
         else if(ev.type === 'routeFailed'){ setGarbageBeacon(null); hideGarbageBins();
+          if(ev.banked > 0) addCash(ev.banked); // already banked at the depot survives the wreck
           let msg = '🗑️ Truck wrecked — route lost, $' + ev.loadLost.toLocaleString() + ' in the hopper gone';
           if(ev.banked > 0) msg += ' · $' + ev.banked.toLocaleString() + ' already banked is safe';
           toast(msg, 2400); }
@@ -3335,6 +3336,7 @@ function frame(now){
           msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';
           toast(msg, 3200); }
         else if(ev.type === 'routeFailed'){ setPlowBeacon(null); hidePlowDrifts();
+          if(ev.banked > 0) addCash(ev.banked); // already banked at the depot survives the wreck
           toast('❄️ Plow wrecked — route lost' + (ev.banked > 0 ? ', $' + ev.banked.toLocaleString() + ' banked kept' : ''), 2400); }
       }
     }
@@ -3364,6 +3366,7 @@ function frame(now){
           msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';
           toast(msg, 3200); }
         else if(ev.type === 'routeFailed'){ setSweeperBeacon(null); hideSweeperPiles();
+          if(ev.banked > 0) addCash(ev.banked); // already banked at the depot survives the wreck
           toast('🧹 Sweeper wrecked — route lost' + (ev.banked > 0 ? ', $' + ev.banked.toLocaleString() + ' banked kept' : ''), 2400); }
       }
     }
@@ -3394,6 +3397,7 @@ function frame(now){
           msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';
           toast(msg, 3200); }
         else if(ev.type === 'routeFailed'){ setMixerBeacon(null); hideMixerCones();
+          if(ev.banked > 0) addCash(ev.banked); // already banked at the depot survives the wreck
           toast('🏗️ Mixer wrecked — route lost' + (ev.banked > 0 ? ', $' + ev.banked.toLocaleString() + ' banked kept' : ''), 2400); }
       }
     }
@@ -3423,6 +3427,7 @@ function frame(now){
           msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';
           toast(msg, 3200); }
         else if(ev.type === 'routeFailed'){ setMailBeacon(null); hideMailBoxes();
+          if(ev.banked > 0) addCash(ev.banked); // already banked at the post office survives the wreck
           toast('📬 Mail truck wrecked — route lost' + (ev.banked > 0 ? ', $' + ev.banked.toLocaleString() + ' banked kept' : ''), 2400); }
       }
     }
@@ -3453,6 +3458,7 @@ function frame(now){
           msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';
           toast(msg, 3200); }
         else if(ev.type === 'routeFailed'){ setIceCreamBeacon(null); hideIceCreamCones();
+          if(ev.banked > 0) addCash(ev.banked); // already banked at the depot survives the wreck
           toast('🍦 Ice cream truck wrecked — route lost' + (ev.banked > 0 ? ', $' + ev.banked.toLocaleString() + ' banked kept' : ''), 2400); }
       }
     }
