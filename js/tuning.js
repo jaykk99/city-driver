@@ -28,6 +28,7 @@ export const BASE = {
   mixer:{ hp:320, kg:14000, cyl:6, red:5200, idle:650 },
   mail:{ hp:310, kg:11000, cyl:6, red:5200, idle:650 },
   icecream:{ hp:310, kg:11500, cyl:6, red:5200, idle:650 },
+  schoolbus:{ hp:310, kg:12000, cyl:6, red:5200, idle:650 },
   brawler:{ hp:480, kg:1720, cyl:8, red:7000, idle:750, voice:'v8x' },  kaze:{ hp:420, kg:1510, cyl:6, red:7600, idle:850, voice:'i6' },
   vanta:{ hp:640, kg:1480, cyl:10, red:8700, idle:1000, voice:'v10' },   rally:{ hp:340, kg:1260, cyl:4, red:7800, idle:950, voice:'i4r' },
   baja:{ hp:450, kg:2250, cyl:8, red:6000, idle:700, voice:'v8' },

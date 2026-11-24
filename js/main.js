@@ -59,6 +59,7 @@ import { createStreetSweeperJob, isSweeperCar, sweeperRoutePickers } from './str
 import { createMixerJob, isMixerCar, mixerRoutePickers } from './mixer.js';
 import { createMailJob, isMailCar, mailRoutePickers } from './mail.js';
 import { createIceCreamJob, isIceCreamCar, iceCreamRoutePickers } from './icecream.js';
+import { createSchoolBusJob, isSchoolBusCar, schoolBusRoutePickers } from './schoolbus.js';
 import { createWeather, weatherSurgeFor, weatherSurgeLabelFor } from './weather.js';
 
 const { CAR_DEFS, buildCar, effectiveStats, applyCarSkin, applyBuildVisual } = Cars;
@@ -133,6 +134,7 @@ let sweeper=createStreetSweeperJob(), sweeperBeacon=null, sweeperPiles=[];   // 
 let mixer=createMixerJob(), mixerBeacon=null, mixerCones=[];   // cement mixer routes: beacon + pour cones + state live here, logic in mixer.js
 let mail=createMailJob(), mailBeacon=null, mailBoxes=[];   // mail routes: beacon + parcel boxes + state live here, logic in mail.js
 let icecream=createIceCreamJob(), icecreamBeacon=null, icecreamCones=[];   // ice cream routes: beacon + cone markers + state live here, logic in icecream.js
+let schoolbus=createSchoolBusJob(), schoolbusBeacon=null, schoolbusKids=[];   // school bus routes: beacon + kid markers + state live here, logic in schoolbus.js
 let weather=createWeather();   // the sky: clear/cloudy/rain/storm, logic in weather.js
 let rainPts=null, lightningT=0, flashEl=null;   // rain streaks + storm flash, built in init()
 const npcPlayer={x:0,z:0,alive:true,hidden:false,inCar:true,aiming:false,aimH:0};
@@ -151,6 +153,7 @@ const ENGINES={ sport:{cyl:6,red:7200}, muscle:{cyl:8,red:6200,idle:750}, super:
   mixer:{cyl:6,red:5200,idle:650},
   mail:{cyl:6,red:5200,idle:650},
   icecream:{cyl:6,red:5200,idle:650},
+  schoolbus:{cyl:6,red:5200,idle:650},
   brawler:{cyl:8,red:7000,idle:750,voice:'v8x'}, kaze:{cyl:6,red:7600,idle:850,voice:'i6'}, vanta:{cyl:10,red:8700,idle:1000,voice:'v10'}, rally:{cyl:4,red:7800,idle:950,voice:'i4r'}, baja:{cyl:8,red:6000,idle:700,voice:'v8'} };
 function applyGearbox(){
   if(physics && physics.box) physics.box.mode = save.manual ? 'manual' : 'auto';
@@ -868,6 +871,7 @@ function playCustom(map){
   if(mixer.active){ mixer.abandon(); setMixerBeacon(null); hideMixerCones(); updateMixerHud(); }
   if(mail.active){ mail.abandon(); setMailBeacon(null); hideMailBoxes(); updateMailHud(); }
   if(icecream.active){ icecream.abandon(); setIceCreamBeacon(null); hideIceCreamCones(); updateIceCreamHud(); }
+  if(schoolbus.active){ schoolbus.abandon(); setSchoolBusBeacon(null); hideSchoolBusKids(); updateSchoolBusHud(); }
   taxi.setPickers(customMapPickers(map, OFFSET));   // cab fares run on custom streets too
   courier.setPickers(customMapPickers(map, OFFSET));   // courier orders run on custom streets too
   bus.setPickers(busRoutePickers(map, OFFSET));   // bus routes run on custom streets too
@@ -881,6 +885,7 @@ function playCustom(map){
   mixer.setPickers(mixerRoutePickers(map, OFFSET));   // mixer routes run on custom streets too
   mail.setPickers(mailRoutePickers(map, OFFSET));   // mail routes run on custom streets too
   icecream.setPickers(iceCreamRoutePickers(map, OFFSET));   // ice cream routes run on custom streets too
+  schoolbus.setPickers(schoolBusRoutePickers(map, OFFSET));   // school bus routes run on custom streets too
   weaponCtx.colliders=customMap.colliders; weaponCtx.targets=[];
   minimap.setCustom(customMap.painter); minimap.setWaypoint(null);
   setTimeOfDay((MAP_THEMES[map.theme]||MAP_THEMES.summer).sky, true);
@@ -906,6 +911,7 @@ function exitCustom(){
   if(mixer.active){ mixer.abandon(); setMixerBeacon(null); hideMixerCones(); updateMixerHud(); }
   if(mail.active){ mail.abandon(); setMailBeacon(null); hideMailBoxes(); updateMailHud(); }
   if(icecream.active){ icecream.abandon(); setIceCreamBeacon(null); hideIceCreamCones(); updateIceCreamHud(); }
+  if(schoolbus.active){ schoolbus.abandon(); setSchoolBusBeacon(null); hideSchoolBusKids(); updateSchoolBusHud(); }
   taxi.setPickers(null);   // back to the main-city grid
   courier.setPickers(null);   // courier orders back to the main-city grid too
   bus.setPickers(null);   // bus routes back to the main-city grid too
@@ -919,6 +925,7 @@ function exitCustom(){
   mixer.setPickers(null);   // mixer routes back to the main-city grid too
   mail.setPickers(null);   // mail routes back to the main-city grid too
   icecream.setPickers(null);   // ice cream routes back to the main-city grid too
+  schoolbus.setPickers(null);   // school bus routes back to the main-city grid too
   customMap.dispose(); customMap=null;
   weaponCtx.colliders=city.colliders; weaponCtx.targets=shops.targets;
   minimap.setCustom(null);
@@ -2215,6 +2222,98 @@ function updateIceCreamHud(){
   }else{ $('ic-arrow').classList.add('hidden'); $('ic-dist').textContent = ''; }
 }
 
+// ---------------- school bus routes: beacon + HUD + kid markers (logic lives in schoolbus.js) ----------------
+// The beacon is yellow for a pickup stop — never a fare, a pour or a
+// delivery — so the jobs never read as each other on the street. The
+// stop is marked by kids waiting on the road, one per kid still
+// waiting, disappearing as they climb aboard. On a school run the
+// beacon swings to the school and the kids hide. A late-bell stop
+// gets red-shirted kids: double pay, tighter par.
+function setSchoolBusBeacon(p){
+  if(!p){ if(schoolbusBeacon) schoolbusBeacon.visible = false; return; }
+  if(!schoolbusBeacon){
+    const ringMat = new THREE.MeshBasicMaterial({ color:0xfacc15, transparent:true, opacity:0.85, depthWrite:false, side:THREE.DoubleSide });
+    const beamMat = new THREE.MeshBasicMaterial({ color:0xfacc15, transparent:true, opacity:0.2, depthWrite:false, side:THREE.DoubleSide, blending:THREE.AdditiveBlending });
+    schoolbusBeacon = new THREE.Group();
+    schoolbusBeacon.add(new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 40).rotateX(-Math.PI / 2).translate(0, 0.1, 0), ringMat));
+    schoolbusBeacon.add(new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 30, 24, 1, true).translate(0, 15, 0), beamMat));
+    scene.add(schoolbusBeacon);
+  }
+  schoolbusBeacon.visible = true; schoolbusBeacon.position.set(p.x, 0, p.z);
+}
+function makeKidMarker(shirtColor){
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.34, 0.9, 12),
+    new THREE.MeshStandardMaterial({ color:shirtColor, roughness:0.7 }));
+  body.position.y = 0.45; body.castShadow = true;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.26, 12, 10),
+    new THREE.MeshStandardMaterial({ color:0xe8b98a, roughness:0.6 }));
+  head.position.y = 1.15; head.castShadow = true;
+  g.add(body); g.add(head);
+  return g;
+}
+function setSchoolBusKids(stop){
+  if(!scene || !stop) return;
+  const n = Math.min(4, stop.kids - stop.boarded);
+  for(let i = 0; i < 4; i++){
+    if(i >= n){ if(schoolbusKids[i]) schoolbusKids[i].visible = false; continue; }
+    if(!schoolbusKids[i]){
+      schoolbusKids[i] = makeKidMarker(0xfacc15); scene.add(schoolbusKids[i]);
+    }
+    // Kids line up beside the stop so the bus pulls up alongside
+    // them; a late-bell stop gets red-shirted kids instead of yellow ones.
+    const shirt = stop.bell ? 0xef4444 : 0xfacc15;
+    schoolbusKids[i].children[0].material = new THREE.MeshStandardMaterial({ color:shirt, roughness:0.7 });
+    const off = (i - 1.5) * 2;
+    schoolbusKids[i].position.set(stop.x + off, 0, stop.z);
+    schoolbusKids[i].visible = true;
+  }
+}
+function hideSchoolBusKids(){ for(const b of schoolbusKids) if(b) b.visible = false; }
+function updateSchoolBusHud(){
+  const el = $('schoolbus-hud'); if(!el) return;
+  if(!schoolbus.active){ el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  const px = physics.pos.x, pz = physics.pos.z, h = physics.heading, tg = schoolbus.target;
+  const stop = schoolbus.nextStop;
+  if(schoolbus.phase === 'school'){
+    $('sb-obj').textContent = 'To the school — drop the kids off · ' + schoolbus.aboard + ' aboard';
+  }else{
+    $('sb-obj').textContent = 'Stop ' + (schoolbus.stopIndex + 1) + '/' + schoolbus.stopCount
+      + (stop ? ' · ' + schoolbus.kidsLeft + ' kids waiting' : '')
+      + (schoolbus.nextBell ? ' · 🔔 LATE BELL ×2' : '')
+      + ' · 🚌 ' + schoolbus.aboard + '/' + schoolbus.seatsCapacity + ' seats';
+  }
+  if(schoolbus.phase === 'school'){
+    $('sb-time').textContent = '⏱ PAUSED';
+    $('sb-time').classList.remove('low');
+  }else{
+    const tl = schoolbus.timeLeft;
+    $('sb-time').textContent = tl >= 0 ? '⏱ ' + Math.ceil(tl) + 's' : '⏱ LATE';
+    $('sb-time').classList.toggle('low', tl < 10);
+  }
+  const info = $('sb-info');
+  if(info){
+    const bits = [];
+    if(schoolbus.loadValue > 0) bits.push('💵 $' + schoolbus.loadValue.toLocaleString() + ' unbanked');
+    if(schoolbus.banked > 0) bits.push('🏦 $' + schoolbus.banked.toLocaleString() + ' banked');
+    if(schoolbus.isBoarding({ x:px, z:pz, speed:Math.abs(tele.speed) })) bits.push('🚌 Boarding…');
+    else if(schoolbus.phase === 'pickup' && schoolbus.nextStop) bits.push('Stop at the corner to pick up');
+    if(schoolbus.surge > 1) bits.push('Surge ×' + schoolbus.surge);
+    if(schoolbus.routes > 0) bits.push(schoolbus.routes + ' routes · ' + schoolbus.kids + ' kids · $' + schoolbus.earned.toLocaleString());
+    if(schoolbus.ratingCount > 0) bits.push('★ ' + schoolbus.ratingAvg.toFixed(1) + ' (' + schoolbus.ratingCount + ' routes)');
+    info.textContent = bits.join(' · ');
+  }
+  if(tg && !inside){
+    const a = Math.atan2(-(tg.x - px), -(tg.z - pz));
+    const rel = Math.atan2(Math.sin(a - h), Math.cos(a - h));
+    const arrow = $('sb-arrow');
+    arrow.style.transform = 'rotate(' + (-rel).toFixed(3) + 'rad)';
+    arrow.classList.remove('hidden');
+    $('sb-dist').textContent = Math.round(Math.hypot(tg.x - px, tg.z - pz)) + ' m';
+  }else{ $('sb-arrow').classList.add('hidden'); $('sb-dist').textContent = ''; }
+}
+
 // ---------------- full map + GPS waypoint ----------------
 let bigMapOpen=false;
 function playerXZ(){ return onFoot ? { x:inside?inside.back.x:foot.pos.x, z:inside?inside.back.z:foot.pos.z, h:foot.heading } : { x:physics.pos.x, z:physics.pos.z, h:physics.heading }; }
@@ -2908,6 +3007,9 @@ function frame(now){
   if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && icecream.active){
     icecream.abandon(); setIceCreamBeacon(null); hideIceCreamCones(); updateIceCreamHud(); toast('🍦 Route abandoned — unbanked cones lost', 2000);
   }
+  if((state!=='freeroam' || onFoot || garageOpen || storeOpen || editorOpen || pickOpen || dead) && schoolbus.active){
+    schoolbus.abandon(); setSchoolBusBeacon(null); hideSchoolBusKids(); updateSchoolBusHud(); toast('🚌 Route abandoned — unbanked fares lost', 2000);
+  }
   if(editorOpen){
     updateEditorCamera(dt);
   }else if(playing && onFoot){
@@ -3462,8 +3564,39 @@ function frame(now){
           toast('🍦 Ice cream truck wrecked — route lost' + (ev.banked > 0 ? ', $' + ev.banked.toLocaleString() + ' banked kept' : ''), 2400); }
       }
     }
+    // school bus routes: drive the school bus in free roam and a route starts.
+    // Switching out of the school bus ends it.
+    if(schoolbus.setInSchoolBus(isSchoolBusCar(carDef)) === 'abandoned'){ hideSchoolBusKids(); toast('🚌 Route abandoned — you switched cars', 2000); }
+    if(isSchoolBusCar(carDef)){
+      for(const ev of schoolbus.update(dt, { x:physics.pos.x, z:physics.pos.z, speed:Math.abs(tele.speed), hp:carDamage ? carDamage.hp : 100, surge:timeSurge*wSurge })){
+        if(ev.type === 'routeStart'){ setSchoolBusBeacon(schoolbus.target); setSchoolBusKids(schoolbus.nextStop);
+          if(audio.dispatch) audio.dispatch();
+          toast('🚌 School bus route — ' + schoolbus.stopCount + ' stops' + (ev.surge > 1 ? ' · surge ×' + ev.surge : ''), 2600); }
+        else if(ev.type === 'kidBoarded'){ setSchoolBusKids(schoolbus.nextStop); }
+        else if(ev.type === 'stopCleared'){ const next = schoolbus.target; setSchoolBusBeacon(next); if(next && schoolbus.phase === 'pickup') setSchoolBusKids(schoolbus.nextStop);
+          if(ev.onTime) toast('🚌 Stop picked up — on schedule' + (ev.bell ? ' · 🔔 late bell' : ''), 1800); }
+        else if(ev.type === 'seatsFull'){ setSchoolBusBeacon(schoolbus.school); hideSchoolBusKids();
+          toast('🚌 Bus full — to the school to drop them off', 2400); }
+        else if(ev.type === 'droppedOff'){ const next = schoolbus.target; setSchoolBusBeacon(next); if(next) setSchoolBusKids(schoolbus.nextStop);
+          toast('🚌 Kids dropped off — $' + ev.dumped.toLocaleString() + ' banked', 2200); }
+        else if(ev.type === 'restless'){ toast('🚌 A kid got restless and hopped off, ' + ev.aboard + ' aboard', 2000); }
+        else if(ev.type === 'scared'){ toast('🚌 Rough — a kid got scared off, ' + ev.aboard + ' aboard', 2000); }
+        else if(ev.type === 'routeComplete'){ addCash(ev.total); setSchoolBusBeacon(null); hideSchoolBusKids();
+          save.schoolbus = schoolbus.career; saveSave(save);   // career (routes, kids, rating) persists
+          const stars = '★'.repeat(ev.rating) + '☆'.repeat(5 - ev.rating);
+          let msg = '🚌 Route done — $' + ev.loadPay.toLocaleString() + ' fares';
+          if(ev.completionBonus > 0) msg += ' + $' + ev.completionBonus.toLocaleString() + ' route';
+          if(ev.onTimeBonus > 0) msg += ' + $' + ev.onTimeBonus.toLocaleString() + ' on time';
+          if(ev.surge > 1) msg += ' · surge ×' + ev.surge;
+          msg += ' · ' + stars + ' (' + ev.ratingAvg.toFixed(1) + '★ avg)';
+          toast(msg, 3200); }
+        else if(ev.type === 'routeFailed'){ setSchoolBusBeacon(null); hideSchoolBusKids();
+          if(ev.banked > 0) addCash(ev.banked); // already banked at the school survives the wreck
+          toast('🚌 School bus wrecked — route lost' + (ev.banked > 0 ? ', $' + ev.banked.toLocaleString() + ' banked kept' : ''), 2400); }
+      }
+    }
     updateTowedCar(dt);
-    if(frameN % 3 === 0){ updateTaxiHud(); updateCourierHud(); updateBusHud(); updateAmbHud(); updateFireHud(); updatePoliceHud(); updateGarbageHud(); updateTowHud(); updatePlowHud(); updateSweeperHud(); updateMixerHud(); updateMailHud(); updateIceCreamHud(); }
+    if(frameN % 3 === 0){ updateTaxiHud(); updateCourierHud(); updateBusHud(); updateAmbHud(); updateFireHud(); updatePoliceHud(); updateGarbageHud(); updateTowHud(); updatePlowHud(); updateSweeperHud(); updateMixerHud(); updateMailHud(); updateIceCreamHud(); updateSchoolBusHud(); }
     // crash detector: a one-frame speed collapse only comes from a shunt
     // (braking and drag bleed speed slowly). tele.speed lags collisions by
     // a frame, so this catches walls and traffic alike.
@@ -3684,6 +3817,7 @@ async function boot(){
     mixer.loadCareer(save.mixer);   // mixer career (routes, loads, earnings, on-time record) survives sessions
     mail.loadCareer(save.mail);   // mail career (routes, parcels, earnings, on-time record) survives sessions
     icecream.loadCareer(save.icecream);   // ice cream career (routes, cones, earnings, on-time record) survives sessions
+    schoolbus.loadCareer(save.schoolbus);   // school bus career (routes, kids, earnings, on-time record) survives sessions
     audio=createAudio();
     orient=initOrientation(onViewResize);
     await initScene();

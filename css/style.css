@@ -327,6 +327,13 @@ body.compact #killfeed{top:calc(150px + env(safe-area-inset-top))}
 #ic-arrow{display:inline-block;font-size:20px;color:#f9a8d4}
 #ic-dist{font-size:12px;color:#8fa3c8;margin-top:2px;min-height:14px}
 #ic-info{font-size:12px;color:#f9a8d4;margin-top:2px;min-height:14px;font-weight:700}
+#schoolbus-hud{position:fixed;top:calc(96px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:36;background:rgba(10,14,30,.88);border:2px solid #facc15;border-radius:16px;padding:8px 14px;min-width:260px;max-width:min(440px,70vw);pointer-events:none}
+#schoolbus-hud .obj-top b{color:#fde047}
+#sb-time{font-weight:900;font-size:14px;color:#e2e8f0}
+#sb-time.low{color:#ef4444}
+#sb-arrow{display:inline-block;font-size:20px;color:#fde047}
+#sb-dist{font-size:12px;color:#8fa3c8;margin-top:2px;min-height:14px}
+#sb-info{font-size:12px;color:#fde047;margin-top:2px;min-height:14px;font-weight:700}
 #tw-time{font-weight:900;font-size:14px;color:#e2e8f0}
 #tw-time.low{color:#ef4444}
 #tw-arrow{display:inline-block;font-size:20px;color:#fbbf24}
