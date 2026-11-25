@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {
   FuelTank, fuelUsed, nearestStation, STATIONS, STATION_RADIUS,
   FUEL_MAX, FUEL_LOW, STATION_PRICE, DELIVERY_PRICE, DELIVERY_UNITS,
+  FUEL_FILL_RATE,
 } from '../js/fuel.js';
 
 describe('fuel burn', () => {
@@ -96,5 +97,47 @@ describe('stations', () => {
     const ay = STATIONS[1];
     assert.ok(Math.abs(ay.x - (-185)) <= STATION_RADIUS, 'Arlington & York must reach Arlington St');
     assert.ok(Math.abs(ay.z - 111) <= STATION_RADIUS, 'Arlington & York must reach York Ave');
+  });
+});
+
+describe('addMetered (per-frame pump fill)', () => {
+  const DT = 1 / 60;
+  // Drive the pump loop the way main.js does: one addMetered per frame,
+  // with the cash actually decreasing as it is paid.
+  function fillUp(tank, cash){
+    let paid = 0, frames = 0;
+    while(!tank.full && frames < 10000){
+      const f = tank.addMetered(FUEL_FILL_RATE * DT, cash - paid);
+      paid += f.cost; frames++;
+    }
+    return { paid, frames };
+  }
+  it('a full tank costs the flat $2/unit, not the old per-frame ceil ($240)', () => {
+    const t = new FuelTank(); t.level = 0;
+    const { paid, frames } = fillUp(t, 10000);
+    assert.equal(t.level, FUEL_MAX);
+    assert.equal(paid, FUEL_MAX * STATION_PRICE, '100 units at $2');
+    assert.ok(frames > 200, 'fills progressively, not instantly');
+  });
+  it('a broke driver gets no fuel at all', () => {
+    const t = new FuelTank(); t.level = 0;
+    for(let i = 0; i < 600; i++){
+      const f = t.addMetered(FUEL_FILL_RATE * DT, 0);
+      assert.deepEqual(f, { added: 0, cost: 0 });
+    }
+    assert.equal(t.level, 0);
+  });
+  it('a fractional tank tops off at the same ceil the instant fill() charges', () => {
+    const t = new FuelTank(); t.level = 37.6;
+    const { paid } = fillUp(t, 10000);
+    assert.equal(t.level, FUEL_MAX);
+    assert.equal(paid, Math.ceil((FUEL_MAX - 37.6) * STATION_PRICE));
+  });
+  it('stops adding when the cash runs out mid-fill', () => {
+    const t = new FuelTank(); t.level = 0;
+    const { paid } = fillUp(t, 50);
+    assert.equal(paid, 50);
+    assert.equal(t.level, 25, 'exactly what $50 buys at $2/unit');
+    assert.equal(t.full, false);
   });
 });

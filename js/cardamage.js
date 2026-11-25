@@ -69,4 +69,29 @@ export class CarDamage {
     this.hp += added;
     return { added, cost };
   }
+  // Per-frame repair for the bay loop: accumulate fractional HP and apply
+  // only whole points, so the $10/hp rate stays exact instead of rounding
+  // up on every frame (the old per-frame repairPartial() charged $1,188
+  // for a $990 repair). `cash` caps what can be afforded: no cash, no
+  // repair. Returns { added, cost } — cost is exact whole dollars. The
+  // final sliver (less than a whole HP left) repairs once the request has
+  // covered it, at the same ceil() the instant repair() path charges.
+  repairMetered(hp, cash = Infinity){
+    this._pend = (this._pend || 0) + Math.max(0, hp);
+    const room = CAR_MAX_HP - this.hp;
+    if(room <= 1e-9){ this.hp = CAR_MAX_HP; return { added: 0, cost: 0 }; }
+    if(room <= this._pend){
+      const cost = Math.ceil(room * REPAIR_PER_HP);
+      if(cash < cost) return { added: 0, cost: 0 };
+      const r = this.repairPartial(room);
+      this._pend = 0;
+      return r;
+    }
+    const whole = Math.floor(this._pend);
+    const n = Math.min(whole, Math.floor(room), Math.floor(Math.max(0, cash) / REPAIR_PER_HP));
+    if(n <= 0) return { added: 0, cost: 0 };
+    const r = this.repairPartial(n);
+    this._pend -= n;
+    return r;
+  }
 }

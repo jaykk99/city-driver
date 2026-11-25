@@ -91,11 +91,11 @@ describe('FuelTruckRun', () => {
       if(r.deliveryFinished) finished++;
     }
     assert.equal(finished, 1);
-    assert.equal(added, DELIVERY_UNITS);
-    assert.equal(t.level, DELIVERY_UNITS);
-    // Cost is ceiled per tick like pump fills: 4 ticks of 6.25 units at
-    // $5 = ceil(31.25) = $32 each, so $128 total, not a flat $125.
-    assert.equal(cost, 128);
+    assert.ok(Math.abs(added - DELIVERY_UNITS) < 1e-9, `added ${added}, expected ${DELIVERY_UNITS}`);
+    assert.ok(Math.abs(t.level - DELIVERY_UNITS) < 1e-9, `level ${t.level}, expected ${DELIVERY_UNITS}`);
+    // Flat $5/unit: whole dollars per tick, so a full 25-unit delivery is
+    // exactly $125 — the old per-frame ceil() charged $128.
+    assert.equal(cost, DELIVERY_UNITS * DELIVERY_PRICE);
     assert.equal(run.phase, 'done');
     assert.ok(Math.hypot(run.x - run.depart.x, run.z - run.depart.z) < 1e-9);
   });
@@ -106,7 +106,7 @@ describe('FuelTruckRun', () => {
     while(run.phase === 'inbound') run.update(0.5, t);
     let added = 0;
     while(!run.done){ added += run.update(0.5, t).added; }
-    assert.equal(added, 10);
+    assert.ok(Math.abs(added - 10) < 1e-9, `added ${added}, expected 10`);
     assert.equal(t.level, 100);
   });
   it('update after done is a no-op', () => {
@@ -151,5 +151,51 @@ describe('FuelTank.deliverPartial', () => {
     assert.deepEqual(t.deliverPartial(0), { added: 0, cost: 0 });
     assert.deepEqual(t.deliverPartial(-5), { added: 0, cost: 0 });
     assert.equal(t.level, 50);
+  });
+});
+
+describe('FuelTruckRun delivery billing', () => {
+  function deliveringRun(){
+    const t = new FuelTank();
+    t.level = 0;
+    const run = new FuelTruckRun(100, 50, 0);
+    while(run.phase === 'inbound') run.update(0.5, t);
+    return { t, run };
+  }
+  it('a full delivery at 60fps costs exactly $125', () => {
+    const { t, run } = deliveringRun();
+    let added = 0, cost = 0;
+    while(!run.done){
+      const r = run.update(1 / 60, t);
+      added += r.added; cost += r.cost;
+    }
+    assert.ok(Math.abs(added - DELIVERY_UNITS) < 1e-9, `added ${added}, expected ${DELIVERY_UNITS}`);
+    assert.equal(cost, DELIVERY_UNITS * DELIVERY_PRICE);
+    assert.ok(Math.abs(t.level - DELIVERY_UNITS) < 1e-9, `level ${t.level}, expected ${DELIVERY_UNITS}`);
+  });
+  it('a broke driver gets no delivery: the truck drives off empty', () => {
+    const { t, run } = deliveringRun();
+    let cost = 0;
+    while(!run.done){
+      const r = run.update(1 / 60, t, 0); // affordUnits = 0
+      cost += r.cost;
+    }
+    assert.equal(run.delivered, 0);
+    assert.equal(cost, 0);
+    assert.equal(t.level, 0);
+    assert.equal(run.phase, 'done');
+  });
+  it('a $3 driver gets exactly 0.6 units and the truck leaves', () => {
+    const { t, run } = deliveringRun();
+    let cash = 3, paid = 0;
+    while(!run.done){
+      const r = run.update(1 / 60, t, cash / DELIVERY_PRICE);
+      const p = Math.min(cash, r.cost);
+      cash -= p; paid += p;
+    }
+    assert.equal(paid, 3);
+    assert.equal(cash, 0);
+    assert.ok(Math.abs(run.delivered - 0.6) < 1e-9, `delivered ${run.delivered}, expected 0.6`);
+    assert.ok(Math.abs(t.level - 0.6) < 1e-9);
   });
 });

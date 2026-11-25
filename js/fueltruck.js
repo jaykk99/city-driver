@@ -11,7 +11,7 @@
 // as fuelstations.js). Cars face -Z at heading 0 (physics.js), so forward
 // is (-sin h, -cos h) and the truck mesh is built facing -Z too, letting
 // main.js drive it with rotation.y = heading like the player car.
-import { DELIVERY_UNITS } from './fuel.js';
+import { DELIVERY_UNITS, DELIVERY_PRICE } from './fuel.js';
 
 export const TRUCK_SPEED = 12;        // m/s driving in and away
 export const TRUCK_APPROACH = 40;     // m behind/ahead of the stop point
@@ -47,9 +47,10 @@ export function truckDepartTarget(stop, heading){
 }
 
 // One delivery run. Phases: inbound -> delivering -> departing -> done.
-// update(dt, tank) returns { added, cost, arrived, deliveryFinished }:
+// update(dt, tank, affordUnits) returns { added, cost, arrived, deliveryFinished }:
 // `arrived` fires once when the truck parks, `deliveryFinished` once when
-// the fill completes (full 25 units, or the tank fills first).
+// the fill completes (full 25 units, the tank fills first, or the cash
+// runs out — affordUnits caps the delivery at cash / $5).
 export class FuelTruckRun {
   constructor(carX, carZ, heading){
     this.heading = heading;
@@ -72,7 +73,7 @@ export class FuelTruckRun {
     this.z += (dz / d) * step;
     return false;
   }
-  update(dt, tank){
+  update(dt, tank, affordUnits = Infinity){
     const out = { added: 0, cost: 0, arrived: false, deliveryFinished: false };
     if(this.done || !(dt > 0)) return out;
     if(this.phase === 'inbound'){
@@ -82,14 +83,32 @@ export class FuelTruckRun {
       }
     } else if(this.phase === 'delivering'){
       const remaining = DELIVERY_UNITS - this.delivered;
-      const share = DELIVERY_UNITS * dt / TRUCK_DELIVER_TIME;
-      const r = tank.deliverPartial(Math.min(remaining, share));
-      this.delivered += r.added;
-      out.added = r.added;
-      out.cost = r.cost;
-      if(this.delivered >= DELIVERY_UNITS || tank.full){
+      // Whole dollars only: the old per-frame deliverPartial() rounded
+      // the $5/unit price up on every tick ($241 for a $125 delivery).
+      // `affordUnits` (cash / $5, passed by main.js) caps the delivery:
+      // a broke driver gets nothing, not a free fill.
+      this._pend = (this._pend || 0) + DELIVERY_UNITS * dt / TRUCK_DELIVER_TIME * DELIVERY_PRICE;
+      const afford = Math.max(0, affordUnits ?? Infinity);
+      if(afford <= 0){
         this.phase = 'departing';
         out.deliveryFinished = true;
+      }else{
+        const whole = Math.floor(this._pend);
+        if(whole > 0){
+          const units = Math.min(whole / DELIVERY_PRICE, remaining, afford);
+          if(units > 1e-9){
+            const r = tank.deliverPartial(units);
+            this.delivered += r.added;
+            out.added = r.added;
+            out.cost = r.cost;
+            this._pend -= r.cost;
+          }
+        }
+        // 1e-9 tolerance: float residue (24.999999999999996 of 25) is done.
+        if(this.delivered >= DELIVERY_UNITS - 1e-9 || tank.full){
+          this.phase = 'departing';
+          out.deliveryFinished = true;
+        }
       }
     } else if(this.phase === 'departing'){
       if(this._drive(dt, this.depart.x, this.depart.z)){

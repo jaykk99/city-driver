@@ -94,6 +94,32 @@ export class FuelTank {
     this.level += added;
     return { added, cost };
   }
+  // Per-frame fill for the pump loop: accumulate fractional units and
+  // apply only whole units, so the $2/unit price stays exact instead of
+  // rounding up on every frame (the old per-frame add() charged ceil()
+  // on each ~0.4-unit slice, $240 for a $200 tank). `cash` caps what
+  // can be afforded: no cash, no fuel. Returns { added, cost } — cost
+  // is exact whole dollars. The final sliver (less than a whole unit
+  // left in the tank) fills once the request has covered it, at the
+  // same ceil() the instant fill() path charges.
+  addMetered(units, cash = Infinity){
+    this._pend = (this._pend || 0) + Math.max(0, units);
+    const room = FUEL_MAX - this.level;
+    if(room <= 1e-9){ this.level = FUEL_MAX; return { added: 0, cost: 0 }; }
+    if(room <= this._pend){
+      const cost = Math.ceil(room * STATION_PRICE);
+      if(cash < cost) return { added: 0, cost: 0 };
+      const r = this.add(room);
+      this._pend = 0;
+      return r;
+    }
+    const whole = Math.floor(this._pend);
+    const n = Math.min(whole, Math.floor(room), Math.floor(Math.max(0, cash) / STATION_PRICE));
+    if(n <= 0) return { added: 0, cost: 0 };
+    const r = this.add(n);
+    this._pend -= n;
+    return r;
+  }
   // Fuel-truck delivery: a fixed top-up at the delivery price, capped at full.
   deliver(){
     const added = Math.min(DELIVERY_UNITS, FUEL_MAX - this.level);

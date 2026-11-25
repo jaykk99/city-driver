@@ -69,3 +69,26 @@ test('repairPartial: progressive bay repair caps at full and bills only what was
   const neg = c.repairPartial(-5);
   assert.deepEqual(neg, { added: 0, cost: 0 });
 });
+
+test('repairMetered: a bay repair costs the flat $10/hp, not the old per-frame ceil ($1,188)', () => {
+  const c = new CarDamage();
+  c.hp = 1;
+  let paid = 0, frames = 0;
+  const DT = 1 / 60;
+  while(c.hp < CAR_MAX_HP && frames < 10000){
+    const r = c.repairMetered(25 * DT, 10000);
+    paid += r.cost; frames++;
+  }
+  assert.equal(c.hp, CAR_MAX_HP);
+  assert.equal(paid, 99 * 10, '99 hp at $10');
+  assert.ok(frames > 200, 'repairs progressively, not instantly');
+});
+
+test('repairMetered: a broke driver gets no repair at all', () => {
+  const c = new CarDamage();
+  c.hp = 10;
+  for(let i = 0; i < 600; i++){
+    assert.deepEqual(c.repairMetered(25 * (1 / 60), 0), { added: 0, cost: 0 });
+  }
+  assert.equal(c.hp, 10);
+});

@@ -111,7 +111,7 @@ export function createGarage(api){
   const carsEl=$('garage-cars'), upgEl=$('garage-upgrades'), styleEl=$('garage-style');
 
   const maxStat={topSpeed:1,accel:1,handling:1,grip:1};
-  for(const d of CAR_DEFS) for(const k in maxStat) maxStat[k]=Math.max(maxStat[k], d[k]);
+  for(const d of CAR_DEFS) for(const k in maxStat) maxStat[k]=Math.max(maxStat[k], d.stats[k]);
 
   function syncCash(){ $('garage-cash').textContent = cashLabel(save); }
 
@@ -129,8 +129,8 @@ export function createGarage(api){
       else btn=`<button class="buy-btn" data-act="buy" data-id="${d.id}"${save.cash<d.price?' disabled':''}>$${d.price.toLocaleString()}</button>`;
       return `<div class="car-card${cur?' selected':''}">`+
         `<div class="cinfo"><b>${d.name}</b><small>${d.desc}</small>`+
-        `<div class="stat-bars">${bar('SPD',d.topSpeed,maxStat.topSpeed)}${bar('ACC',d.accel,maxStat.accel)}`+
-        `${bar('HDL',d.handling,maxStat.handling)}${bar('GRP',d.grip,maxStat.grip)}</div></div>${btn}</div>`;
+        `<div class="stat-bars">${bar('SPD',d.stats.topSpeed,maxStat.topSpeed)}${bar('ACC',d.stats.accel,maxStat.accel)}`+
+        `${bar('HDL',d.stats.handling,maxStat.handling)}${bar('GRP',d.stats.grip,maxStat.grip)}</div></div>${btn}</div>`;
     }).join('');
   }
 

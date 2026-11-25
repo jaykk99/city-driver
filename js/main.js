@@ -38,7 +38,7 @@ import { buildStats, normalizeBuild, migrateLegacy, timeslip } from './tuning.js
 import { createTuningUI } from './tuningui.js';
 import { createMissionRunner, generateMission, TOTAL_MISSIONS, EMERALD_FORTUNE } from './missions.js';
 import { CarDamage, CAR_MAX_HP } from './cardamage.js';
-import { FuelTank, nearestStation, STATION_RADIUS, FUEL_FILL_RATE } from './fuel.js';
+import { FuelTank, nearestStation, STATION_RADIUS, FUEL_FILL_RATE, DELIVERY_PRICE } from './fuel.js';
 import { nearestPump, PUMP_REFUEL_DIST } from './fuelstations.js';
 import { nearestBay, nearestRepairShop, REPAIR_RADIUS, REPAIR_RATE, BAY_REPAIR_DIST } from './repairshop.js';
 import { TireWear, WORN_WARN, WORN_BAD } from './tires.js';
@@ -3066,12 +3066,14 @@ function frame(now){
         }
       }else fuelEmptyT=0;
       if(fuelTruck){
-        const r=fuelTruck.update(dt, fuelTank);
+        // whole dollars only, capped at what the cash covers: the old
+        // per-frame delivery rounded $5/unit up every tick ($241 for a
+        // $125 delivery) and filled for free when broke.
+        const r=fuelTruck.update(dt, fuelTank, save.cash / DELIVERY_PRICE);
         if(r.arrived) toast('⛽ Fuel truck arrived — filling up', 2200);
         if(r.added>0){
-          const paid=Math.min(save.cash, r.cost);
-          if(paid>0) addCash(-paid);
-          fuelTruckCost+=paid; syncFuel();
+          if(r.cost>0) addCash(-r.cost);
+          fuelTruckCost+=r.cost; syncFuel();
         }
         if(r.deliveryFinished){
           toast(fuelTruckCost>0 ? '⛽ Fuel truck +'+Math.round(fuelTruck.delivered)+' — $'+fuelTruckCost.toLocaleString() : '⛽ Fuel truck +'+Math.round(fuelTruck.delivered), 2400);
@@ -3088,15 +3090,17 @@ function frame(now){
       if(st.dist<=STATION_RADIUS && Math.abs(tele.speed)<1 && !fuelTank.full){
         const np=nearestPump(physics.pos.x, physics.pos.z);
         if(np.dist<=PUMP_REFUEL_DIST){
-          const f=fuelTank.add(FUEL_FILL_RATE*dt);
-          const paid=Math.min(save.cash, f.cost);
-          if(paid>0) addCash(-paid);
-          fillSessionCost+=paid;
+          // whole units only: per-frame fractional adds rounded the
+          // $2/unit price up every frame ($240 for a $200 tank) and
+          // filled for free when broke. addMetered charges the flat rate
+          // and adds nothing the cash cannot cover.
+          const f=fuelTank.addMetered(FUEL_FILL_RATE*dt, save.cash);
+          if(f.cost>0){ addCash(-f.cost); fillSessionCost+=f.cost; }
+          if(f.added>0) syncFuel();
           if(fuelTank.full){
             toast(fillSessionCost>0 ? '⛽ Filled up — $'+fillSessionCost.toLocaleString() : '⛽ Filled up', 2200);
             fillSessionCost=0; fuelLowWarned=false; pumpHintShown=false;
           }
-          syncFuel();
         }else{
           fillSessionCost=0;
           if(!pumpHintShown){ pumpHintShown=true; toast('⛽ Pull up to a pump to refuel', 2200); }
@@ -3120,15 +3124,17 @@ function frame(now){
       if(rs.dist <= REPAIR_RADIUS && Math.abs(tele.speed) < 1){
         const nb = nearestBay(physics.pos.x, physics.pos.z);
         if(nb.dist <= BAY_REPAIR_DIST){
-          const r = carDamage.repairPartial(REPAIR_RATE * dt);
-          const paid = Math.min(save.cash, r.cost);
-          if(paid > 0) addCash(-paid);
-          repairSessionCost += paid;
+          // whole HP only: per-frame fractional repairs rounded the
+          // $10/hp rate up every frame ($1,188 for a $990 repair) and
+          // repaired for free when broke.
+          const r = carDamage.repairMetered(REPAIR_RATE * dt, save.cash);
+          if(r.cost > 0) addCash(-r.cost);
+          repairSessionCost += r.cost;
           if(carDamage.hp >= CAR_MAX_HP){
             toast(repairSessionCost > 0 ? '🔧 Repaired — $' + repairSessionCost.toLocaleString() : '🔧 Repaired', 2200);
             repairSessionCost = 0; bayHintShown = false;
           }
-          syncCarHP();
+          if(r.added > 0) syncCarHP();
         }else{
           repairSessionCost = 0;
           if(!bayHintShown){ bayHintShown = true; toast('🔧 Pull into a service bay to repair', 2200); }
@@ -3145,10 +3151,12 @@ function frame(now){
       if(ts.dist <= TIRE_RADIUS && Math.abs(tele.speed) < 1){
         const nb = nearestTireBay(physics.pos.x, physics.pos.z);
         if(nb.dist <= BAY_TIRE_DIST){
-          const r = tireWear.replacePartial(TIRE_RATE * dt);
-          const paid = Math.min(save.cash, r.cost);
-          if(paid > 0) addCash(-paid);
-          tireSessionCost += paid;
+          // whole dollars only: per-frame fractional swaps rounded the
+          // $600/set price up every frame ($721 for a $600 set) and
+          // fitted rubber for free when broke.
+          const r = tireWear.replaceMetered(TIRE_RATE * dt, save.cash);
+          if(r.cost > 0) addCash(-r.cost);
+          tireSessionCost += r.cost;
           if(tireWear.wear <= 0){
             toast(tireSessionCost > 0 ? '🛞 New tires — $' + tireSessionCost.toLocaleString() : '🛞 New tires', 2200);
             tireSessionCost = 0; tireHintShown = false;

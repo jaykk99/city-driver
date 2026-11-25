@@ -60,4 +60,31 @@ export class TireWear {
     this.wear -= replaced;
     return { replaced, cost };
   }
+  // Per-frame swap for the bay loop: accumulate the fractional set and
+  // apply only whole-dollar chunks, so the $600/set price stays exact
+  // instead of rounding up on every frame (the old per-frame
+  // replacePartial() charged $721 for a $600 set). `cash` caps what can
+  // be afforded: no cash, no rubber. Returns { replaced, cost } — cost
+  // is exact whole dollars. The final sliver (less than a dollar of wear
+  // left) fits once the request has covered it, at the same ceil() the
+  // instant replaceCost() path charges.
+  replaceMetered(frac, cash = Infinity){
+    this._pend = (this._pend || 0) + Math.max(0, frac) * TIRE_SET_COST;
+    if(this.wear <= 1e-9){ this.wear = 0; return { replaced: 0, cost: 0 }; }
+    if(this.wear * TIRE_SET_COST <= this._pend){
+      const cost = Math.ceil(this.wear * TIRE_SET_COST);
+      if(cash < cost) return { replaced: 0, cost: 0 };
+      const r = this.replacePartial(this.wear);
+      this._pend = 0;
+      return r;
+    }
+    const whole = Math.floor(this._pend);
+    if(whole <= 0) return { replaced: 0, cost: 0 };
+    let f = Math.min(whole / TIRE_SET_COST, this.wear, Math.max(0, cash) / TIRE_SET_COST);
+    f = Math.floor(f * TIRE_SET_COST) / TIRE_SET_COST; // whole dollars only
+    if(f <= 0) return { replaced: 0, cost: 0 };
+    const r = this.replacePartial(f);
+    this._pend -= r.cost;
+    return r;
+  }
 }

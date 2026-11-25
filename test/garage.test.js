@@ -1,8 +1,9 @@
 // Tests for js/garage.js — upgrade pricing, constants, save normalize/load.
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
+import { CAR_DEFS } from '../js/cars.js';
 
-let upgradeCost, loadSave, saveSave, PAINT_COST, WHEEL_COST, MAX_UPGRADE, PAINTS, WHEEL_STYLES;
+let upgradeCost, loadSave, saveSave, createGarage, PAINT_COST, WHEEL_COST, MAX_UPGRADE, PAINTS, WHEEL_STYLES;
 before(async () => {
   // garage.js reads localStorage at load/save time only, so a stub is enough.
   const store = new Map();
@@ -14,7 +15,7 @@ before(async () => {
     _raw: k => store.get(k),
   };
   const garage = await import('../js/garage.js');
-  ({ upgradeCost, loadSave, saveSave, PAINT_COST, WHEEL_COST, MAX_UPGRADE, PAINTS, WHEEL_STYLES } = garage);
+  ({ upgradeCost, loadSave, saveSave, createGarage, PAINT_COST, WHEEL_COST, MAX_UPGRADE, PAINTS, WHEEL_STYLES } = garage);
 });
 
 describe('economy constants', () => {
@@ -140,5 +141,40 @@ describe('loadSave / saveSave', () => {
     s.taxi = { rides: 3, earned: 1200, bestStreak: 3, ratingSum: 14, ratingCount: 3 };
     saveSave(s);
     assert.deepEqual(loadSave().taxi, s.taxi);
+  });
+});
+
+describe('garage car cards (stat bars)', () => {
+  function fakeEl(){
+    return {
+      innerHTML: '', textContent: '',
+      classList: { add(){}, remove(){}, toggle(){} },
+      addEventListener(){}, dataset: {},
+    };
+  }
+  it('renders real stat-bar widths, not NaN', () => {
+    const els = {
+      'garage-cars': fakeEl(), 'garage-upgrades': fakeEl(),
+      'garage-style': fakeEl(), 'garage-cash': fakeEl(),
+    };
+    globalThis.document = {
+      getElementById: id => els[id] || fakeEl(),
+      querySelectorAll: () => [],
+    };
+    try{
+      const save = loadSave();
+      createGarage({
+        save,
+        getDef: id => CAR_DEFS.find(d => d.id === id),
+        onSelectCar(){}, onPaint(){}, onWheels(){}, refreshScene(){},
+      });
+      const html = els['garage-cars'].innerHTML;
+      assert.ok(!html.includes('NaN'), 'stat bars must not render width:NaN%');
+      // sport: 52 top speed of max 76 -> 68%; hyper: 76 of 76 -> 100%
+      assert.ok(html.includes('width:68%'), 'sport SPD bar should be 68%');
+      assert.ok(html.includes('width:100%'), 'hyper SPD bar should be 100%');
+    }finally{
+      delete globalThis.document;
+    }
   });
 });

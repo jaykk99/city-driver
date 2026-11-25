@@ -74,3 +74,36 @@ describe('replacement billing', () => {
     assert.equal(t2.replacePartial(-1).replaced, 0);
   });
 });
+
+describe('replaceMetered (per-frame bay swap)', () => {
+  const DT = 1 / 60;
+  it('a full set costs the flat $600, not the old per-frame ceil ($721)', () => {
+    const t = new TireWear(); t.wear = 1;
+    let paid = 0, frames = 0;
+    while(t.wear > 0 && frames < 10000){
+      const r = t.replaceMetered(0.25 * DT, 10000);
+      paid += r.cost; frames++;
+    }
+    assert.equal(t.wear, 0);
+    assert.equal(paid, TIRE_SET_COST);
+    assert.ok(frames > 200, 'swaps progressively, not instantly');
+  });
+  it('a broke driver gets no rubber at all', () => {
+    const t = new TireWear(); t.wear = 1;
+    for(let i = 0; i < 600; i++){
+      assert.deepEqual(t.replaceMetered(0.25 * DT, 0), { replaced: 0, cost: 0 });
+    }
+    assert.equal(t.wear, 1);
+  });
+  it('stops fitting when the cash runs out mid-swap', () => {
+    const t = new TireWear(); t.wear = 1;
+    let paid = 0, frames = 0;
+    while(t.wear > 0 && frames < 10000){
+      const r = t.replaceMetered(0.25 * DT, 150 - paid);
+      paid += r.cost; frames++;
+      if(r.cost === 0 && r.replaced === 0) break;
+    }
+    assert.equal(paid, 150);
+    assert.ok(t.wear > 0 && t.wear < 1, 'partial set fitted for the $150');
+  });
+});
